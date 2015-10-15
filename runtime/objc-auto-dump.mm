@@ -21,15 +21,16 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
-#include "objc-auto.h"
+#include "objc-config.h"
 
-#ifndef OBJC_NO_GC
+#if SUPPORT_GC
+
+#include "objc-private.h"
+#include "objc-auto-dump.h"
 
 #include <auto_zone.h>
 #include <objc/objc.h>
 #include <objc/runtime.h>
-#include "objc-auto-dump.h"
-#include "objc-private.h"
 #include <strings.h>
 
 /*
@@ -56,8 +57,8 @@ typedef struct {
 } pointer_set_t;
 
 static pointer_set_t *new_pointer_set() {
-    pointer_set_t *result = malloc_zone_malloc(_objc_internal_zone(), sizeof(pointer_set_t));
-    result->items = calloc(64, sizeof(long));
+    pointer_set_t *result = (pointer_set_t *)malloc_zone_malloc(_objc_internal_zone(), sizeof(pointer_set_t));
+    result->items = (long *)calloc(64, sizeof(long));
     result->count = 0;
     result->capacity = 63;  // last valid ptr, also mask
     return result;
@@ -86,7 +87,7 @@ static void pointer_set_grow(pointer_set_t *set) {
     long i;
     set->count = 0;
     set->capacity = 2*(oldCapacity+1)-1;
-    set->items = malloc_zone_calloc(_objc_internal_zone(), 2*(oldCapacity+1), sizeof(long));
+    set->items = (long *)malloc_zone_calloc(_objc_internal_zone(), 2*(oldCapacity+1), sizeof(long));
     for (i = 0; i < oldCapacity; ++i)
         if (oldItems[i]) pointer_set_add(set, oldItems[i]);
     free(oldItems);
@@ -189,22 +190,22 @@ BOOL _objc_dumpHeap(auto_zone_t *zone, const char *filename) {
 
     auto_zone_dump(zone, dump_stack, dump_registers, dump_local, dump_root, dump_node, dump_weak);
     
-    pointer_set_iterate(classes, ^(long class) {
+    pointer_set_iterate(classes, ^(long cls) {
         char type = CLASS;
         fwrite(&type, 1, 1, fp);
-        fwrite(&class, sizeof(class), 1, fp);   // write address so that we can map it from node isa's
+        fwrite(&cls, sizeof(cls), 1, fp);   // write address so that we can map it from node isa's
         // classname (for grins)
-        const char *className = class_getName((Class)class);
+        const char *className = class_getName((Class)cls);
         unsigned int length = (int)strlen(className);
         fwrite(&length, sizeof(length), 1, fp);      // n
         fwrite(className, length, 1, fp);          // n bytes
         // strong layout
-        const uint8_t *layout = class_getIvarLayout((Class)class);
+        const uint8_t *layout = class_getIvarLayout((Class)cls);
         length = layout ? (int)strlen((char *)layout)+1 : 0; // format is <skipnibble><count nibble> ending with <0><0>
         fwrite(&length, sizeof(length), 1, fp);      // n
         fwrite(layout, length, 1, fp);            // n bytes
         // weak layout
-        layout = class_getWeakIvarLayout((Class)class);
+        layout = class_getWeakIvarLayout((Class)cls);
         length = layout ? (int)strlen((char *)layout)+1 : 0; // format is <skipnibble><count nibble> ending with <0><0>
         fwrite(&length, sizeof(length), 1, fp);      // n
         fwrite(layout, length, 1, fp);             // n bytes

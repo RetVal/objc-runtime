@@ -32,24 +32,24 @@
 typedef void(*load_method_t)(id, SEL);
 
 struct loadable_class {
-    Class cls;  // may be NULL
+    Class cls;  // may be nil
     IMP method;
 };
 
 struct loadable_category {
-    Category cat;  // may be NULL
+    Category cat;  // may be nil
     IMP method;
 };
 
 
 // List of classes that need +load called (pending superclass +load)
 // This list always has superclasses first because of the way it is constructed
-static struct loadable_class *loadable_classes = NULL;
+static struct loadable_class *loadable_classes = nil;
 static int loadable_classes_used = 0;
 static int loadable_classes_allocated = 0;
 
 // List of categories that need +load called (pending parent class +load)
-static struct loadable_category *loadable_categories = NULL;
+static struct loadable_category *loadable_categories = nil;
 static int loadable_categories_used = 0;
 static int loadable_categories_allocated = 0;
 
@@ -65,11 +65,12 @@ void add_class_to_loadable_list(Class cls)
 
     recursive_mutex_assert_locked(&loadMethodLock);
 
-    method = _class_getLoadMethod(cls);
+    method = cls->getLoadMethod();
     if (!method) return;  // Don't bother if cls has no +load method
     
     if (PrintLoading) {
-        _objc_inform("LOAD: class '%s' scheduled for +load", _class_getName(cls));
+        _objc_inform("LOAD: class '%s' scheduled for +load", 
+                     cls->nameForLogging());
     }
     
     if (loadable_classes_used == loadable_classes_allocated) {
@@ -135,9 +136,10 @@ void remove_class_from_loadable_list(Class cls)
         int i;
         for (i = 0; i < loadable_classes_used; i++) {
             if (loadable_classes[i].cls == cls) {
-                loadable_classes[i].cls = NULL;
+                loadable_classes[i].cls = nil;
                 if (PrintLoading) {
-                    _objc_inform("LOAD: class '%s' unscheduled for +load", _class_getName(cls));
+                    _objc_inform("LOAD: class '%s' unscheduled for +load", 
+                                 cls->nameForLogging());
                 }
                 return;
             }
@@ -159,7 +161,7 @@ void remove_category_from_loadable_list(Category cat)
         int i;
         for (i = 0; i < loadable_categories_used; i++) {
             if (loadable_categories[i].cat == cat) {
-                loadable_categories[i].cat = NULL;
+                loadable_categories[i].cat = nil;
                 if (PrintLoading) {
                     _objc_inform("LOAD: category '%s(%s)' unscheduled for +load",
                                  _category_getClassName(cat), 
@@ -186,7 +188,7 @@ static void call_class_loads(void)
     // Detach current loadable list.
     struct loadable_class *classes = loadable_classes;
     int used = loadable_classes_used;
-    loadable_classes = NULL;
+    loadable_classes = nil;
     loadable_classes_allocated = 0;
     loadable_classes_used = 0;
     
@@ -197,7 +199,7 @@ static void call_class_loads(void)
         if (!cls) continue; 
 
         if (PrintLoading) {
-            _objc_inform("LOAD: +[%s load]\n", _class_getName(cls));
+            _objc_inform("LOAD: +[%s load]\n", cls->nameForLogging());
         }
         (*load_method)(cls, SEL_load);
     }
@@ -228,7 +230,7 @@ static BOOL call_category_loads(void)
     struct loadable_category *cats = loadable_categories;
     int used = loadable_categories_used;
     int allocated = loadable_categories_allocated;
-    loadable_categories = NULL;
+    loadable_categories = nil;
     loadable_categories_allocated = 0;
     loadable_categories_used = 0;
 
@@ -240,14 +242,14 @@ static BOOL call_category_loads(void)
         if (!cat) continue;
 
         cls = _category_getClass(cat);
-        if (cls  &&  _class_isLoadable(cls)) {
+        if (cls  &&  cls->isLoadable()) {
             if (PrintLoading) {
                 _objc_inform("LOAD: +[%s(%s) load]\n", 
-                             _class_getName(cls), 
+                             cls->nameForLogging(), 
                              _category_getName(cat));
             }
             (*load_method)(cls, SEL_load);
-            cats[i].cat = NULL;
+            cats[i].cat = nil;
         }
     }
 
@@ -285,7 +287,7 @@ static BOOL call_category_loads(void)
         loadable_categories_allocated = allocated;
     } else {
         if (cats) _free_internal(cats);
-        loadable_categories = NULL;
+        loadable_categories = nil;
         loadable_categories_used = 0;
         loadable_categories_allocated = 0;
     }

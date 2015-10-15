@@ -32,7 +32,6 @@
 #include <stddef.h>
 #include <string.h>
 #include <Availability.h>
-#include <AvailabilityMacros.h>
 #include <TargetConditionals.h>
 
 #if !TARGET_OS_WIN32
@@ -174,7 +173,7 @@ OBJC_EXPORT BOOL objc_is_finalized(void *ptr)
 
 // Deprcated. Tells runtime to issue finalize calls on the main thread only.
 OBJC_EXPORT void objc_finalizeOnMainThread(Class cls)
-    AVAILABLE_MAC_OS_X_VERSION_10_5_AND_LATER_BUT_DEPRECATED;
+    __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_5,__MAC_10_5, __IPHONE_NA,__IPHONE_NA);
 
 
 //
@@ -200,7 +199,7 @@ __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_5,__MAC_10_7, __IPHONE_NA,__IPHONE_NA);
 
 /* Deprecated. Use class_createInstance() instead. */
 OBJC_EXPORT id objc_allocate_object(Class cls, int extra)
-    AVAILABLE_MAC_OS_X_VERSION_10_4_AND_LATER_BUT_DEPRECATED;
+__OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_4,__MAC_10_4, __IPHONE_NA,__IPHONE_NA);
 
 
 /* !defined(OBJC_NO_GC) */
@@ -216,7 +215,7 @@ static OBJC_INLINE void objc_setCollectionThreshold(size_t threshold __unused) {
 static OBJC_INLINE void objc_setCollectionRatio(size_t ratio __unused) { }
 static OBJC_INLINE void objc_startCollectorThread(void) { }
 
-#if __has_feature(objc_arr)
+#if __has_feature(objc_arc)
 
 /* Covers for GC memory operations are unavailable in ARC */
 

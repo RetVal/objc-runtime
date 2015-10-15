@@ -24,6 +24,8 @@
 #ifndef _OBJC_FILE_NEW_H
 #define _OBJC_FILE_NEW_H
 
+#if __OBJC2__
+
 #include "objc-runtime-new.h"
 
 
@@ -33,8 +35,8 @@ __BEGIN_DECLS
 
 extern SEL *_getObjc2SelectorRefs(const header_info *hi, size_t *count);
 extern message_ref_t *_getObjc2MessageRefs(const header_info *hi, size_t *count);
-extern class_t **_getObjc2ClassRefs(const header_info *hi, size_t *count);
-extern class_t **_getObjc2SuperRefs(const header_info *hi, size_t *count);
+extern Class*_getObjc2ClassRefs(const header_info *hi, size_t *count);
+extern Class*_getObjc2SuperRefs(const header_info *hi, size_t *count);
 extern classref_t *_getObjc2ClassList(const header_info *hi, size_t *count);
 extern classref_t *_getObjc2NonlazyClassList(const header_info *hi, size_t *count);
 extern category_t **_getObjc2CategoryList(const header_info *hi, size_t *count);
@@ -43,5 +45,7 @@ extern protocol_t **_getObjc2ProtocolList(const header_info *hi, size_t *count);
 extern protocol_t **_getObjc2ProtocolRefs(const header_info *hi, size_t *count);
 
 __END_DECLS
+
+#endif
 
 #endif

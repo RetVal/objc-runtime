@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2007 Apple Inc.  All Rights Reserved.
+ * Copyright (c) 2012 Apple Inc.  All Rights Reserved.
  * 
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -21,117 +21,132 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
-/*
- *	Utilities for registering and looking up selectors.  The sole
- *	purpose of the selector tables is a registry whereby there is
- *	exactly one address (selector) associated with a given string
- *	(method name).
- */
+#if __OBJC2__
 
-#include "objc.h"
 #include "objc-private.h"
-#include "objc-auto.h"
-#include "objc-sel-set.h"
+#include "objc-cache.h"
 
 #if SUPPORT_PREOPT
-#include <objc-shared-cache.h>
-using namespace objc_opt;
 static const objc_selopt_t *builtins = NULL;
 #endif
 
-__BEGIN_DECLS
+#if SUPPORT_IGNORED_SELECTOR_CONSTANT
+#error sorry
+#endif
+
 
 static size_t SelrefCount = 0;
 
-static const char *_objc_empty_selector = "";
-static struct __objc_sel_set *_objc_selectors = NULL;
+static NXMapTable *namedSelectors;
 
+static SEL search_builtins(const char *key);
+
+
+/***********************************************************************
+* sel_init
+* Initialize selector tables and register selectors used internally.
+**********************************************************************/
+void sel_init(BOOL wantsGC, size_t selrefCount)
+{
+    // save this value for later
+    SelrefCount = selrefCount;
 
 #if SUPPORT_PREOPT
-void dump_builtins(void)
-{
-    uint32_t occupied = builtins->occupied;
-    uint32_t capacity = builtins->capacity;
+    builtins = preoptimizedSelectors();
 
-    _objc_inform("BUILTIN SELECTORS: %d selectors", occupied);
-    _objc_inform("BUILTIN SELECTORS: %d/%d (%d%%) hash table occupancy", 
-                 occupied, capacity, (int)(occupied/(double)capacity * 100));
-    _objc_inform("BUILTIN SELECTORS: using __TEXT,__objc_selopt at %p", 
-                 builtins);
-    _objc_inform("BUILTIN SELECTORS: capacity: %u", builtins->capacity);
-    _objc_inform("BUILTIN SELECTORS: occupied: %u", builtins->occupied);
-    _objc_inform("BUILTIN SELECTORS: shift: %u", builtins->shift);
-    _objc_inform("BUILTIN SELECTORS: mask: 0x%x", builtins->mask);
-    _objc_inform("BUILTIN SELECTORS: zero: %u", builtins->zero);
-    _objc_inform("BUILTIN SELECTORS: salt: 0x%llx", builtins->salt);
-
-    const int32_t *offsets = builtins->offsets();
-    uint32_t i;
-    for (i = 0; i < capacity; i++) {
-        if (offsets[i] != offsetof(objc_stringhash_t, zero)) {
-            const char *str = (const char *)builtins + offsets[i];
-            _objc_inform("BUILTIN SELECTORS:     %6d: %+8d %s", 
-                         i, offsets[i], str);
-            if ((const char *)sel_registerName(str) != str) {
-                _objc_fatal("bogus");
-            }
-        } else {
-            _objc_inform("BUILTIN SELECTORS:     %6d: ", i);
+    if (PrintPreopt  &&  builtins) {
+        uint32_t occupied = builtins->occupied;
+        uint32_t capacity = builtins->capacity;
+        
+        _objc_inform("PREOPTIMIZATION: using selopt at %p", builtins);
+        _objc_inform("PREOPTIMIZATION: %u selectors", occupied);
+        _objc_inform("PREOPTIMIZATION: %u/%u (%u%%) hash table occupancy",
+                     occupied, capacity,
+                     (unsigned)(occupied/(double)capacity*100));
         }
+#endif
+
+    // Register selectors used by libobjc
+
+    if (wantsGC) {
+        // Registering retain/release/autorelease requires GC decision first.
+        // sel_init doesn't actually need the wantsGC parameter, it just 
+        // helps enforce the initialization order.
     }
+
+#define s(x) SEL_##x = sel_registerNameNoLock(#x, NO)
+#define t(x,y) SEL_##y = sel_registerNameNoLock(#x, NO)
+
+    sel_lock();
+
+    s(load);
+    s(initialize);
+    t(resolveInstanceMethod:, resolveInstanceMethod);
+    t(resolveClassMethod:, resolveClassMethod);
+    t(.cxx_construct, cxx_construct);
+    t(.cxx_destruct, cxx_destruct);
+    s(retain);
+    s(release);
+    s(autorelease);
+    s(retainCount);
+    s(alloc);
+    t(allocWithZone:, allocWithZone);
+    s(dealloc);
+    s(copy);
+    s(new);
+    s(finalize);
+    t(forwardInvocation:, forwardInvocation);
+    t(_tryRetain, tryRetain);
+    t(_isDeallocating, isDeallocating);
+    s(retainWeakReference);
+    s(allowsWeakReference);
+
+    sel_unlock();
+
+#undef s
+#undef t
 }
-#endif
 
 
-static SEL _objc_search_builtins(const char *key) 
+static SEL sel_alloc(const char *name, bool copy)
 {
-#if defined(DUMP_SELECTORS)
-    if (NULL != key) printf("\t\"%s\",\n", key);
-#endif
-
-    if (!key) return (SEL)0;
-#if SUPPORT_IGNORED_SELECTOR_CONSTANT
-    if ((uintptr_t)key == kIgnore) return (SEL)kIgnore;
-    if (ignoreSelectorNamed(key)) return (SEL)kIgnore;
-#endif
-    if ('\0' == *key) return (SEL)_objc_empty_selector;
-
-#if SUPPORT_PREOPT
-    assert(builtins);
-    return (SEL)builtins->get(key);
-#endif
-
-    return (SEL)0;
+    rwlock_assert_writing(&selLock);
+    return (SEL)(copy ? _strdup_internal(name) : name);    
 }
 
 
-const char *sel_getName(SEL sel) {
-#if SUPPORT_IGNORED_SELECTOR_CONSTANT
-    if ((uintptr_t)sel == kIgnore) return "<ignored selector>";
-#endif
-    return sel ? (const char *)sel : "<null selector>";
-}
-
-
-BOOL sel_isMapped(SEL name) 
+const char *sel_getName(SEL sel) 
 {
-    SEL result;
-    
-    if (!name) return NO;
-#if SUPPORT_IGNORED_SELECTOR_CONSTANT
-    if ((uintptr_t)name == kIgnore) return YES;
-#endif
+    if (!sel) return "<null selector>";
+    return (const char *)(const void*)sel;
+}
 
-    result = _objc_search_builtins((const char *)name);
-    if (result) return YES;
 
+BOOL sel_isMapped(SEL sel) 
+{
+    if (!sel) return NO;
+
+    const char *name = (const char *)(void *)sel;
+
+    if (sel == search_builtins(name)) return YES;
+
+    bool result = false;
     rwlock_read(&selLock);
-    if (_objc_selectors) {
-        result = __objc_sel_set_get(_objc_selectors, name);
-    }
+    if (namedSelectors) result = (sel == (SEL)NXMapGet(namedSelectors, name));
     rwlock_unlock_read(&selLock);
-    return result ? YES : NO;
+
+    return result;
 }
+
+
+static SEL search_builtins(const char *name) 
+{
+#if SUPPORT_PREOPT
+    if (builtins) return (SEL)builtins->get(name);
+#endif
+    return nil;
+}
+
 
 static SEL __sel_registerName(const char *name, int lock, int copy) 
 {
@@ -141,12 +156,13 @@ static SEL __sel_registerName(const char *name, int lock, int copy)
     else rwlock_assert_writing(&selLock);
 
     if (!name) return (SEL)0;
-    result = _objc_search_builtins(name);
+
+    result = search_builtins(name);
     if (result) return result;
     
     if (lock) rwlock_read(&selLock);
-    if (_objc_selectors) {
-        result = __objc_sel_set_get(_objc_selectors, (SEL)name);
+    if (namedSelectors) {
+        result = (SEL)NXMapGet(namedSelectors, name);
     }
     if (lock) rwlock_unlock_read(&selLock);
     if (result) return result;
@@ -155,19 +171,18 @@ static SEL __sel_registerName(const char *name, int lock, int copy)
 
     if (lock) rwlock_write(&selLock);
 
-    if (!_objc_selectors) {
-        _objc_selectors = __objc_sel_set_create(SelrefCount);
+    if (!namedSelectors) {
+        namedSelectors = NXCreateMapTable(NXStrValueMapPrototype, 
+                                          (unsigned)SelrefCount);
     }
     if (lock) {
         // Rescan in case it was added while we dropped the lock
-        result = __objc_sel_set_get(_objc_selectors, (SEL)name);
+        result = (SEL)NXMapGet(namedSelectors, name);
     }
     if (!result) {
-        result = (SEL)(copy ? _strdup_internal(name) : name);
-        __objc_sel_set_add(_objc_selectors, result);
-#if defined(DUMP_UNKNOWN_SELECTORS)
-        printf("\t\"%s\",\n", name);
-#endif
+        result = sel_alloc(name, copy);
+        // fixme choose a better container (hash not map for starters)
+        NXMapInsert(namedSelectors, sel_getName(result), result);
     }
 
     if (lock) rwlock_unlock_write(&selLock);
@@ -222,11 +237,6 @@ BOOL sel_preoptimizationValid(const header_info *hi)
 
 #else
 
-# if SUPPORT_IGNORED_SELECTOR_CONSTANT
-    // shared cache can't fix constant ignored selectors
-    if (UseGC) return NO;
-# endif
-
     // preoptimization disabled for some reason
     if (!isPreoptimized()) return NO;
 
@@ -239,53 +249,4 @@ BOOL sel_preoptimizationValid(const header_info *hi)
 }
 
 
-/***********************************************************************
-* sel_init
-* Initialize selector tables and register selectors used internally.
-**********************************************************************/
-void sel_init(BOOL wantsGC, size_t selrefCount)
-{
-    // save this value for later
-    SelrefCount = selrefCount;
-
-#if SUPPORT_PREOPT
-    builtins = preoptimizedSelectors();
 #endif
-
-    // Register selectors used by libobjc
-
-    if (wantsGC) {
-        // Registering retain/release/autorelease requires GC decision first.
-        // sel_init doesn't actually need the wantsGC parameter, it just 
-        // helps enforce the initialization order.
-    }
-
-#define s(x) SEL_##x = sel_registerNameNoLock(#x, NO)
-#define t(x,y) SEL_##y = sel_registerNameNoLock(#x, NO)
-
-    sel_lock();
-
-    s(load);
-    s(initialize);
-    t(resolveInstanceMethod:, resolveInstanceMethod);
-    t(resolveClassMethod:, resolveClassMethod);
-    t(.cxx_construct, cxx_construct);
-    t(.cxx_destruct, cxx_destruct);
-    s(retain);
-    s(release);
-    s(autorelease);
-    s(retainCount);
-    s(alloc);
-    t(allocWithZone:, allocWithZone);
-    s(copy);
-    s(new);
-    s(finalize);
-    t(forwardInvocation:, forwardInvocation);
-
-    sel_unlock();
-
-#undef s
-#undef t
-}
-
-__END_DECLS

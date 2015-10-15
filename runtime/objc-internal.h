@@ -38,52 +38,39 @@
  */
 
 #include <objc/objc.h>
+#include <objc/runtime.h>
 #include <Availability.h>
 #include <malloc/malloc.h>
 #include <dispatch/dispatch.h>
 
 __BEGIN_DECLS
 
-#if __has_feature(objc_fixed_enum)  ||  __cplusplus >= 201103L
-enum objc_tag_index_t : uint8_t
-#else
-typedef uint8_t objc_tag_index_t;
-enum
-#endif
-{
-    OBJC_TAG_NSAtom            = 0,
-    OBJC_TAG_1                 = 1,
-    OBJC_TAG_NSString          = 2,
-    OBJC_TAG_NSNumber          = 3,
-    OBJC_TAG_NSIndexPath       = 4,
-    OBJC_TAG_NSManagedObjectID = 5,
-    OBJC_TAG_NSDate            = 6,
-    OBJC_TAG_7                 = 7
-};
-#if __has_feature(objc_fixed_enum)  &&  !defined(__cplusplus)
-typedef enum objc_tag_index_t objc_tag_index_t;
-#endif
-
-OBJC_EXPORT void _objc_registerTaggedPointerClass(objc_tag_index_t tag, Class cls)
-__OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_NA);
-
-OBJC_EXPORT Class _objc_getClassForTag(objc_tag_index_t tag)
-__OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_NA);
-
-OBJC_EXPORT IMP object_getMethodImplementation(id obj, SEL name)
-__OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_7_0);
-
-OBJC_EXPORT IMP object_getMethodImplementation_stret(id obj, SEL name)
-__OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_7_0);
+// This is the allocation size required for each of the class and the metaclass 
+// with objc_initializeClassPair() and objc_readClassPair().
+// The runtime's class structure will never grow beyond this.
+#define OBJC_MAX_CLASS_SIZE (32*sizeof(void*))
 
 // In-place construction of an Objective-C class.
-OBJC_EXPORT Class objc_initializeClassPair(Class superclass_gen, const char *name, Class cls_gen, Class meta_gen) 
+// cls and metacls must each be OBJC_MAX_CLASS_SIZE bytes.
+// Returns nil if a class with the same name already exists.
+// Returns nil if the superclass is under construction.
+// Call objc_registerClassPair() when you are done.
+OBJC_EXPORT Class objc_initializeClassPair(Class superclass, const char *name, Class cls, Class metacls) 
     __OSX_AVAILABLE_STARTING(__MAC_10_6, __IPHONE_3_0);
 
-#if __OBJC2__  &&  __LP64__
-// Register a tagged pointer class.
-OBJC_EXPORT void _objc_insert_tagged_isa(unsigned char slotNumber, Class isa)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_4_3);
+// Class and metaclass construction from a compiler-generated memory image.
+// cls and cls->isa must each be OBJC_MAX_CLASS_SIZE bytes. 
+// Extra bytes not used the the metadata must be zero.
+// info is the same objc_image_info that would be emitted by a static compiler.
+// Returns nil if a class with the same name already exists.
+// Returns nil if the superclass is nil and the class is not marked as a root.
+// Returns nil if the superclass is under construction.
+// Do not call objc_registerClassPair().
+#if __OBJC2__
+struct objc_image_info;
+OBJC_EXPORT Class objc_readClassPair(Class cls, 
+                                     const struct objc_image_info *info)
+    __OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_8_0);
 #endif
 
 // Batch object allocation using malloc_zone_batch_malloc().
@@ -95,17 +82,6 @@ OBJC_EXPORT unsigned class_createInstances(Class cls, size_t extraBytes,
 // Get the isa pointer written into objects just before being freed.
 OBJC_EXPORT Class _objc_getFreedObjectClass(void)
     __OSX_AVAILABLE_STARTING(__MAC_10_0, __IPHONE_2_0);
-
-// Substitute receiver for messages to nil.
-// Not supported for all messages to nil.
-OBJC_EXPORT id _objc_setNilReceiver(id newNilReceiver)
-    __OSX_AVAILABLE_STARTING(__MAC_10_3, __IPHONE_NA);
-OBJC_EXPORT id _objc_getNilReceiver(void)
-    __OSX_AVAILABLE_STARTING(__MAC_10_3, __IPHONE_NA);
-
-// Return NO if no instance of `cls` has ever owned an associative reference.
-OBJC_EXPORT BOOL class_instancesHaveAssociatedObjects(Class cls)
-    __OSX_AVAILABLE_STARTING(__MAC_10_6, __IPHONE_3_0);
 
 // Return YES if GC is on and `object` is a GC allocation.
 OBJC_EXPORT BOOL objc_isAuto(id object) 
@@ -157,6 +133,146 @@ OBJC_EXPORT void _objc_error(id rcv, const char *fmt, va_list args)
 
 #endif
 
+
+// Tagged pointer objects.
+
+#if __LP64__
+#define OBJC_HAVE_TAGGED_POINTERS 1
+#endif
+
+#if OBJC_HAVE_TAGGED_POINTERS
+
+// Tagged pointer layout and usage is subject to change 
+// on different OS versions. The current layout is:
+// (MSB)
+// 60 bits  payload
+//  3 bits  tag index
+//  1 bit   1 for tagged pointer objects, 0 for ordinary objects
+// (LSB)
+
+#if __has_feature(objc_fixed_enum)  ||  __cplusplus >= 201103L
+enum objc_tag_index_t : uint8_t
+#else
+typedef uint8_t objc_tag_index_t;
+enum
+#endif
+{
+    OBJC_TAG_NSAtom            = 0, 
+    OBJC_TAG_1                 = 1, 
+    OBJC_TAG_NSString          = 2, 
+    OBJC_TAG_NSNumber          = 3, 
+    OBJC_TAG_NSIndexPath       = 4, 
+    OBJC_TAG_NSManagedObjectID = 5, 
+    OBJC_TAG_NSDate            = 6, 
+    OBJC_TAG_7                 = 7
+};
+#if __has_feature(objc_fixed_enum)  &&  !defined(__cplusplus)
+typedef enum objc_tag_index_t objc_tag_index_t;
+#endif
+
+OBJC_EXPORT void _objc_registerTaggedPointerClass(objc_tag_index_t tag, Class cls)
+    __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
+
+OBJC_EXPORT Class _objc_getClassForTag(objc_tag_index_t tag)
+    __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
+
+static inline bool 
+_objc_taggedPointersEnabled(void)
+{
+    extern uintptr_t objc_debug_taggedpointer_mask;
+    return (objc_debug_taggedpointer_mask != 0);
+}
+
+#if TARGET_OS_IPHONE
+// tagged pointer marker is MSB
+
+static inline void *
+_objc_makeTaggedPointer(objc_tag_index_t tag, uintptr_t value)
+{
+    // assert(_objc_taggedPointersEnabled());
+    // assert((unsigned int)tag < 8);
+    // assert(((value << 4) >> 4) == value);
+    return (void*)((1UL << 63) | ((uintptr_t)tag << 60) | (value & ~(0xFUL << 60)));
+}
+
+static inline bool 
+_objc_isTaggedPointer(const void *ptr) 
+{
+    return (intptr_t)ptr < 0;  // a.k.a. ptr & 0x8000000000000000
+}
+
+static inline objc_tag_index_t 
+_objc_getTaggedPointerTag(const void *ptr) 
+{
+    // assert(_objc_isTaggedPointer(ptr));
+    return (objc_tag_index_t)(((uintptr_t)ptr >> 60) & 0x7);
+}
+
+static inline uintptr_t
+_objc_getTaggedPointerValue(const void *ptr) 
+{
+    // assert(_objc_isTaggedPointer(ptr));
+    return (uintptr_t)ptr & 0x0fffffffffffffff;
+}
+
+static inline intptr_t
+_objc_getTaggedPointerSignedValue(const void *ptr) 
+{
+    // assert(_objc_isTaggedPointer(ptr));
+    return ((intptr_t)ptr << 4) >> 4;
+}
+
+// TARGET_OS_IPHONE
+#else
+// not TARGET_OS_IPHONE
+// tagged pointer marker is LSB
+
+static inline void *
+_objc_makeTaggedPointer(objc_tag_index_t tag, uintptr_t value)
+{
+    // assert(_objc_taggedPointersEnabled());
+    // assert((unsigned int)tag < 8);
+    // assert(((value << 4) >> 4) == value);
+    return (void *)((value << 4) | ((uintptr_t)tag << 1) | 1);
+}
+
+static inline bool 
+_objc_isTaggedPointer(const void *ptr) 
+{
+    return (uintptr_t)ptr & 1;
+}
+
+static inline objc_tag_index_t 
+_objc_getTaggedPointerTag(const void *ptr) 
+{
+    // assert(_objc_isTaggedPointer(ptr));
+    return (objc_tag_index_t)(((uintptr_t)ptr & 0xe) >> 1);
+}
+
+static inline uintptr_t
+_objc_getTaggedPointerValue(const void *ptr) 
+{
+    // assert(_objc_isTaggedPointer(ptr));
+    return (uintptr_t)ptr >> 4;
+}
+
+static inline intptr_t
+_objc_getTaggedPointerSignedValue(const void *ptr) 
+{
+    // assert(_objc_isTaggedPointer(ptr));
+    return (intptr_t)ptr >> 4;
+}
+
+// not TARGET_OS_IPHONE
+#endif
+
+
+OBJC_EXPORT void _objc_insert_tagged_isa(unsigned char slotNumber, Class isa)
+    __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_7,__MAC_10_9, __IPHONE_4_3,__IPHONE_7_0);
+
+#endif
+
+
 // External Reference support. Used to support compaction.
 
 enum {
@@ -176,6 +292,27 @@ OBJC_EXPORT id _object_readExternalReference(objc_xref_t xref)
 OBJC_EXPORT uintptr_t _object_getExternalHash(id object)
      __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
 
+/**
+ * Returns the method implementation of an object.
+ *
+ * @param obj An Objective-C object.
+ * @param name An Objective-C selector.
+ *
+ * @return The IMP corresponding to the instance method implemented by
+ * the class of \e obj.
+ * 
+ * @note Equivalent to:
+ *
+ * class_getMethodImplementation(object_getClass(obj), name);
+ */
+OBJC_EXPORT IMP object_getMethodImplementation(id obj, SEL name)
+    __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
+
+OBJC_EXPORT IMP object_getMethodImplementation_stret(id obj, SEL name)
+    __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0)
+    OBJC_ARM64_UNAVAILABLE;
+
+
 // Instance-specific instance variable layout.
 
 OBJC_EXPORT void _class_setIvarLayoutAccessor(Class cls_gen, const uint8_t* (*accessor) (id object))
@@ -185,6 +322,10 @@ OBJC_EXPORT const uint8_t *_object_getIvarLayout(Class cls_gen, id object)
 
 OBJC_EXPORT BOOL _class_usesAutomaticRetainRelease(Class cls)
     __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+
+OBJC_EXPORT BOOL _class_isFutureClass(Class cls)
+    __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
+
 
 // Obsolete ARC conversions. 
 
@@ -290,6 +431,12 @@ void
 objc_autoreleasePoolPop(void *context)
     __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
 
+
+OBJC_EXPORT id objc_alloc(Class cls)
+    __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
+
+OBJC_EXPORT id objc_allocWithZone(Class cls)
+    __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
 
 OBJC_EXPORT id objc_retain(id obj)
     __asm__("_objc_retain")

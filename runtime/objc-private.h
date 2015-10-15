@@ -28,39 +28,257 @@
 #ifndef _OBJC_PRIVATE_H_
 #define _OBJC_PRIVATE_H_
 
-#include "objc-os.h"
+#include "objc-config.h"
+
+/* Isolate ourselves from the definitions of id and Class in the compiler 
+ * and public headers.
+ */
+
+#ifdef _OBJC_OBJC_H_
+#error include objc-private.h before other headers
+#endif
+
+#define OBJC_TYPES_DEFINED 1
+#define OBJC_OLD_DISPATCH_PROTOTYPES 0
+
+#include <cstddef>  // for nullptr_t
+#include <stdint.h>
+#include <assert.h>
+
+struct objc_class;
+struct objc_object;
+
+typedef struct objc_class *Class;
+typedef struct objc_object *id;
+
+namespace {
+    class SideTable;
+};
+
+
+union isa_t 
+{
+    isa_t() { }
+    isa_t(uintptr_t value) : bits(value) { }
+
+    Class cls;
+    uintptr_t bits;
+
+#if SUPPORT_NONPOINTER_ISA
+
+    // extra_rc must be the MSB-most field (so it matches carry/overflow flags)
+    // indexed must be the LSB (fixme or get rid of it)
+    // shiftcls must occupy the same bits that a real class pointer would
+    // bits + RC_ONE is equivalent to extra_rc + 1
+    // RC_HALF is the high bit of extra_rc (i.e. half of its range)
+
+    // future expansion:
+    // uintptr_t fast_rr : 1;     // no r/r overrides
+    // uintptr_t lock : 2;        // lock for atomic property, @synch
+    // uintptr_t extraBytes : 1;  // allocated with extra bytes
+
+# if __arm64__
+#   define ISA_MASK        0x00000001fffffff8ULL
+#   define ISA_MAGIC_MASK  0x000003fe00000001ULL
+#   define ISA_MAGIC_VALUE 0x000001a400000001ULL
+    struct {
+        uintptr_t indexed           : 1;
+        uintptr_t has_assoc         : 1;
+        uintptr_t has_cxx_dtor      : 1;
+        uintptr_t shiftcls          : 30; // MACH_VM_MAX_ADDRESS 0x1a0000000
+        uintptr_t magic             : 9;
+        uintptr_t weakly_referenced : 1;
+        uintptr_t deallocating      : 1;
+        uintptr_t has_sidetable_rc  : 1;
+        uintptr_t extra_rc          : 19;
+#       define RC_ONE   (1ULL<<45)
+#       define RC_HALF  (1ULL<<18)
+    };
+
+# elif __x86_64__
+#   define ISA_MASK        0x00007ffffffffff8ULL
+#   define ISA_MAGIC_MASK  0x0000000000000001ULL
+#   define ISA_MAGIC_VALUE 0x0000000000000001ULL
+    struct {
+        uintptr_t indexed           : 1;
+        uintptr_t has_assoc         : 1;
+        uintptr_t has_cxx_dtor      : 1;
+        uintptr_t shiftcls          : 44; // MACH_VM_MAX_ADDRESS 0x7fffffe00000
+        uintptr_t weakly_referenced : 1;
+        uintptr_t deallocating      : 1;
+        uintptr_t has_sidetable_rc  : 1;
+        uintptr_t extra_rc          : 14;
+#       define RC_ONE   (1ULL<<50)
+#       define RC_HALF  (1ULL<<13)
+    };
+
+# else
+    // Available bits in isa field are architecture-specific.
+#   error unknown architecture
+# endif
+
+// SUPPORT_NONPOINTER_ISA
+#endif
+
+};
+
+
+struct objc_object {
+private:
+    isa_t isa;
+
+public:
+
+    // ISA() assumes this is NOT a tagged pointer object
+    Class ISA();
+
+    // getIsa() allows this to be a tagged pointer object
+    Class getIsa();
+
+    // initIsa() should be used to init the isa of new objects only.
+    // If this object already has an isa, use changeIsa() for correctness.
+    // initInstanceIsa(): objects with no custom RR/AWZ
+    // initClassIsa(): class objects
+    // initProtocolIsa(): protocol objects
+    // initIsa(): other objects
+    void initIsa(Class cls /*indexed=false*/);
+    void initClassIsa(Class cls /*indexed=maybe*/);
+    void initProtocolIsa(Class cls /*indexed=maybe*/);
+    void initInstanceIsa(Class cls, bool hasCxxDtor);
+
+    // changeIsa() should be used to change the isa of existing objects.
+    // If this is a new object, use initIsa() for performance.
+    Class changeIsa(Class newCls);
+
+    bool hasIndexedIsa();
+    bool isTaggedPointer();
+    bool isClass();
+
+    // object may have associated objects?
+    bool hasAssociatedObjects();
+    void setHasAssociatedObjects();
+
+    // object may be weakly referenced?
+    bool isWeaklyReferenced();
+    void setWeaklyReferenced_nolock();
+
+    // object may have -.cxx_destruct implementation?
+    bool hasCxxDtor();
+
+    // Optimized calls to retain/release methods
+    id retain();
+    void release();
+    id autorelease();
+
+    // Implementations of retain/release methods
+    id rootRetain();
+    bool rootRelease();
+    id rootAutorelease();
+    bool rootTryRetain();
+    bool rootReleaseShouldDealloc();
+    uintptr_t rootRetainCount();
+
+    // Implementation of dealloc methods
+    bool rootIsDeallocating();
+    void clearDeallocating();
+    void rootDealloc();
+
+private:
+    void initIsa(Class newCls, bool indexed, bool hasCxxDtor);
+
+    // Slow paths for inline control
+    id rootAutorelease2();
+    bool overrelease_error();
+
+#if SUPPORT_NONPOINTER_ISA
+    // Unified retain count manipulation for nonpointer isa
+    id rootRetain(bool tryRetain, bool handleOverflow);
+    bool rootRelease(bool performDealloc, bool handleUnderflow);
+    id rootRetain_overflow(bool tryRetain);
+    bool rootRelease_underflow(bool performDealloc);
+
+    void clearDeallocating_weak();
+
+    // Side table retain count overflow for nonpointer isa
+    void sidetable_lock();
+    void sidetable_unlock();
+
+    void sidetable_moveExtraRC_nolock(size_t extra_rc, bool isDeallocating, bool weaklyReferenced);
+    bool sidetable_addExtraRC_nolock(size_t delta_rc);
+    bool sidetable_subExtraRC_nolock(size_t delta_rc);
+    size_t sidetable_getExtraRC_nolock();
+#endif
+
+    // Side-table-only retain count
+    bool sidetable_isDeallocating();
+    void sidetable_clearDeallocating();
+
+    bool sidetable_isWeaklyReferenced();
+    void sidetable_setWeaklyReferenced_nolock();
+
+    id sidetable_retain();
+    id sidetable_retain_slow(SideTable *table);
+
+    bool sidetable_release(bool performDealloc = true);
+    bool sidetable_release_slow(SideTable *table, bool performDealloc = true);
+
+    bool sidetable_tryRetain();
+
+    uintptr_t sidetable_retainCount();
+#if !NDEBUG
+    bool sidetable_present();
+#endif
+};
+
+
+#if __OBJC2__
+typedef struct method_t *Method;
+typedef struct ivar_t *Ivar;
+typedef struct category_t *Category;
+typedef struct property_t *objc_property_t;
+#else
+typedef struct old_method *Method;
+typedef struct old_ivar *Ivar;
+typedef struct old_category *Category;
+typedef struct old_property *objc_property_t;
+#endif
+
+// Public headers
 
 #include "objc.h"
 #include "runtime.h"
+#include "objc-os.h"
+#include "objc-abi.h"
+#include "objc-api.h"
+#include "objc-auto.h"
+#include "objc-config.h"
+#include "objc-internal.h"
 #include "maptable.h"
 #include "hashtable2.h"
-#include "objc-api.h"
-#include "objc-config.h"
-#include "objc-references.h"
-#include "objc-initialize.h"
-#include "objc-loadmethod.h"
-#include "objc-internal.h"
-#include "objc-abi.h"
 
-#include "objc-auto.h"
+/* Do not include message.h here. */
+/* #include "message.h" */
 
 #define __APPLE_API_PRIVATE
 #include "objc-gdb.h"
 #undef __APPLE_API_PRIVATE
 
-/* Do not include message.h here. */
-/* #include "message.h" */
+
+// Private headers
+
+#if __OBJC2__
+#include "objc-runtime-new.h"
+#else
+#include "objc-runtime-old.h"
+#endif
+
+#include "objc-references.h"
+#include "objc-initialize.h"
+#include "objc-loadmethod.h"
 
 
 __BEGIN_DECLS
 
-#ifdef __LP64__
-#   define WORD_SHIFT 3UL
-#   define WORD_MASK 7UL
-#else
-#   define WORD_SHIFT 2UL
-#   define WORD_MASK 3UL
-#endif
 
 #if (defined(OBJC_NO_GC) && SUPPORT_GC)  ||  \
     (!defined(OBJC_NO_GC) && !SUPPORT_GC)
@@ -69,16 +287,13 @@ __BEGIN_DECLS
 
 #if SUPPORT_GC
 #   include <auto_zone.h>
-	// PRIVATE_EXTERN is needed to help the compiler know "how" extern these are
-    PRIVATE_EXTERN extern BOOL UseGC;            // equivalent to calling objc_collecting_enabled()
-    PRIVATE_EXTERN extern BOOL UseCompaction;    // if binary has opted-in for compaction.
+    // PRIVATE_EXTERN is needed to help the compiler know "how" extern these are
+    PRIVATE_EXTERN extern int8_t UseGC;          // equivalent to calling objc_collecting_enabled()
     PRIVATE_EXTERN extern auto_zone_t *gc_zone;  // the GC zone, or NULL if no GC
     extern void objc_addRegisteredClass(Class c);
     extern void objc_removeRegisteredClass(Class c);
-    extern void objc_disableCompaction();
 #else
 #   define UseGC NO
-#   define UseCompaction NO
 #   define gc_zone NULL
 #   define objc_addRegisteredClass(c) do {} while(0)
 #   define objc_removeRegisteredClass(c) do {} while(0)
@@ -92,25 +307,6 @@ __BEGIN_DECLS
 #   define AUTO_OBJECT_SCANNED 0
 #endif
 
-#if __OBJC2__
-typedef struct objc_cache *Cache;
-#else 
-// definition in runtime.h
-#endif
-
-
-typedef struct {
-    uint32_t version; // currently 0
-    uint32_t flags;
-} objc_image_info;
-
-// masks for objc_image_info.flags
-#define OBJC_IMAGE_IS_REPLACEMENT (1<<0)
-#define OBJC_IMAGE_SUPPORTS_GC (1<<1)
-#define OBJC_IMAGE_REQUIRES_GC (1<<2)
-#define OBJC_IMAGE_OPTIMIZED_BY_DYLD (1<<3)
-#define OBJC_IMAGE_SUPPORTS_COMPACTION (1<<4)
-
 
 #define _objcHeaderIsReplacement(h)  ((h)->info  &&  ((h)->info->flags & OBJC_IMAGE_IS_REPLACEMENT))
 
@@ -120,7 +316,7 @@ typedef struct {
    Do fix up selector refs (@selector points to them)
    Do fix up class refs (@class and objc_msgSend points to them)
    Do fix up protocols (@protocol points to them)
-   Do fix up super_class pointers in classes ([super ...] points to them)
+   Do fix up superclass pointers in classes ([super ...] points to them)
    Future: do load new classes?
    Future: do load new categories?
    Future: do insert new methods on existing classes?
@@ -129,10 +325,8 @@ typedef struct {
 
 #define _objcInfoSupportsGC(info) (((info)->flags & OBJC_IMAGE_SUPPORTS_GC) ? 1 : 0)
 #define _objcInfoRequiresGC(info) (((info)->flags & OBJC_IMAGE_REQUIRES_GC) ? 1 : 0)
-#define _objcInfoSupportsCompaction(info) (((info)->flags & OBJC_IMAGE_SUPPORTS_COMPACTION) ? 1 : 0)
 #define _objcHeaderSupportsGC(h) ((h)->info && _objcInfoSupportsGC((h)->info))
 #define _objcHeaderRequiresGC(h) ((h)->info && _objcInfoRequiresGC((h)->info))
-#define _objcHeaderSupportsCompaction(h) ((h)->info && _objcInfoSupportsCompaction((h)->info))
 
 /* OBJC_IMAGE_SUPPORTS_GC:
     was compiled with -fobjc-gc flag, regardless of whether write-barriers were issued
@@ -182,6 +376,8 @@ extern header_info *FirstHeader;
 extern header_info *LastHeader;
 extern int HeaderCount;
 
+extern uint32_t AppSDKVersion;  // X.Y.Z is 0xXXXXYYZZ
+
 extern void appendHeader(header_info *hi);
 extern void removeHeader(header_info *hi);
 
@@ -208,10 +404,15 @@ extern SEL SEL_autorelease;
 extern SEL SEL_retainCount;
 extern SEL SEL_alloc;
 extern SEL SEL_allocWithZone;
+extern SEL SEL_dealloc;
 extern SEL SEL_copy;
 extern SEL SEL_new;
 extern SEL SEL_finalize;
 extern SEL SEL_forwardInvocation;
+extern SEL SEL_tryRetain;
+extern SEL SEL_isDeallocating;
+extern SEL SEL_retainWeakReference;
+extern SEL SEL_allowsWeakReference;
 
 /* preoptimization */
 extern void preopt_init(void);
@@ -219,12 +420,16 @@ extern void disableSharedCacheOptimizations(void);
 extern bool isPreoptimized(void);
 extern header_info *preoptimizedHinfoForHeader(const headerType *mhdr);
 
-#if __cplusplus
-namespace objc_opt { struct objc_selopt_t; };
-extern const struct objc_opt::objc_selopt_t *preoptimizedSelectors(void);
-extern struct class_t * getPreoptimizedClass(const char *name);
+#if SUPPORT_PREOPT  &&  __cplusplus
+#include <objc-shared-cache.h>
+using objc_selopt_t = const objc_opt::objc_selopt_t;
+#else
+struct objc_selopt_t;
 #endif
 
+extern objc_selopt_t *preoptimizedSelectors(void);
+extern Class getPreoptimizedClass(const char *name);
+extern Class* copyPreoptimizedClasses(const char *name, int *outCount);
 
 
 /* optional malloc zone for runtime data */
@@ -241,23 +446,30 @@ extern size_t _malloc_size_internal(void *ptr);
 
 extern Class _calloc_class(size_t size);
 
-extern IMP lookUpMethod(Class, SEL, BOOL initialize, BOOL cache, id obj);
-extern void lockForMethodLookup(void);
-extern void unlockForMethodLookup(void);
-extern IMP prepareForMethodLookup(Class cls, SEL sel, BOOL initialize, id obj);
+/* method lookup */
+extern IMP lookUpImpOrNil(Class, SEL, id obj, bool initialize, bool cache, bool resolver);
+extern IMP lookUpImpOrForward(Class, SEL, id obj, bool initialize, bool cache, bool resolver);
 
-extern IMP _cache_getImp(Class cls, SEL sel);
-extern Method _cache_getMethod(Class cls, SEL sel, IMP objc_msgForward_internal_imp);
+extern IMP lookupMethodInClassAndLoadCache(Class cls, SEL sel);
+extern BOOL class_respondsToSelector_inst(Class cls, SEL sel, id inst);
+
+extern bool objcMsgLogEnabled;
+extern bool logMessageSend(bool isClassMethod,
+                    const char *objectsClass,
+                    const char *implementingClass,
+                    SEL selector);
 
 /* message dispatcher */
 extern IMP _class_lookupMethodAndLoadCache3(id, SEL, Class);
 
 #if !OBJC_OLD_DISPATCH_PROTOTYPES
-extern void _objc_msgForward_internal(void);
+extern void _objc_msgForward_impcache(void);
 extern void _objc_ignored_method(void);
+extern void _objc_msgSend_uncached_impcache(void);
 #else
-extern id _objc_msgForward_internal(id, SEL, ...);
+extern id _objc_msgForward_impcache(id, SEL, ...);
 extern id _objc_ignored_method(id, SEL, ...);
+extern id _objc_msgSend_uncached_impcache(id, SEL, ...);
 #endif
 
 /* errors */
@@ -286,10 +498,7 @@ extern const char *copyPropertyAttributeString(const objc_property_attribute_t *
 extern objc_property_attribute_t *copyPropertyAttributeList(const char *attrs, unsigned int *outCount);
 extern char *copyPropertyAttributeValue(const char *attrs, const char *name);
 
-
 /* locking */
-/* Every lock used anywhere must be declared here. 
- * Locks not declared here may cause gdb deadlocks. */
 extern void lock_init(void);
 extern rwlock_t selLock;
 extern mutex_t cacheUpdateLock;
@@ -301,13 +510,7 @@ extern mutex_t classLock;
 extern mutex_t methodListLock;
 #endif
 
-/* Debugger mode for gdb */
-#define DEBUGGER_OFF 0
-#define DEBUGGER_PARTIAL 1
-#define DEBUGGER_FULL 2
-extern int startDebuggerMode(void);
-extern void endDebuggerMode(void);
-
+/* Lock debugging */
 #if defined(NDEBUG)  ||  TARGET_OS_WIN32
 
 #define mutex_lock(m)             _mutex_lock_nodebug(m)
@@ -401,8 +604,6 @@ extern void _rwlock_assert_unlocked_debug(rwlock_t *l, const char *name);
 
 #endif
 
-extern bool noSideTableLocksHeld(void);
-
 #define rwlock_unlock(m, s)                           \
     do {                                              \
         if ((s) == RDONLY) rwlock_unlock_read(m);     \
@@ -410,37 +611,11 @@ extern bool noSideTableLocksHeld(void);
     } while (0)
 
 
-extern NXHashTable *class_hash;
-
-#if !TARGET_OS_WIN32
-/* nil handler object */
-extern id _objc_nilReceiver;
-extern id _objc_setNilReceiver(id newNilReceiver);
-extern id _objc_getNilReceiver(void);
-#endif
-
-/* forward handler functions */
-extern void *_objc_forward_handler;
-extern void *_objc_forward_stret_handler;
-
-/* tagged pointer support */
-#if SUPPORT_TAGGED_POINTERS
-
-#define OBJC_IS_TAGGED_PTR(PTR)		((uintptr_t)(PTR) & 0x1)
-extern Class _objc_tagged_isa_table[16];
-
-#else
-
-#define OBJC_IS_TAGGED_PTR(PTR)		0
-
-#endif
-
-
 /* ignored selector support */
 
 /* Non-GC: no ignored selectors
-   GC without fixup dispatch: some selectors ignored, remapped to kIgnore
-   GC with fixup dispatch: some selectors ignored, but not remapped 
+   GC (i386 Mac): some selectors ignored, remapped to kIgnore
+   GC (others): some selectors ignored, but not remapped 
 */
 
 static inline int ignoreSelector(SEL sel)
@@ -478,16 +653,8 @@ static inline int ignoreSelectorNamed(const char *sel)
 #endif
 }
 
-/* Protocol implementation */
-#if !__OBJC2__
-struct old_protocol;
-struct objc_method_description * lookup_protocol_method(struct old_protocol *proto, SEL aSel, BOOL isRequiredMethod, BOOL isInstanceMethod, BOOL recursive);
-#else
-Method _protocol_getMethod(Protocol *p, SEL sel, BOOL isRequiredMethod, BOOL isInstanceMethod, BOOL recursive);
-#endif
-
 /* GC startup */
-extern void gc_init(BOOL wantsGC, BOOL wantsCompaction);
+extern void gc_init(BOOL wantsGC);
 extern void gc_init2(void);
 
 /* Exceptions */
@@ -503,22 +670,23 @@ extern void _destroyAltHandlerList(struct alt_handler_list *list);
 extern void gdb_objc_class_changed(Class cls, unsigned long changes, const char *classname)
     __attribute__((noinline));
 
-/* Write barrier implementations */
-extern id objc_assign_strongCast_non_gc(id value, id *dest);
-extern id objc_assign_global_non_gc(id value, id *dest);
-extern id objc_assign_threadlocal_non_gc(id value, id *dest);
-extern id objc_assign_ivar_non_gc(id value, id dest, ptrdiff_t offset);
-extern id objc_assign_strongCast_gc(id val, id *dest);
-extern id objc_assign_global_gc(id val, id *dest);
-extern id objc_assign_threadlocal_gc(id val, id *dest);
-extern id objc_assign_ivar_gc(id value, id dest, ptrdiff_t offset);
+#if SUPPORT_GC
 
+/* Write barrier implementations */
 extern id objc_getAssociatedObject_non_gc(id object, const void *key);
 extern void objc_setAssociatedObject_non_gc(id object, const void *key, id value, objc_AssociationPolicy policy);
+
 extern id objc_getAssociatedObject_gc(id object, const void *key);
 extern void objc_setAssociatedObject_gc(id object, const void *key, id value, objc_AssociationPolicy policy);
 
-#if SUPPORT_GC
+/* xrefs */
+extern objc_xref_t _object_addExternalReference_non_gc(id obj, objc_xref_t type);
+extern id _object_readExternalReference_non_gc(objc_xref_t ref);
+extern void _object_removeExternalReference_non_gc(objc_xref_t ref);
+
+extern objc_xref_t _object_addExternalReference_gc(id obj, objc_xref_t type);
+extern id _object_readExternalReference_gc(objc_xref_t ref);
+extern void _object_removeExternalReference_gc(objc_xref_t ref);
 
 /* GC weak reference fixup. */
 extern void gc_fixup_weakreferences(id newObject, id oldObject);
@@ -526,76 +694,17 @@ extern void gc_fixup_weakreferences(id newObject, id oldObject);
 /* GC datasegment registration. */
 extern void gc_register_datasegment(uintptr_t base, size_t size);
 extern void gc_unregister_datasegment(uintptr_t base, size_t size);
-extern void gc_fixup_barrier_stubs(const struct dyld_image_info *info);
 
 /* objc_dumpHeap implementation */
 extern BOOL _objc_dumpHeap(auto_zone_t *zone, const char *filename);
 
-/*
-    objc_assign_ivar, objc_assign_global, objc_assign_threadlocal, and objc_assign_strongCast MUST NOT be called directly
-    from inside libobjc. They live in the data segment, and must be called through the
-    following pointer(s) for libobjc to exist in the shared cache.
-
-    Note: If we build with GC enabled, gcc will emit calls to the original functions, which will break this.
-*/
-
-extern id (*objc_assign_ivar_internal)(id, id, ptrdiff_t);
-
-#endif
-
-/* Code modification */
-extern size_t objc_branch_size(void *entry, void *target);
-extern size_t objc_write_branch(void *entry, void *target);
-extern size_t objc_cond_branch_size(void *entry, void *target, unsigned cond);
-extern size_t objc_write_cond_branch(void *entry, void *target, unsigned cond);
-#if defined(__i386__) || defined(__x86_64__)
-#define COND_ALWAYS 0xE9  /* JMP rel32 */
-#define COND_NE     0x85  /* JNE rel32  (0F 85) */
 #endif
 
 
 // Settings from environment variables
-#if !SUPPORT_ENVIRON
-#   define ENV(x) enum { x = 0 }
-#else
-#   define ENV(x) extern int x
-#endif
-ENV(PrintImages);               // env OBJC_PRINT_IMAGES
-ENV(PrintLoading);              // env OBJC_PRINT_LOAD_METHODS
-ENV(PrintInitializing);         // env OBJC_PRINT_INITIALIZE_METHODS
-ENV(PrintResolving);            // env OBJC_PRINT_RESOLVED_METHODS
-ENV(PrintConnecting);           // env OBJC_PRINT_CLASS_SETUP
-ENV(PrintProtocols);            // env OBJC_PRINT_PROTOCOL_SETUP
-ENV(PrintIvars);                // env OBJC_PRINT_IVAR_SETUP
-ENV(PrintVtables);              // env OBJC_PRINT_VTABLE_SETUP
-ENV(PrintVtableImages);         // env OBJC_PRINT_VTABLE_IMAGES
-ENV(PrintFuture);               // env OBJC_PRINT_FUTURE_CLASSES
-ENV(PrintGC);                   // env OBJC_PRINT_GC
-ENV(PrintPreopt);               // env OBJC_PRINT_PREOPTIMIZATION
-ENV(PrintCxxCtors);             // env OBJC_PRINT_CXX_CTORS
-ENV(PrintExceptions);           // env OBJC_PRINT_EXCEPTIONS
-ENV(PrintExceptionThrow);       // env OBJC_PRINT_EXCEPTION_THROW
-ENV(PrintAltHandlers);          // env OBJC_PRINT_ALT_HANDLERS
-ENV(PrintDeprecation);          // env OBJC_PRINT_DEPRECATION_WARNINGS
-ENV(PrintReplacedMethods);      // env OBJC_PRINT_REPLACED_METHODS
-ENV(PrintCaches);               // env OBJC_PRINT_CACHE_SETUP
-ENV(PrintPoolHiwat);            // env OBJC_PRINT_POOL_HIGHWATER
-ENV(PrintCustomRR);             // env OBJC_PRINT_CUSTOM_RR
-ENV(PrintCustomAWZ);            // env OBJC_PRINT_CUSTOM_AWZ
-ENV(UseInternalZone);           // env OBJC_USE_INTERNAL_ZONE
-
-ENV(DebugUnload);               // env OBJC_DEBUG_UNLOAD
-ENV(DebugFragileSuperclasses);  // env OBJC_DEBUG_FRAGILE_SUPERCLASSES
-ENV(DebugFinalizers);           // env OBJC_DEBUG_FINALIZERS
-ENV(DebugNilSync);              // env OBJC_DEBUG_NIL_SYNC
-ENV(DebugNonFragileIvars);      // env OBJC_DEBUG_NONFRAGILE_IVARS
-ENV(DebugAltHandlers);          // env OBJC_DEBUG_ALT_HANDLERS
-
-ENV(DisableGC);                 // env OBJC_DISABLE_GC
-ENV(DisableVtables);            // env OBJC_DISABLE_VTABLES
-ENV(DisablePreopt);             // env OBJC_DISABLE_PREOPTIMIZATION
-
-#undef ENV
+#define OPTION(var, env, help) extern bool var;
+#include "objc-env.h"
+#undef OPTION
 
 extern void environ_init(void);
 
@@ -617,6 +726,7 @@ typedef struct {
     struct _objc_initializing_classes *initializingClasses; // for +initialize
     struct SyncCache *syncCache;  // for @synchronize
     struct alt_handler_list *handlerList;  // for exception alt handlers
+    char *printableNames[4];  // temporary demangled names for logging
 
     // If you add new fields here, don't forget to update 
     // _objc_pthread_destroyspecific()
@@ -625,23 +735,6 @@ typedef struct {
 
 extern _objc_pthread_data *_objc_fetch_pthread_data(BOOL create);
 extern void tls_init(void);
-
-
-// cache.h
-#if TARGET_OS_WIN32
-
-#else
-static inline int isPowerOf2(unsigned long l) { return 1 == __builtin_popcountl(l); }
-#endif
-extern void flush_caches(Class cls, BOOL flush_meta);
-extern void flush_cache(Class cls);
-extern BOOL _cache_fill(Class cls, Method smt, SEL sel);
-extern void _cache_addForwardEntry(Class cls, SEL sel);
-extern IMP  _cache_addIgnoredEntry(Class cls, SEL sel);
-extern void _cache_free(Cache cache);
-extern void _cache_collect(bool collectALot);
-
-extern mutex_t cacheUpdateLock;
 
 // encoding.h
 extern unsigned int encoding_getNumberOfArguments(const char *typedesc);
@@ -656,10 +749,11 @@ extern char *encoding_copyArgumentType(const char *t, unsigned int index);
 extern void _destroySyncCache(struct SyncCache *cache);
 
 // arr
-extern void (^objc_arr_log)(const char *, id param);
 extern void arr_init(void);
 extern id objc_autoreleaseReturnValue(id obj);
 
+// block trampolines
+extern IMP _imp_implementationWithBlockNoCopy(id block);
 
 // layout.h
 typedef struct {
@@ -684,7 +778,7 @@ extern void layout_bitmap_print(layout_bitmap bits);
 
 
 // fixme runtime
-extern id look_up_class(const char *aClassName, BOOL includeUnconnected, BOOL includeClassHandler);
+extern Class look_up_class(const char *aClassName, BOOL includeUnconnected, BOOL includeClassHandler);
 extern const char *map_images(enum dyld_image_states state, uint32_t infoCount, const struct dyld_image_info infoList[]);
 extern const char *map_images_nolock(enum dyld_image_states state, uint32_t infoCount, const struct dyld_image_info infoList[]);
 extern const char * load_images(enum dyld_image_states state, uint32_t infoCount, const struct dyld_image_info infoList[]);
@@ -696,55 +790,27 @@ extern void prepare_load_methods(header_info *hi);
 extern void _unload_image(header_info *hi);
 extern const char ** _objc_copyClassNamesForImage(header_info *hi, unsigned int *outCount);
 
-extern Class _objc_allocateFutureClass(const char *name);
-
 
 extern const header_info *_headerForClass(Class cls);
 
-extern Class _class_getSuperclass(Class cls);
 extern Class _class_remap(Class cls);
-extern BOOL _class_getInfo(Class cls, int info);
-extern const char *_class_getName(Class cls);
-extern size_t _class_getInstanceSize(Class cls);
-extern Class _class_getMeta(Class cls);
-extern BOOL _class_isMetaClass(Class cls);
-extern Cache _class_getCache(Class cls);
-extern void _class_setCache(Class cls, Cache cache);
-extern BOOL _class_isInitializing(Class cls);
-extern BOOL _class_isInitialized(Class cls);
-extern void _class_setInitializing(Class cls);
-extern void _class_setInitialized(Class cls);
 extern Class _class_getNonMetaClass(Class cls, id obj);
-extern Method _class_getMethod(Class cls, SEL sel);
-extern Method _class_getMethodNoSuper(Class cls, SEL sel);
-extern Method _class_getMethodNoSuper_nolock(Class cls, SEL sel);
-extern BOOL _class_isLoadable(Class cls);
-extern IMP _class_getLoadMethod(Class cls);
-extern BOOL _class_hasLoadMethod(Class cls);
-extern BOOL _class_hasCxxStructors(Class cls);
-extern BOOL _class_shouldFinalizeOnMainThread(Class cls);
-extern void _class_setFinalizeOnMainThread(Class cls);
-extern BOOL _class_instancesHaveAssociatedObjects(Class cls);
-extern void _class_setInstancesHaveAssociatedObjects(Class cls);
-extern BOOL _class_shouldGrowCache(Class cls);
-extern void _class_setGrowCache(Class cls, BOOL grow);
 extern Ivar _class_getVariable(Class cls, const char *name, Class *memberOf);
 extern BOOL _class_usesAutomaticRetainRelease(Class cls);
 extern uint32_t _class_getInstanceStart(Class cls);
 
 extern unsigned _class_createInstancesFromZone(Class cls, size_t extraBytes, void *zone, id *results, unsigned num_requested);
-extern id _objc_constructOrFree(Class cls, void *bytes);
+extern id _objc_constructOrFree(id bytes, Class cls);
 
 extern const char *_category_getName(Category cat);
 extern const char *_category_getClassName(Category cat);
 extern Class _category_getClass(Category cat);
 extern IMP _category_getLoadMethod(Category cat);
 
-extern BOOL object_cxxConstruct(id obj);
+extern id object_cxxConstructFromClass(id obj, Class cls);
 extern void object_cxxDestruct(id obj);
 
-extern Method _class_resolveMethod(Class cls, SEL sel);
-extern void log_and_fill_cache(Class cls, Class implementer, Method meth, SEL sel);
+extern void _class_resolveMethod(Class cls, SEL sel, id inst);
 
 #define OBJC_WARN_DEPRECATED \
     do { \
@@ -767,28 +833,14 @@ __END_DECLS
         } _static_assert_ ## line __attribute__((unavailable)) 
 #endif
 
-
-/***********************************************************************
-* object_getClass.
-* Locking: None. If you add locking, tell gdb (rdar://7516456).
-**********************************************************************/
-static inline Class _object_getClass(id obj)
-{
-#if SUPPORT_TAGGED_POINTERS
-    if (OBJC_IS_TAGGED_PTR(obj)) {
-        uint8_t slotNumber = ((uint8_t) (uint64_t) obj) & 0x0F;
-        Class isa = _objc_tagged_isa_table[slotNumber];
-        return isa;
-    }
-#endif
-    if (obj) return obj->isa;
-    else return Nil;
-}
+#define countof(arr) (sizeof(arr) / sizeof((arr)[0]))
 
 
 // Global operator new and delete. We must not use any app overrides.
 // This ALSO REQUIRES each of these be in libobjc's unexported symbol list.
 #if __cplusplus
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Winline-new-delete"
 #include <new>
 inline void* operator new(std::size_t size) throw (std::bad_alloc) { return _malloc_internal(size); }
 inline void* operator new[](std::size_t size) throw (std::bad_alloc) { return _malloc_internal(size); }
@@ -798,8 +850,112 @@ inline void operator delete(void* p) throw() { _free_internal(p); }
 inline void operator delete[](void* p) throw() { _free_internal(p); }
 inline void operator delete(void* p, const std::nothrow_t&) throw() { _free_internal(p); }
 inline void operator delete[](void* p, const std::nothrow_t&) throw() { _free_internal(p); }
+#pragma clang diagnostic pop
 #endif
 
+
+// DisguisedPtr<T> acts like pointer type T*, except the 
+// stored value is disguised to hide it from tools like `leaks`.
+// nil is disguised as itself so zero-filled memory works as expected, 
+// which means 0x80..00 is also diguised as itself but we don't care
+template <typename T>
+class DisguisedPtr {
+    uintptr_t value;
+
+    static uintptr_t disguise(T* ptr) {
+        return -(uintptr_t)ptr;
+    }
+
+    static T* undisguise(uintptr_t val) {
+        return (T*)-val;
+    }
+
+ public:
+    DisguisedPtr() { }
+    DisguisedPtr(T* ptr) 
+        : value(disguise(ptr)) { }
+    DisguisedPtr(const DisguisedPtr<T>& ptr) 
+        : value(ptr.value) { }
+
+    DisguisedPtr<T>& operator = (T* rhs) {
+        value = disguise(rhs);
+        return *this;
+    }
+    DisguisedPtr<T>& operator = (const DisguisedPtr<T>& rhs) {
+        value = rhs.value;
+        return *this;
+    }
+
+    operator T* () const {
+        return undisguise(value);
+    }
+    T* operator -> () const { 
+        return undisguise(value);
+    }
+    T& operator * () const { 
+        return *undisguise(value);
+    }
+    T& operator [] (size_t i) const {
+        return undisguise(value)[i];
+    }
+
+    // pointer arithmetic operators omitted 
+    // because we don't currently use them anywhere
+};
+
+
+// Pointer hash function.
+// This is not a terrific hash, but it is fast 
+// and not outrageously flawed for our purposes.
+
+// Based on principles from http://locklessinc.com/articles/fast_hash/
+// and evaluation ideas from http://floodyberry.com/noncryptohashzoo/
+#if __LP64__
+static inline uint32_t ptr_hash(uint64_t key)
+{
+    key ^= key >> 4;
+    key *= 0x8a970be7488fda55;
+    key ^= __builtin_bswap64(key);
+    return (uint32_t)key;
+}
+#else
+static inline uint32_t ptr_hash(uint32_t key)
+{
+    key ^= key >> 4;
+    key *= 0x5052acdb;
+    key ^= __builtin_bswap32(key);
+    return key;
+}
+#endif
+
+/*
+  Higher-quality hash function. This is measurably slower in some workloads.
+#if __LP64__
+ uint32_t ptr_hash(uint64_t key)
+{
+    key -= __builtin_bswap64(key);
+    key *= 0x8a970be7488fda55;
+    key ^= __builtin_bswap64(key);
+    key *= 0x8a970be7488fda55;
+    key ^= __builtin_bswap64(key);
+    return (uint32_t)key;
+}
+#else
+static uint32_t ptr_hash(uint32_t key)
+{
+    key -= __builtin_bswap32(key);
+    key *= 0x5052acdb;
+    key ^= __builtin_bswap32(key);
+    key *= 0x5052acdb;
+    key ^= __builtin_bswap32(key);
+    return key;
+}
+#endif
+*/
+
+
+// Inlined parts of objc_object's implementation
+#include "objc-object.h"
 
 #endif /* _OBJC_PRIVATE_H_ */
 

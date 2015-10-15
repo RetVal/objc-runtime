@@ -58,9 +58,9 @@ typedef struct SyncCache {
 
 typedef struct {
     SyncData *data;
-    OSSpinLock lock;
+    spinlock_t lock;
 
-    char align[64 - sizeof (OSSpinLock) - sizeof (SyncData *)];
+    char align[64 - sizeof (spinlock_t) - sizeof (SyncData *)];
 } SyncList __attribute__((aligned(64)));
 // aligned to put locks on separate cache lines
 
@@ -112,7 +112,7 @@ void _destroySyncCache(struct SyncCache *cache)
 
 static SyncData* id2data(id object, enum usage why)
 {
-    OSSpinLock *lockp = &LOCK_FOR_OBJ(object);
+    spinlock_t *lockp = &LOCK_FOR_OBJ(object);
     SyncData **listp = &LIST_FOR_OBJ(object);
     SyncData* result = NULL;
 
@@ -206,7 +206,7 @@ static SyncData* id2data(id object, enum usage why)
     // We could keep the nodes in some hash table if we find that there are
     // more than 20 or so distinct locks active, but we don't do that now.
     
-    OSSpinLockLock(lockp);
+    spinlock_lock(lockp);
 
     {
         SyncData* p;
@@ -247,7 +247,7 @@ static SyncData* id2data(id object, enum usage why)
     *listp = result;
     
  done:
-    OSSpinLockUnlock(lockp);
+    spinlock_unlock(lockp);
     if (result) {
         // Only new ACQUIRE should get here.
         // All RELEASE and CHECK and recursive ACQUIRE are 

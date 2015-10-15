@@ -29,13 +29,15 @@
 
 __BEGIN_DECLS
 
-// GC-specific accessors.
+#if SUPPORT_GC
+
+extern void objc_setProperty_non_gc(id self, SEL _cmd, ptrdiff_t offset, id newValue, BOOL atomic, signed char shouldCopy);
+extern id objc_getProperty_non_gc(id self, SEL _cmd, ptrdiff_t offset, BOOL atomic);
+
 extern void objc_setProperty_gc(id self, SEL _cmd, ptrdiff_t offset, id newValue, BOOL atomic, signed char shouldCopy);
 extern id objc_getProperty_gc(id self, SEL _cmd, ptrdiff_t offset, BOOL atomic);
 
-// Non-GC accessors.
-extern void objc_setProperty_non_gc(id self, SEL _cmd, ptrdiff_t offset, id newValue, BOOL atomic, signed char shouldCopy);
-extern id objc_getProperty_non_gc(id self, SEL _cmd, ptrdiff_t offset, BOOL atomic);
+#endif
 
 __END_DECLS
 

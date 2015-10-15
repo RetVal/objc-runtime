@@ -23,17 +23,19 @@
 
 #ifdef __x86_64__
 
+#include <mach/vm_param.h>
+	
     .text
     .private_extern __a2a3_tramphead
     .private_extern __a2a3_firsttramp
     .private_extern __a2a3_nexttramp
     .private_extern __a2a3_trampend
 
-.align 12
+.align PAGE_SHIFT
 __a2a3_tramphead:
     popq %r10
     andq $0xFFFFFFFFFFFFFFF8, %r10
-    subq $0x1000, %r10
+    subq $ PAGE_SIZE, %r10
     // %rdi -- first arg -- is address of return value's space. Don't mess with it.
     movq %rsi, %rdx // arg2 -> arg3
     movq (%r10), %rsi // block -> arg2

@@ -45,43 +45,22 @@ OBJC_EXPORT Class getOriginalClassForPosingClass(Class);
 **********************************************************************/
 
 // Settings from environment variables
-#if SUPPORT_ENVIRON
-int PrintImages = -1;     // env OBJC_PRINT_IMAGES
-int PrintLoading = -1;    // env OBJC_PRINT_LOAD_METHODS
-int PrintInitializing = -1; // env OBJC_PRINT_INITIALIZE_METHODS
-int PrintResolving = -1;  // env OBJC_PRINT_RESOLVED_METHODS
-int PrintConnecting = -1; // env OBJC_PRINT_CLASS_SETUP
-int PrintProtocols = -1;  // env OBJC_PRINT_PROTOCOL_SETUP
-int PrintIvars = -1;      // env OBJC_PRINT_IVAR_SETUP
-int PrintVtables = -1;    // env OBJC_PRINT_VTABLE_SETUP
-int PrintVtableImages = -1;//env OBJC_PRINT_VTABLE_IMAGES
-int PrintFuture = -1;     // env OBJC_PRINT_FUTURE_CLASSES
-int PrintGC = -1;         // env OBJC_PRINT_GC
-int PrintPreopt = -1;     // env OBJC_PRINT_PREOPTIMIZATION
-int PrintCxxCtors = -1;   // env OBJC_PRINT_CXX_CTORS
-int PrintExceptions = -1; // env OBJC_PRINT_EXCEPTIONS
-int PrintExceptionThrow = -1; // env OBJC_PRINT_EXCEPTION_THROW
-int PrintAltHandlers = -1; // env OBJC_PRINT_ALT_HANDLERS
-int PrintDeprecation = -1;// env OBJC_PRINT_DEPRECATION_WARNINGS
-int PrintReplacedMethods = -1; // env OBJC_PRINT_REPLACED_METHODS
-int PrintCaches = -1;     // env OBJC_PRINT_CACHE_SETUP
-int PrintPoolHiwat = -1;  // env OBJC_PRINT_POOL_HIGHWATER
-int PrintCustomRR = -1;   // env OBJC_PRINT_CUSTOM_RR
-int PrintCustomAWZ = -1;  // env OBJC_PRINT_CUSTOM_AWZ
+#define OPTION(var, env, help) bool var = false;
+#include "objc-env.h"
+#undef OPTION
 
-int UseInternalZone = -1; // env OBJC_USE_INTERNAL_ZONE
+struct option_t {
+    bool* var;
+    const char *env;
+    const char *help;
+    size_t envlen;
+};
 
-int DebugUnload = -1;     // env OBJC_DEBUG_UNLOAD
-int DebugFragileSuperclasses = -1; // env OBJC_DEBUG_FRAGILE_SUPERCLASSES
-int DebugNilSync = -1;    // env OBJC_DEBUG_NIL_SYNC
-int DebugNonFragileIvars = -1; // env OBJC_DEBUG_NONFRAGILE_IVARS
-int DebugAltHandlers = -1;// env OBJC_DEBUG_ALT_HANDLERS
-
-int DisableGC = -1;       // env OBJC_DISABLE_GC
-int DisableVtables = -1;  // env OBJC_DISABLE_VTABLES
-int DisablePreopt = -1;   // env OBJC_DISABLE_PREOPTIMIZATION
-int DebugFinalizers = -1; // env OBJC_DEBUG_FINALIZERS
-#endif
+const option_t Settings[] = {
+#define OPTION(var, env, help) {& var, #env, help, sizeof(#env)},
+#include "objc-env.h"
+#undef OPTION
+};
 
 
 // objc's key for pthread_getspecific
@@ -100,15 +79,22 @@ SEL SEL_autorelease = NULL;
 SEL SEL_retainCount = NULL;
 SEL SEL_alloc = NULL;
 SEL SEL_allocWithZone = NULL;
+SEL SEL_dealloc = NULL;
 SEL SEL_copy = NULL;
 SEL SEL_new = NULL;
 SEL SEL_finalize = NULL;
 SEL SEL_forwardInvocation = NULL;
+SEL SEL_tryRetain = NULL;
+SEL SEL_isDeallocating = NULL;
+SEL SEL_retainWeakReference = NULL;
+SEL SEL_allowsWeakReference = NULL;
+
 
 header_info *FirstHeader = 0;  // NULL means empty list
 header_info *LastHeader  = 0;  // NULL means invalid; recompute it
 int HeaderCount = 0;
 
+uint32_t AppSDKVersion = 0;
 
 
 /***********************************************************************
@@ -117,7 +103,7 @@ int HeaderCount = 0;
 * which may create a new class.
 * Warning: doesn't work if aClassName is the name of a posed-for class's isa!
 **********************************************************************/
-id objc_getClass(const char *aClassName)
+Class objc_getClass(const char *aClassName)
 {
     if (!aClassName) return Nil;
 
@@ -132,9 +118,9 @@ id objc_getClass(const char *aClassName)
 * This is used by ZeroLink, where failing to find a class would be a 
 * compile-time link error without ZeroLink.
 **********************************************************************/
-id objc_getRequiredClass(const char *aClassName)
+Class objc_getRequiredClass(const char *aClassName)
 {
-    id cls = objc_getClass(aClassName);
+    Class cls = objc_getClass(aClassName);
     if (!cls) _objc_fatal("link error: class '%s' not found.", aClassName);
     return cls;
 }
@@ -147,7 +133,7 @@ id objc_getRequiredClass(const char *aClassName)
 *
 * Formerly objc_getClassWithoutWarning ()
 **********************************************************************/
-id objc_lookUpClass(const char *aClassName)
+Class objc_lookUpClass(const char *aClassName)
 {
     if (!aClassName) return Nil;
 
@@ -155,52 +141,25 @@ id objc_lookUpClass(const char *aClassName)
     return look_up_class(aClassName, NO, NO);
 }
 
-/***********************************************************************
-* objc_getFutureClass.  Return the id of the named class.
-* If the class does not exist, return an uninitialized class 
-* structure that will be used for the class when and if it 
-* does get loaded.
-* Not thread safe. 
-**********************************************************************/
-Class objc_getFutureClass(const char *name)
-{
-    Class cls;
-
-    // YES unconnected, NO class handler
-    // (unconnected is OK because it will someday be the real class)
-    cls = (Class)look_up_class(name, YES, NO);
-    if (cls) {
-        if (PrintFuture) {
-            _objc_inform("FUTURE: found %p already in use for %s", cls, name);
-        }
-        return cls;
-    }
-    
-    // No class or future class with that name yet. Make one.
-    // fixme not thread-safe with respect to 
-    // simultaneous library load or getFutureClass.
-    return _objc_allocateFutureClass(name);
-}
-
 
 /***********************************************************************
 * objc_getMetaClass.  Return the id of the meta class the named class.
 * Warning: doesn't work if aClassName is the name of a posed-for class's isa!
 **********************************************************************/
-id objc_getMetaClass(const char *aClassName)
+Class objc_getMetaClass(const char *aClassName)
 {
     Class cls;
 
     if (!aClassName) return Nil;
 
-    cls = (Class)objc_getClass (aClassName);
+    cls = objc_getClass (aClassName);
     if (!cls)
     {
         _objc_inform ("class `%s' not linked into application", aClassName);
         return Nil;
     }
 
-    return (id)cls->isa;
+    return cls->ISA();
 }
 
 
@@ -266,16 +225,46 @@ void removeHeader(header_info *hi)
 **********************************************************************/
 void environ_init(void) 
 {
-#if SUPPORT_ENVIRON
-    int PrintHelp = (getenv("OBJC_HELP") != NULL);
-    int PrintOptions = (getenv("OBJC_PRINT_OPTIONS") != NULL);
-    int secure = issetugid();
-
-    if (secure) {
-        // All environment variables are ignored when setuid or setgid.
+    if (issetugid()) {
+        // All environment variables are silently ignored when setuid or setgid
         // This includes OBJC_HELP and OBJC_PRINT_OPTIONS themselves.
+        return;
     } 
-    else {
+
+    bool PrintHelp = false;
+    bool PrintOptions = false;
+
+    // Scan environ[] directly instead of calling getenv() a lot.
+    // This optimizes the case where none are set.
+    for (char **p = *_NSGetEnviron(); *p != nil; p++) {
+        if (0 != strncmp(*p, "OBJC_", 5)) continue;
+        
+        if (0 == strncmp(*p, "OBJC_HELP=", 10)) {
+            PrintHelp = true;
+            continue;
+        }
+        if (0 == strncmp(*p, "OBJC_PRINT_OPTIONS=", 19)) {
+            PrintOptions = true;
+            continue;
+        }
+        
+        const char *value = strchr(*p, '=');
+        if (!*value) continue;
+        value++;
+        
+        for (size_t i = 0; i < sizeof(Settings)/sizeof(Settings[0]); i++) {
+            const option_t *opt = &Settings[i];
+            if ((size_t)(value - *p) == 1+opt->envlen  &&  
+                0 == strncmp(*p, opt->env, opt->envlen))
+            {
+                *opt->var = (0 == strcmp(value, "YES"));
+                break;
+            }
+        }            
+    }
+
+    // Print OBJC_HELP and OBJC_PRINT_OPTIONS output.
+    if (PrintHelp  ||  PrintOptions) {
         if (PrintHelp) {
             _objc_inform("Objective-C runtime debugging. Set variable=YES to enable.");
             _objc_inform("OBJC_HELP: describe available environment variables");
@@ -287,91 +276,13 @@ void environ_init(void)
         if (PrintOptions) {
             _objc_inform("OBJC_PRINT_OPTIONS is set");
         }
+
+        for (size_t i = 0; i < sizeof(Settings)/sizeof(Settings[0]); i++) {
+            const option_t *opt = &Settings[i];            
+            if (PrintHelp) _objc_inform("%s: %s", opt->env, opt->help);
+            if (PrintOptions && *opt->var) _objc_inform("%s is set", opt->env);
+        }
     }
-    
-#define OPTION(var, env, help) \
-    if ( var == -1 ) { \
-        char *value = getenv(#env); \
-        var = value != NULL && !strcmp("YES", value); \
-        if (secure) { \
-            if (var) _objc_inform(#env " ignored when running setuid or setgid"); \
-            var = 0; \
-        } else { \
-            if (PrintHelp) _objc_inform(#env ": " help); \
-            if (PrintOptions && var) _objc_inform(#env " is set"); \
-        } \
-    }
-    
-    OPTION(PrintImages, OBJC_PRINT_IMAGES,
-           "log image and library names as they are loaded");
-    OPTION(PrintLoading, OBJC_PRINT_LOAD_METHODS,
-           "log calls to class and category +load methods");
-    OPTION(PrintInitializing, OBJC_PRINT_INITIALIZE_METHODS,
-           "log calls to class +initialize methods");
-    OPTION(PrintResolving, OBJC_PRINT_RESOLVED_METHODS,
-           "log methods created by +resolveClassMethod: and +resolveInstanceMethod:");
-    OPTION(PrintConnecting, OBJC_PRINT_CLASS_SETUP,
-           "log progress of class and category setup");
-    OPTION(PrintProtocols, OBJC_PRINT_PROTOCOL_SETUP,
-           "log progress of protocol setup");
-    OPTION(PrintIvars, OBJC_PRINT_IVAR_SETUP,
-           "log processing of non-fragile ivars");
-    OPTION(PrintVtables, OBJC_PRINT_VTABLE_SETUP,
-           "log processing of class vtables");
-    OPTION(PrintVtableImages, OBJC_PRINT_VTABLE_IMAGES,
-           "print vtable images showing overridden methods");
-    OPTION(PrintCaches, OBJC_PRINT_CACHE_SETUP, 
-           "log processing of method caches");
-    OPTION(PrintFuture, OBJC_PRINT_FUTURE_CLASSES, 
-           "log use of future classes for toll-free bridging");
-    OPTION(PrintGC, OBJC_PRINT_GC,
-           "log some GC operations");
-    OPTION(PrintPreopt, OBJC_PRINT_PREOPTIMIZATION,
-           "log preoptimization courtesy of dyld shared cache");
-    OPTION(PrintCxxCtors, OBJC_PRINT_CXX_CTORS, 
-           "log calls to C++ ctors and dtors for instance variables");
-    OPTION(PrintExceptions, OBJC_PRINT_EXCEPTIONS, 
-           "log exception handling");
-    OPTION(PrintExceptionThrow, OBJC_PRINT_EXCEPTION_THROW, 
-           "log backtrace of every objc_exception_throw()");
-    OPTION(PrintAltHandlers, OBJC_PRINT_ALT_HANDLERS, 
-           "log processing of exception alt handlers");
-    OPTION(PrintReplacedMethods, OBJC_PRINT_REPLACED_METHODS, 
-           "log methods replaced by category implementations");
-    OPTION(PrintDeprecation, OBJC_PRINT_DEPRECATION_WARNINGS, 
-           "warn about calls to deprecated runtime functions");
-    OPTION(PrintPoolHiwat, OBJC_PRINT_POOL_HIGHWATER, 
-           "log high-water marks for autorelease pools");
-    OPTION(PrintCustomRR, OBJC_PRINT_CUSTOM_RR, 
-           "log classes with un-optimized custom retain/release methods");
-    OPTION(PrintCustomAWZ, OBJC_PRINT_CUSTOM_AWZ, 
-           "log classes with un-optimized custom allocWithZone methods");
-
-    OPTION(DebugUnload, OBJC_DEBUG_UNLOAD,
-           "warn about poorly-behaving bundles when unloaded");
-    OPTION(DebugFragileSuperclasses, OBJC_DEBUG_FRAGILE_SUPERCLASSES, 
-           "warn about subclasses that may have been broken by subsequent changes to superclasses");
-    OPTION(DebugFinalizers, OBJC_DEBUG_FINALIZERS, 
-           "warn about classes that implement -dealloc but not -finalize");
-    OPTION(DebugNilSync, OBJC_DEBUG_NIL_SYNC, 
-           "warn about @synchronized(nil), which does no synchronization");
-    OPTION(DebugNonFragileIvars, OBJC_DEBUG_NONFRAGILE_IVARS, 
-           "capriciously rearrange non-fragile ivars");
-    OPTION(DebugAltHandlers, OBJC_DEBUG_ALT_HANDLERS, 
-           "record more info about bad alt handler use");
-
-    OPTION(UseInternalZone, OBJC_USE_INTERNAL_ZONE,
-           "allocate runtime data in a dedicated malloc zone");
-
-    OPTION(DisableGC, OBJC_DISABLE_GC,
-           "force GC OFF, even if the executable wants it on");
-    OPTION(DisableVtables, OBJC_DISABLE_VTABLES,
-           "disable vtable dispatch");
-    OPTION(DisablePreopt, OBJC_DISABLE_PREOPTIMIZATION,
-           "disable preoptimization courtesy of dyld shared cache");
-
-#undef OPTION
-#endif
 }
 
 
@@ -452,6 +363,11 @@ void _objc_pthread_destroyspecific(void *arg)
         _destroyInitializingClassList(data->initializingClasses);
         _destroySyncCache(data->syncCache);
         _destroyAltHandlerList(data->handlerList);
+        for (int i = 0; i < (int)countof(data->printableNames); i++) {
+            if (data->printableNames[i]) {
+                free(data->printableNames[i]);  
+            }
+        }
 
         // add further cleanup here...
 
@@ -483,100 +399,53 @@ void _objcInit(void)
 }
 
 
-#if !(TARGET_OS_WIN32  ||  TARGET_OS_EMBEDDED  ||  TARGET_OS_IPHONE)
-/***********************************************************************
-* _objc_setNilReceiver
-**********************************************************************/
-id _objc_setNilReceiver(id newNilReceiver)
-{
-    id oldNilReceiver;
-
-    oldNilReceiver = _objc_nilReceiver;
-    _objc_nilReceiver = newNilReceiver;
-
-    return oldNilReceiver;
-}
-
-/***********************************************************************
-* _objc_getNilReceiver
-**********************************************************************/
-id _objc_getNilReceiver(void)
-{
-    return _objc_nilReceiver;
-}
-#endif
-
-
 /***********************************************************************
 * objc_setForwardHandler
 **********************************************************************/
+
+#if !__OBJC2__
+
+// Default forward handler (nil) goes to forward:: dispatch.
+void *_objc_forward_handler = nil;
+void *_objc_forward_stret_handler = nil;
+
+#else
+
+// Default forward handler halts the process.
+__attribute__((noreturn)) void 
+objc_defaultForwardHandler(id self, SEL sel)
+{
+    _objc_fatal("%c[%s %s]: unrecognized selector sent to instance %p "
+                "(no message forward handler is installed)", 
+                class_isMetaClass(object_getClass(self)) ? '+' : '-', 
+                object_getClassName(self), sel_getName(sel), self);
+}
+void *_objc_forward_handler = (void*)objc_defaultForwardHandler;
+
+#if SUPPORT_STRET
+struct stret { int i[100]; };
+__attribute__((noreturn)) struct stret 
+objc_defaultForwardStretHandler(id self, SEL sel)
+{
+    objc_defaultForwardHandler(self, sel);
+}
+void *_objc_forward_stret_handler = (void*)objc_defaultForwardStretHandler;
+#endif
+
+#endif
+
 void objc_setForwardHandler(void *fwd, void *fwd_stret)
 {
     _objc_forward_handler = fwd;
+#if SUPPORT_STRET
     _objc_forward_stret_handler = fwd_stret;
-}
-
-
-#if defined(__i386__) || defined(__x86_64__)
-
-/**********************************************************************
-* objc_branch_size
-* Returns the number of BYTES needed 
-* for a branch from entry to target. 
-**********************************************************************/
-size_t objc_branch_size(void *entry, void *target)
-{
-    return objc_cond_branch_size(entry, target, COND_ALWAYS);
-}
-
-size_t 
-objc_cond_branch_size(void *entry, void *target, unsigned cond)
-{
-    // For simplicity, always use 32-bit relative jumps.
-    if (cond == COND_ALWAYS) return 5;
-    else return 6;
-}
-
-/**********************************************************************
-* objc_write_branch
-* Writes at entry an i386 branch instruction sequence that branches to target.
-* The sequence written will be objc_branch_size(entry, target) BYTES.
-* Returns the number of BYTES written.
-**********************************************************************/
-size_t objc_write_branch(void *entry, void *target) 
-{
-    return objc_write_cond_branch(entry, target, COND_ALWAYS);
-}
-
-size_t 
-objc_write_cond_branch(void *entry, void *target, unsigned cond) 
-{
-    uint8_t *address = (uint8_t *)entry;  // instructions written to here
-    intptr_t destination = (intptr_t)target;  // branch dest as absolute address
-    intptr_t displacement = (intptr_t)destination - ((intptr_t)address + objc_cond_branch_size(entry, target, cond)); // branch dest as relative offset
-    
-    // For simplicity, always use 32-bit relative jumps
-    if (cond != COND_ALWAYS) {
-        *address++ = 0x0f;  // Jcc prefix
-    }
-    *address++ = cond;
-    *address++ = displacement & 0xff;
-    *address++ = (displacement >> 8) & 0xff;
-    *address++ = (displacement >> 16) & 0xff;
-    *address++ = (displacement >> 24) & 0xff;
-
-    return address - (uint8_t *)entry;
-}
-
-// defined __i386__
 #endif
-
-
+}
 
 
 #if !__OBJC2__
 // GrP fixme
-OBJC_EXTERN Class _objc_getOrigClass(const char *name);
+extern "C" Class _objc_getOrigClass(const char *name);
 #endif
 const char *class_getImageName(Class cls)
 {
@@ -590,23 +459,24 @@ const char *class_getImageName(Class cls)
     if (!cls) return NULL;
 
 #if !__OBJC2__
-    cls = _objc_getOrigClass(_class_getName(cls));
+    cls = _objc_getOrigClass(cls->demangledName());
 #endif
 #if TARGET_OS_WIN32
-	charactersCopied = 0;
-	szFileName = malloc(MAX_PATH * sizeof(TCHAR));
-	
-	origCls = objc_getOrigClass(class_getName(cls));
-	classModule = NULL;
-	res = GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, (LPCTSTR)origCls, &classModule);
-	if (res && classModule) {
-	    charactersCopied = GetModuleFileName(classModule, szFileName, MAX_PATH * sizeof(TCHAR));
-	}
-	if (classModule) FreeLibrary(classModule);
-	if (charactersCopied) {
-		return (const char *)szFileName;
-	} else 
-		free(szFileName);
+    charactersCopied = 0;
+    szFileName = malloc(MAX_PATH * sizeof(TCHAR));
+    
+    origCls = objc_getOrigClass(cls->demangledName());
+    classModule = NULL;
+    res = GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, (LPCTSTR)origCls, &classModule);
+    if (res && classModule) {
+        charactersCopied = GetModuleFileName(classModule, szFileName, MAX_PATH * sizeof(TCHAR));
+    }
+    if (classModule) FreeLibrary(classModule);
+    if (charactersCopied) {
+        return (const char *)szFileName;
+    } else {
+        free(szFileName);
+    }
     return NULL;
 #else
     return dyld_image_path_containing_address(cls);
@@ -692,7 +562,7 @@ static void (*enumerationMutationHandler)(id);
 **********************************************************************/
 void objc_enumerationMutation(id object) {
     if (enumerationMutationHandler == nil) {
-        _objc_fatal("mutation detected during 'for(... in ...)'  enumeration of object %p.", object);
+        _objc_fatal("mutation detected during 'for(... in ...)'  enumeration of object %p.", (void*)object);
     }
     (*enumerationMutationHandler)(object);
 }
@@ -711,169 +581,61 @@ void objc_setEnumerationMutationHandler(void (*handler)(id)) {
 * Associative Reference Support
 **********************************************************************/
 
-#if SUPPORT_GC
-id objc_getAssociatedObject_gc(id object, const void *key) {
-    return (id)auto_zone_get_associative_ref(gc_zone, object, (void *)key);
-}
-#endif
-
 id objc_getAssociatedObject_non_gc(id object, const void *key) {
     return _object_get_associative_reference(object, (void *)key);
 }
 
-id objc_getAssociatedObject(id object, const void *key) {
-#if SUPPORT_GC
-    if (UseGC) {
-        return (id)auto_zone_get_associative_ref(gc_zone, object, (void *)key);
-    } else 
-#endif
-    {
-        return _object_get_associative_reference(object, (void *)key);
-    }
+
+void objc_setAssociatedObject_non_gc(id object, const void *key, id value, objc_AssociationPolicy policy) {
+    _object_set_associative_reference(object, (void *)key, value, policy);
 }
 
+
 #if SUPPORT_GC
+
+id objc_getAssociatedObject_gc(id object, const void *key) {
+    return (id)auto_zone_get_associative_ref(gc_zone, object, (void *)key);
+}
+
 void objc_setAssociatedObject_gc(id object, const void *key, id value, objc_AssociationPolicy policy) {
     if ((policy & OBJC_ASSOCIATION_COPY_NONATOMIC) == OBJC_ASSOCIATION_COPY_NONATOMIC) {
         value = ((id(*)(id, SEL))objc_msgSend)(value, SEL_copy);
     }
     auto_zone_set_associative_ref(gc_zone, object, (void *)key, value);
 }
-#endif
 
-void objc_setAssociatedObject_non_gc(id object, const void *key, id value, objc_AssociationPolicy policy) {
-    _object_set_associative_reference(object, (void *)key, value, policy);
+// objc_setAssociatedObject and objc_getAssociatedObject are 
+// resolver functions in objc-auto.mm.
+
+#else
+
+id 
+objc_getAssociatedObject(id object, const void *key) 
+{
+    return objc_getAssociatedObject_non_gc(object, key);
 }
 
-void objc_setAssociatedObject(id object, const void *key, id value, objc_AssociationPolicy policy) {
-#if SUPPORT_GC
-    if (UseGC) {
-        if ((policy & OBJC_ASSOCIATION_COPY_NONATOMIC) == OBJC_ASSOCIATION_COPY_NONATOMIC) {
-            value = ((id(*)(id, SEL))objc_msgSend)(value, SEL_copy);
-        }
-        auto_zone_set_associative_ref(gc_zone, object, (void *)key, value);
-    } else 
-#endif
-    {
-        // Note, creates a retained reference in non-GC.
-        _object_set_associative_reference(object, (void *)key, value, policy);
-    }
+void 
+objc_setAssociatedObject(id object, const void *key, id value, 
+                         objc_AssociationPolicy policy) 
+{
+    objc_setAssociatedObject_non_gc(object, key, value, policy);
 }
 
-void objc_removeAssociatedObjects(id object) {
+#endif
+
+
+void objc_removeAssociatedObjects(id object) 
+{
 #if SUPPORT_GC
     if (UseGC) {
         auto_zone_erase_associative_refs(gc_zone, object);
     } else 
 #endif
     {
-        if (_class_instancesHaveAssociatedObjects(_object_getClass(object))) _object_remove_assocations(object);
-    }
-}
-
-BOOL class_instancesHaveAssociatedObjects(Class cls) {
-    return _class_instancesHaveAssociatedObjects(cls);
-}
-
-
-/**********************************************************************
-* Debugger mode
-*
-* Debugger mode is used when gdb wants to call runtime functions 
-* and other methods while other threads are stopped. The runtime 
-* provides best-effort functionality while avoiding deadlocks 
-* with the stopped threads. gdb is responsible for ensuring that all 
-* threads but one stay stopped.
-*
-* When debugger mode starts, the runtime acquires as many locks as 
-* it can. Any locks that can't be acquired are off-limits until 
-* debugger mode ends. The locking functions in objc-os.h check each 
-* operation and halt if a disallowed lock is used; gdb catches that 
-* trap and cleans up.
-*
-* Each ABI is responsible for tracking its locks. Any lock not 
-* handled there is a potential gdb deadlock.
-**********************************************************************/
-
-#if SUPPORT_DEBUGGER_MODE
-
-int DebuggerMode = DEBUGGER_OFF;
-objc_thread_t DebuggerModeThread = 0;
-static int DebuggerModeCount;
-
-/**********************************************************************
-* gdb_objc_startDebuggerMode
-* Start debugger mode by taking locks. Return 0 if not enough locks 
-* could be acquired.
-**********************************************************************/
-int gdb_objc_startDebuggerMode(uint32_t flags)
-{
-    BOOL wantFull = flags & OBJC_DEBUGMODE_FULL;
-    if (! DebuggerMode) {
-        // Start debugger mode
-        int mode = startDebuggerMode();  // Do this FIRST
-        if (mode == DEBUGGER_OFF) {
-            // sorry
-            return 0;
-        }
-        else if (mode == DEBUGGER_PARTIAL  &&  wantFull) {
-            // not good enough
-            endDebuggerMode();
-            return 0;
-        }
-        else {
-            // w00t
-            DebuggerMode = mode;
-            DebuggerModeCount = 1;
-            DebuggerModeThread = thread_self();
-            return 1;
-        }
-    } 
-    else if (DebuggerMode == DEBUGGER_PARTIAL  &&  wantFull) {
-        // Debugger mode already active, but not as requested - sorry
-        return 0;
-    } 
-    else {
-        // Debugger mode already active as requested
-        if (thread_self() == DebuggerModeThread) {
-            DebuggerModeCount++;
-            return 1;
-        } else {
-            _objc_inform("DEBUGGER MODE: debugger is buggy: can't run "
-                         "debugger mode from two threads!");
-            return 0;
+        if (object && object->hasAssociatedObjects()) {
+            _object_remove_assocations(object);
         }
     }
 }
 
-
-/**********************************************************************
-* gdb_objc_endDebuggerMode
-* Relinquish locks and end debugger mode.
-**********************************************************************/
-void gdb_objc_endDebuggerMode(void)
-{
-    if (DebuggerMode  &&  thread_self() == DebuggerModeThread) {
-        if (--DebuggerModeCount == 0) {
-            DebuggerMode = NO;
-            DebuggerModeThread = 0;
-            endDebuggerMode();  // Do this LAST
-        }
-    } else {
-        _objc_inform("DEBUGGER MODE: debugger is buggy: debugger mode "
-                     "not active for this thread!");
-    }
-}
-
-
-/**********************************************************************
-* gdb_objc_debuggerModeFailure
-* Breakpoint hook for gdb when debugger mode can't finish something
-**********************************************************************/
-void gdb_objc_debuggerModeFailure(void)
-{
-    _objc_fatal("DEBUGGER MODE: failed");
-}
-
-// SUPPORT_DEBUGGER_MODE
-#endif

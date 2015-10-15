@@ -26,33 +26,38 @@
   Management of optimizations in the dyld shared cache 
 */
 
-#include "objc.h"
 #include "objc-private.h"
-
-using namespace objc_opt;
 
 
 #if !SUPPORT_PREOPT
 // Preoptimization not supported on this platform.
+
+struct objc_selopt_t;
 
 bool isPreoptimized(void) 
 {
     return false;
 }
 
-const objc_selopt_t *preoptimizedSelectors(void) 
+objc_selopt_t *preoptimizedSelectors(void) 
 {
-    return NULL;
+    return nil;
 }
 
-struct class_t * getPreoptimizedClass(const char *name)
+Class getPreoptimizedClass(const char *name)
 {
-    return NULL;
+    return nil;
+}
+
+Class* copyPreoptimizedClasses(const char *name, int *outCount)
+{
+    *outCount = 0;
+    return nil;
 }
 
 header_info *preoptimizedHinfoForHeader(const headerType *mhdr)
 {
-    return NULL;
+    return nil;
 }
 
 void preopt_init(void)
@@ -70,60 +75,101 @@ void preopt_init(void)
 #else
 // SUPPORT_PREOPT
 
-
 #include <objc-shared-cache.h>
+
+using objc_opt::objc_clsopt_t;
+using objc_opt::objc_headeropt_t;
+using objc_opt::objc_opt_t;
 
 __BEGIN_DECLS
 
-// preopt: the actual opt used at runtime
+// preopt: the actual opt used at runtime (nil or &_objc_opt_data)
 // _objc_opt_data: opt data possibly written by dyld
-// empty_opt_data: empty data to use if dyld didn't cooperate or DisablePreopt
+// opt is initialized to ~0 to detect incorrect use before preopt_init()
 
-static const objc_opt_t *opt = NULL;
+static const objc_opt_t *opt = (objc_opt_t *)~0;
 static bool preoptimized;
 
 extern const objc_opt_t _objc_opt_data;  // in __TEXT, __objc_opt_ro
-static const uint32_t empty_opt_data[] = OPT_INITIALIZER;
 
 bool isPreoptimized(void) 
 {
     return preoptimized;
 }
 
-
-const objc_selopt_t *preoptimizedSelectors(void) 
+objc_selopt_t *preoptimizedSelectors(void) 
 {
-    assert(opt);
-    return opt->selopt();
+    return opt ? opt->selopt() : nil;
 }
 
-struct class_t * getPreoptimizedClass(const char *name)
+Class getPreoptimizedClass(const char *name)
 {
-    assert(opt);
-    objc_clsopt_t *classes = opt->clsopt();
-    if (!classes) return NULL;
+    objc_clsopt_t *classes = opt ? opt->clsopt() : nil;
+    if (!classes) return nil;
 
     void *cls;
     void *hi;
     uint32_t count = classes->getClassAndHeader(name, cls, hi);
     if (count == 1  &&  ((header_info *)hi)->loaded) {
-        // exactly one matching class, and it's image is loaded
-        return (struct class_t *)cls;
+        // exactly one matching class, and its image is loaded
+        return (Class)cls;
     } 
-    if (count == 2) {
+    else if (count > 1) {
         // more than one matching class - find one that is loaded
         void *clslist[count];
         void *hilist[count];
         classes->getClassesAndHeaders(name, clslist, hilist);
         for (uint32_t i = 0; i < count; i++) {
             if (((header_info *)hilist[i])->loaded) {
-                return (struct class_t *)clslist[i];
+                return (Class)clslist[i];
             }
         }
     }
 
     // no match that is loaded
-    return NULL;
+    return nil;
+}
+
+
+Class* copyPreoptimizedClasses(const char *name, int *outCount)
+{
+    *outCount = 0;
+
+    objc_clsopt_t *classes = opt ? opt->clsopt() : nil;
+    if (!classes) return nil;
+
+    void *cls;
+    void *hi;
+    uint32_t count = classes->getClassAndHeader(name, cls, hi);
+    if (count == 0) return nil;
+
+    Class *result = (Class *)_calloc_internal(count, sizeof(Class));
+    if (count == 1  &&  ((header_info *)hi)->loaded) {
+        // exactly one matching class, and its image is loaded
+        result[(*outCount)++] = (Class)cls;
+        return result;
+    } 
+    else if (count > 1) {
+        // more than one matching class - find those that are loaded
+        void *clslist[count];
+        void *hilist[count];
+        classes->getClassesAndHeaders(name, clslist, hilist);
+        for (uint32_t i = 0; i < count; i++) {
+            if (((header_info *)hilist[i])->loaded) {
+                result[(*outCount)++] = (Class)clslist[i];
+            }
+        }
+
+        if (*outCount == 0) {
+            // found multiple classes with that name, but none are loaded
+            free(result);
+            result = nil;
+        }
+        return result;
+    }
+
+    // no match that is loaded
+    return nil;
 }
 
 namespace objc_opt {
@@ -156,7 +202,7 @@ struct objc_headeropt_t {
         }
 #endif
 
-        return NULL;
+        return nil;
     }
 };
 };
@@ -164,17 +210,16 @@ struct objc_headeropt_t {
 
 header_info *preoptimizedHinfoForHeader(const headerType *mhdr)
 {
-    assert(opt);
-    objc_headeropt_t *hinfos = opt->headeropt();
+    objc_headeropt_t *hinfos = opt ? opt->headeropt() : nil;
     if (hinfos) return hinfos->get(mhdr);
-    else return NULL;
+    else return nil;
 }
 
 
 void preopt_init(void)
 {
     // `opt` not set at compile time in order to detect too-early usage
-    const char *failure = NULL;
+    const char *failure = nil;
     opt = &_objc_opt_data;
 
     if (DisablePreopt) {
@@ -183,8 +228,7 @@ void preopt_init(void)
         failure = "(by OBJC_DISABLE_PREOPTIMIZATION)";
     } 
     else if (opt->version != objc_opt::VERSION) {
-        // This shouldn't happen. You probably forgot to 
-        // change OPT_INITIALIZER and objc-sel-table.s.
+        // This shouldn't happen. You probably forgot to edit objc-sel-table.s.
         // If dyld really did write the wrong optimization version, 
         // then we must halt because we don't know what bits dyld twiddled.
         _objc_fatal("bad objc preopt version (want %d, got %d)", 
@@ -206,7 +250,7 @@ void preopt_init(void)
     if (failure) {
         // All preoptimized selector references are invalid.
         preoptimized = NO;
-        opt = (objc_opt_t *)empty_opt_data;
+        opt = nil;
         disableSharedCacheOptimizations();
 
         if (PrintPreopt) {

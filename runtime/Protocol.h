@@ -28,9 +28,15 @@
 #ifndef _OBJC_PROTOCOL_H_
 #define _OBJC_PROTOCOL_H_
 
-#if __OBJC2__
+#if !__OBJC__
 
-#include <Foundation/NSObject.h>
+// typedef Protocol is here:
+#include <objc/runtime.h>
+
+
+#elif __OBJC2__
+
+#include <objc/NSObject.h>
 
 // All methods of class Protocol are unavailable. 
 // Use the functions in objc/runtime.h instead.
@@ -38,6 +44,7 @@
 __OSX_AVAILABLE_STARTING(__MAC_10_0, __IPHONE_2_0)
 @interface Protocol : NSObject
 @end
+
 
 #else
 
@@ -64,9 +71,9 @@ __OSX_AVAILABLE_STARTING(__MAC_10_0, __IPHONE_2_0)
 /* Looking up information specific to a protocol */
 
 - (struct objc_method_description *) descriptionForInstanceMethod:(SEL)aSel
-    DEPRECATED_IN_MAC_OS_X_VERSION_10_5_AND_LATER;
+    __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_0,__MAC_10_5, __IPHONE_2_0,__IPHONE_2_0);
 - (struct objc_method_description *) descriptionForClassMethod:(SEL)aSel 
-    DEPRECATED_IN_MAC_OS_X_VERSION_10_5_AND_LATER;
+    __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_0,__MAC_10_5, __IPHONE_2_0,__IPHONE_2_0);
 
 @end
 

@@ -34,13 +34,6 @@
 #   define SUPPORT_GC 1
 #endif
 
-// Define SUPPORT_ENVIRON=1 to enable getenv().
-#if ((TARGET_OS_EMBEDDED  ||  TARGET_OS_IPHONE)  &&  !TARGET_IPHONE_SIMULATOR)  &&  defined(NDEBUG)
-#   define SUPPORT_ENVIRON 0
-#else
-#   define SUPPORT_ENVIRON 1
-#endif
-
 // Define SUPPORT_ZONES=1 to enable malloc zone support in NXHashTable.
 #if TARGET_OS_EMBEDDED  ||  TARGET_OS_IPHONE
 #   define SUPPORT_ZONES 0
@@ -62,41 +55,45 @@
 #   define SUPPORT_PREOPT 1
 #endif
 
-// Define SUPPORT_DEBUGGER_MODE=1 to enable lock-avoiding execution for debuggers
-#if TARGET_OS_WIN32
-#   define SUPPORT_DEBUGGER_MODE 0
-#else
-#   define SUPPORT_DEBUGGER_MODE 1
-#endif
-
 // Define SUPPORT_TAGGED_POINTERS=1 to enable tagged pointer objects
-// Be sure to edit objc-internal.h as well (_objc_insert_tagged_isa)
+// Be sure to edit tagged pointer SPI in objc-internal.h as well.
 #if !(__OBJC2__  &&  __LP64__)
 #   define SUPPORT_TAGGED_POINTERS 0
 #else
 #   define SUPPORT_TAGGED_POINTERS 1
 #endif
 
-// Define SUPPORT_FIXUP=1 to use call-site fixup messaging for OBJC2.
+// Define SUPPORT_MSB_TAGGED_POINTERS to use the MSB 
+// as the tagged pointer marker instead of the LSB.
+// Be sure to edit tagged pointer SPI in objc-internal.h as well.
+#if !SUPPORT_TAGGED_POINTERS  ||  !TARGET_OS_IPHONE
+#   define SUPPORT_MSB_TAGGED_POINTERS 0
+#else
+#   define SUPPORT_MSB_TAGGED_POINTERS 1
+#endif
+
+// Define SUPPORT_NONPOINTER_ISA=1 to enable extra data in the isa field.
+#if !__LP64__  ||  TARGET_OS_WIN32  ||  TARGET_IPHONE_SIMULATOR  ||  __x86_64__
+#   define SUPPORT_NONPOINTER_ISA 0
+#else
+#   define SUPPORT_NONPOINTER_ISA 1
+#endif
+
+// Define SUPPORT_FIXUP=1 to repair calls sites for fixup dispatch.
+// Fixup messaging itself is no longer supported.
 // Be sure to edit objc-abi.h as well (objc_msgSend*_fixup)
-#if !__OBJC2__  ||  !defined(__x86_64__)
+// Note TARGET_OS_MAC is also set for iOS simulator.
+#if !__x86_64__  ||  !TARGET_OS_MAC
 #   define SUPPORT_FIXUP 0
 #else
 #   define SUPPORT_FIXUP 1
 #endif
 
-// Define SUPPORT_VTABLE=1 to enable vtable dispatch for OBJC2.
-// Be sure to edit objc-gdb.h as well (gdb_objc_trampolines)
-#if !SUPPORT_FIXUP
-#   define SUPPORT_VTABLE 0
-#else
-#   define SUPPORT_VTABLE 1
-#endif
-
 // Define SUPPORT_IGNORED_SELECTOR_CONSTANT to remap GC-ignored selectors.
 // Good: fast ignore in objc_msgSend. Bad: disable shared cache optimizations
-// Non-GC does not remap. Fixup dispatch does not remap.
-#if !SUPPORT_GC  ||  SUPPORT_FIXUP
+// Now used only for old-ABI GC.
+// This is required for binary compatibility on 32-bit Mac: rdar://13757938
+#if __OBJC2__  ||  !SUPPORT_GC
 #   define SUPPORT_IGNORED_SELECTOR_CONSTANT 0
 #else
 #   define SUPPORT_IGNORED_SELECTOR_CONSTANT 1
@@ -131,6 +128,26 @@
 #   define SUPPORT_RETURN_AUTORELEASE 1
 #endif
 
+// Define SUPPORT_STRET on architectures that need separate struct-return ABI.
+#if defined(__arm64__)
+#   define SUPPORT_STRET 0
+#else
+#   define SUPPORT_STRET 1
+#endif
+
+// Define SUPPORT_MESSAGE_LOGGING to enable NSObjCMessageLoggingEnabled
+#if TARGET_OS_WIN32  ||  TARGET_OS_EMBEDDED
+#   define SUPPORT_MESSAGE_LOGGING 0
+#else
+#   define SUPPORT_MESSAGE_LOGGING 1
+#endif
+
+// Define SUPPORT_QOS_HACK to work around deadlocks due to QoS bugs.
+#if !__OBJC2__  ||  TARGET_OS_WIN32
+#   define SUPPORT_QOS_HACK 0
+#else
+#   define SUPPORT_QOS_HACK 1
+#endif
 
 // OBJC_INSTRUMENTED controls whether message dispatching is dynamically
 // monitored.  Monitoring introduces substantial overhead.

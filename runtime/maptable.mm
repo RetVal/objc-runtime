@@ -375,7 +375,7 @@ void *NXMapKeyFreeingRemove(NXMapTable *table, const void *key)
 
 static unsigned _mapPtrHash(NXMapTable *table, const void *key) {
 #ifdef __LP64__
-    return ((uintptr_t)key) >> 3;
+    return (unsigned)(((uintptr_t)key) >> 3);
 #else
     return ((uintptr_t)key) >> 2;
 #endif

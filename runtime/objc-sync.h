@@ -26,14 +26,25 @@
 
 #include <objc/objc.h>
 
-// Begin synchronizing on 'obj'.  
-// Allocates recursive pthread_mutex associated with 'obj' if needed.
-// Returns OBJC_SYNC_SUCCESS once lock is acquired.  
+
+/** 
+ * Begin synchronizing on 'obj'.  
+ * Allocates recursive pthread_mutex associated with 'obj' if needed.
+ * 
+ * @param obj The object to begin synchronizing on.
+ * 
+ * @return OBJC_SYNC_SUCCESS once lock is acquired.  
+ */
 OBJC_EXPORT  int objc_sync_enter(id obj)
     __OSX_AVAILABLE_STARTING(__MAC_10_3, __IPHONE_2_0);
 
-// End synchronizing on 'obj'. 
-// Returns OBJC_SYNC_SUCCESS or OBJC_SYNC_NOT_OWNING_THREAD_ERROR
+/** 
+ * End synchronizing on 'obj'. 
+ * 
+ * @param obj The objet to end synchronizing on.
+ * 
+ * @return OBJC_SYNC_SUCCESS or OBJC_SYNC_NOT_OWNING_THREAD_ERROR
+ */
 OBJC_EXPORT  int objc_sync_exit(id obj)
     __OSX_AVAILABLE_STARTING(__MAC_10_3, __IPHONE_2_0);
 

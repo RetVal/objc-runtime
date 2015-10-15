@@ -70,7 +70,7 @@ void objc_exception_throw(id exception) {
     
     if (PrintExceptionThrow) {
         _objc_inform("EXCEPTIONS: throwing %p (%s)", 
-                     exception, object_getClassName(exception));
+                     (void*)exception, object_getClassName(exception));
         void* callstack[500];
         int frameCount = backtrace(callstack, 500);
         backtrace_symbols_fd(callstack, frameCount, fileno(stderr));
@@ -137,7 +137,7 @@ static ThreadChainLink_t *getChainLink() {
     objc_thread_t self = thread_self();
     ThreadChainLink_t *walker = &ThreadChainLink;
     while (walker->perThreadID != self) {
-        if (walker->next != NULL) {
+        if (walker->next != nil) {
             walker = walker->next;
             continue;
         }
@@ -146,8 +146,8 @@ static ThreadChainLink_t *getChainLink() {
         // XXX Also, we don't register to deallocate on thread death
         walker->next = (ThreadChainLink_t *)malloc(sizeof(ThreadChainLink_t));
         walker = walker->next;
-        walker->next = NULL;
-        walker->topHandler = NULL;
+        walker->next = nil;
+        walker->topHandler = nil;
         walker->perThreadID = self;
     }
     return walker;
@@ -168,7 +168,7 @@ static void default_throw(id value) {
         if (PrintExceptions) _objc_inform("EXCEPTIONS: objc_exception_throw with nil value\n");
         return;
     }
-    if (chainLink == NULL) {
+    if (chainLink == nil) {
         if (PrintExceptions) _objc_inform("EXCEPTIONS: No handler in place!\n");
         return;
     }
@@ -203,7 +203,7 @@ static id default_extract(void *localExceptionData) {
 static int default_match(Class exceptionClass, id exception) {
     //return [exception isKindOfClass:exceptionClass];
     Class cls;
-    for (cls = _object_getClass(exception); nil != cls; cls = _class_getSuperclass(cls)) 
+    for (cls = exception->getIsa(); nil != cls; cls = cls->superclass) 
         if (cls == exceptionClass) return 1;
     return 0;
 }
@@ -239,6 +239,8 @@ void _destroyAltHandlerList(struct alt_handler_list *list)
 
 #include "objc-private.h"
 #include <objc/objc-exception.h>
+#include <objc/objc-api.h>
+#include <objc/NSObject.h>
 #include <execinfo.h>
 
 // unwind library types and functions
@@ -320,6 +322,19 @@ struct objc_exception {
 static void _objc_exception_noop(void) { } 
 static bool _objc_exception_false(void) { return 0; } 
 // static bool _objc_exception_true(void) { return 1; } 
+static void _objc_exception_abort1(void) { 
+    _objc_fatal("unexpected call into objc exception typeinfo vtable %d", 1); 
+} 
+static void _objc_exception_abort2(void) { 
+    _objc_fatal("unexpected call into objc exception typeinfo vtable %d", 2); 
+} 
+static void _objc_exception_abort3(void) { 
+    _objc_fatal("unexpected call into objc exception typeinfo vtable %d", 3); 
+} 
+static void _objc_exception_abort4(void) { 
+    _objc_fatal("unexpected call into objc exception typeinfo vtable %d", 4); 
+} 
+
 static bool _objc_exception_do_catch(struct objc_typeinfo *catch_tinfo, 
                                      struct objc_typeinfo *throw_tinfo, 
                                      void **throw_obj_p, 
@@ -330,21 +345,26 @@ OBJC_EXPORT struct objc_typeinfo OBJC_EHTYPE_id;
 
 OBJC_EXPORT
 const void *objc_ehtype_vtable[] = {
-    NULL,  // typeinfo's vtable? - fixme 
+    nil,  // typeinfo's vtable? - fixme 
     (void*)&OBJC_EHTYPE_id,  // typeinfo's typeinfo - hack
     (void*)_objc_exception_noop,      // in-place destructor?
     (void*)_objc_exception_noop,      // destructor?
     (void*)_objc_exception_false,     // OLD __is_pointer_p
     (void*)_objc_exception_false,     // OLD __is_function_p
-    (void*)_objc_exception_do_catch,  // OLD __do_catch, NEW can_catch
-    (void*)_objc_exception_false,     // OLD __do_upcast
+    (void*)_objc_exception_do_catch,  // OLD __do_catch,  NEW can_catch
+    (void*)_objc_exception_false,     // OLD __do_upcast, NEW search_above_dst
+    (void*)_objc_exception_false,     //                  NEW search_below_dst
+    (void*)_objc_exception_abort1,    // paranoia: blow up if libc++abi
+    (void*)_objc_exception_abort2,    //           adds something new
+    (void*)_objc_exception_abort3,
+    (void*)_objc_exception_abort4,
 };
 
 OBJC_EXPORT
 struct objc_typeinfo OBJC_EHTYPE_id = {
     objc_ehtype_vtable+2, 
     "id", 
-    NULL
+    nil
 };
 
 
@@ -371,9 +391,9 @@ static objc_exception_preprocessor exception_preprocessor = _objc_default_except
 static int _objc_default_exception_matcher(Class catch_cls, id exception)
 {
     Class cls;
-    for (cls = _object_getClass(exception);
-         cls != NULL; 
-         cls = class_getSuperclass(cls))
+    for (cls = exception->getIsa();
+         cls != nil; 
+         cls = cls->superclass)
     {
         if (cls == catch_cls) return 1;
     }
@@ -474,14 +494,29 @@ __objc_personality_v0(int version,
 * Compiler ABI
 **********************************************************************/
 
-static void _objc_exception_destructor(void *exc_gen) {
-#if SUPPORT_GC
+static void _objc_exception_destructor(void *exc_gen) 
+{
+    // Release the retain from objc_exception_throw().
+
     struct objc_exception *exc = (struct objc_exception *)exc_gen;
-    if (UseGC  &&  auto_zone_is_valid_pointer(gc_zone, exc->obj)) {
-        // retained by objc_exception_throw
-        auto_zone_release(gc_zone, exc->obj);
+    id obj = exc->obj;
+
+    if (PrintExceptions) {
+        _objc_inform("EXCEPTIONS: releasing completed exception %p (object %p, a %s)", 
+                     exc, obj, object_getClassName(obj));
     }
+
+#if SUPPORT_GC
+    if (UseGC) {
+        if (auto_zone_is_valid_pointer(gc_zone, obj)) {
+            auto_zone_release(gc_zone, exc->obj);
+        }
+    }
+    else 
 #endif
+    {
+        [obj release];
+    }
 }
 
 
@@ -490,27 +525,37 @@ void objc_exception_throw(id obj)
     struct objc_exception *exc = (struct objc_exception *)
         __cxa_allocate_exception(sizeof(struct objc_exception));
 
-    exc->obj = (*exception_preprocessor)(obj);
-#if SUPPORT_GC
-    if (UseGC  &&  auto_zone_is_valid_pointer(gc_zone, obj)) {
-        // exc is non-scanned memory. Retain the object for the duration.
-        auto_zone_retain(gc_zone, obj);
-    }
-#endif
+    obj = (*exception_preprocessor)(obj);
 
+    // Retain the exception object during unwinding.
+    // GC: because `exc` is unscanned memory
+    // Non-GC: because otherwise an autorelease pool pop can cause a crash
+#if SUPPORT_GC
+    if (UseGC) {
+        if (auto_zone_is_valid_pointer(gc_zone, obj)) {
+            auto_zone_retain(gc_zone, obj);
+        }
+    }
+    else 
+#endif
+    {
+        [obj retain];
+    }
+
+    exc->obj = obj;
     exc->tinfo.vtable = objc_ehtype_vtable+2;
     exc->tinfo.name = object_getClassName(obj);
-    exc->tinfo.cls_unremapped = obj ? _object_getClass(obj) : Nil;
+    exc->tinfo.cls_unremapped = obj ? obj->getIsa() : Nil;
 
     if (PrintExceptions) {
         _objc_inform("EXCEPTIONS: throwing %p (object %p, a %s)", 
-                     exc, obj, object_getClassName(obj));
+                     exc, (void*)obj, object_getClassName(obj));
     }
 
     if (PrintExceptionThrow) {
         if (!PrintExceptions)
             _objc_inform("EXCEPTIONS: throwing %p (object %p, a %s)", 
-                         exc, obj, object_getClassName(obj));
+                         exc, (void*)obj, object_getClassName(obj));
         void* callstack[500];
         int frameCount = backtrace(callstack, 500);
         backtrace_symbols_fd(callstack, frameCount, fileno(stderr));
@@ -588,12 +633,12 @@ static bool _objc_exception_do_catch(struct objc_typeinfo *catch_tinfo,
     }
     else if ((*exception_matcher)(handler_cls, exception)) {
         if (PrintExceptions) _objc_inform("EXCEPTIONS: catch(%s)", 
-                                          class_getName(handler_cls));
+                                          handler_cls->nameForLogging());
         return true;
     }
 
     if (PrintExceptions) _objc_inform("EXCEPTIONS: skipping catch(%s)", 
-                                      class_getName(handler_cls));
+                                      handler_cls->nameForLogging());
 
     return false;
 }
@@ -609,7 +654,7 @@ static bool _objc_exception_do_catch(struct objc_typeinfo *catch_tinfo,
 * 3. If so, call our registered callback with the object.
 * 4. Finally, call the previous terminate handler.
 **********************************************************************/
-static void (*old_terminate)(void) = NULL;
+static void (*old_terminate)(void) = nil;
 static void _objc_terminate(void)
 {
     if (PrintExceptions) {
@@ -626,7 +671,7 @@ static void _objc_terminate(void)
             __cxa_rethrow();
         } @catch (id e) {
             // It's an objc object. Call Foundation's handler, if any.
-            (*uncaught_handler)(e);
+            (*uncaught_handler)((id)e);
             (*old_terminate)();
         } @catch (...) {
             // It's not an objc object. Continue to C++ terminate.
@@ -837,7 +882,7 @@ struct frame_range {
     uintptr_t ip_start;
     uintptr_t ip_end;
     uintptr_t cfa;
-    // precise ranges within ip_start..ip_end; NULL or {0,0} terminated
+    // precise ranges within ip_start..ip_end; nil or {0,0} terminated
     frame_ips *ips;
 };
 
@@ -934,7 +979,7 @@ static bool isObjCExceptionCatcher(uintptr_t lsda, uintptr_t ip,
 
     if (range_count == 1) {
         // No other source ranges with the same landing pad. We're done here.
-        frame->ips = NULL;
+        frame->ips = nil;
     }
     else {
         // Record all ranges with the same landing pad as our match.
@@ -1042,11 +1087,11 @@ static struct alt_handler_list *
 fetch_handler_list(BOOL create)
 {
     _objc_pthread_data *data = _objc_fetch_pthread_data(create);
-    if (!data) return NULL;
+    if (!data) return nil;
 
     struct alt_handler_list *list = data->handlerList;
     if (!list) {
-        if (!create) return NULL;
+        if (!create) return nil;
         list = (struct alt_handler_list *)_calloc_internal(1, sizeof(*list));
         data->handlerList = list;
 

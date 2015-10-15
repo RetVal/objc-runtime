@@ -24,18 +24,9 @@
 #include <TargetConditionals.h>
 #if defined(__i386__)  &&  TARGET_IPHONE_SIMULATOR
 
-#define __OBJC2__ 1
-
 #include "objc-config.h"
 
 .data
-
-// Substitute receiver for messages sent to nil (usually also nil)
-// id _objc_nilReceiver
-.align 4
-.private_extern __objc_nilReceiver
-__objc_nilReceiver:
-	.long   0
 
 // _objc_entryPoints and _objc_exitPoints are used by objc
 // to get the critical regions for which method caches 
@@ -43,8 +34,7 @@ __objc_nilReceiver:
 
 .private_extern _objc_entryPoints
 _objc_entryPoints:
-	.long	__cache_getImp
-	.long	__cache_getMethod
+	.long	_cache_getImp
 	.long	_objc_msgSend
 	.long	_objc_msgSend_fpret
 	.long	_objc_msgSend_stret
@@ -57,7 +47,6 @@ _objc_entryPoints:
 .private_extern _objc_exitPoints
 _objc_exitPoints:
 	.long	LGetImpExit
-	.long	LGetMethodExit
 	.long	LMsgSendExit
 	.long	LMsgSendFpretExit
 	.long	LMsgSendStretExit
@@ -69,48 +58,127 @@ _objc_exitPoints:
 
 
 /********************************************************************
+* List every exit insn from every messenger for debugger use.
+* Format:
+* (
+*   1 word instruction's address
+*   1 word type (ENTER or FAST_EXIT or SLOW_EXIT or NIL_EXIT)
+* )
+* 1 word zero
+*
+* ENTER is the start of a dispatcher
+* FAST_EXIT is method dispatch
+* SLOW_EXIT is uncached method lookup
+* NIL_EXIT is returning zero from a message sent to nil
+* These must match objc-gdb.h.
+********************************************************************/
+	
+#define ENTER     1
+#define FAST_EXIT 2
+#define SLOW_EXIT 3
+#define NIL_EXIT  4
+
+.section __DATA,__objc_msg_break
+.globl _gdb_objc_messenger_breakpoints
+_gdb_objc_messenger_breakpoints:
+// contents populated by the macros below
+
+.macro MESSENGER_START
+4:
+	.section __DATA,__objc_msg_break
+	.long 4b
+	.long ENTER
+	.text
+.endmacro
+.macro MESSENGER_END_FAST
+4:
+	.section __DATA,__objc_msg_break
+	.long 4b
+	.long FAST_EXIT
+	.text
+.endmacro
+.macro MESSENGER_END_SLOW
+4:
+	.section __DATA,__objc_msg_break
+	.long 4b
+	.long SLOW_EXIT
+	.text
+.endmacro
+.macro MESSENGER_END_NIL
+4:
+	.section __DATA,__objc_msg_break
+	.long 4b
+	.long NIL_EXIT
+	.text
+.endmacro
+
+
+/********************************************************************
+ * Names for relative labels
+ * DO NOT USE THESE LABELS ELSEWHERE
+ * Reserved labels: 5: 6: 7: 8: 9:
+ ********************************************************************/
+#define LCacheMiss 	5
+#define LCacheMiss_f 	5f
+#define LCacheMiss_b 	5b
+#define LNilTestDone 	6
+#define LNilTestDone_f 	6f
+#define LNilTestDone_b 	6b
+#define LNilTestSlow 	7
+#define LNilTestSlow_f 	7f
+#define LNilTestSlow_b 	7b
+#define LGetIsaDone 	8
+#define LGetIsaDone_f 	8f
+#define LGetIsaDone_b 	8b
+#define LGetIsaSlow 	9
+#define LGetIsaSlow_f 	9f
+#define LGetIsaSlow_b 	9b
+
+/********************************************************************
+ * Macro parameters
+ ********************************************************************/
+
+#define NORMAL 0
+#define FPRET 1
+#define GETIMP 3
+#define STRET 4
+#define SUPER 5
+#define SUPER_STRET 6
+
+
+/********************************************************************
  *
  * Structure definitions.
  *
  ********************************************************************/
 
 // Offsets from %esp
-	self            = 4
-	super           = 4
-	selector        = 8
-	marg_size       = 12
-	marg_list       = 16
-	first_arg       = 12
+#define self            4
+#define super           4
+#define selector        8
+#define marg_size       12
+#define marg_list       16
+#define first_arg       12
 
-	struct_addr     = 4
+#define struct_addr     4
 
-	self_stret      = 8
-	super_stret     = 8
-	selector_stret  = 12
-	marg_size_stret = 16
-	marg_list_stret = 20
+#define self_stret      8
+#define super_stret     8
+#define selector_stret  12
+#define marg_size_stret 16
+#define marg_list_stret 20
 
 // objc_super parameter to sendSuper
-	receiver        = 0
-	class           = 4
+#define receiver        0
+#define class           4
 
 // Selected field offsets in class structure
-	isa             = 0
-	superclass	= 4
-#if __OBJC2__
-	cache           = 8
-#else
-	cache           = 32
-#endif
+#define isa             0
+#define superclass	4
 
 // Method descriptor
-	method_name     = 0
-	method_imp      = 8
-
-// Cache header
-	mask            = 0
-	occupied        = 4
-	buckets         = 8		// variable length array
+#define method_name     0
+#define method_imp      8
 
 
 //////////////////////////////////////////////////////////////////////
@@ -127,6 +195,7 @@ _objc_exitPoints:
 	.globl	$0
 	.align	2, 0x90
 $0:
+	.cfi_startproc
 .endmacro
 
 .macro STATIC_ENTRY
@@ -134,6 +203,7 @@ $0:
 	.private_extern	$0
 	.align	4, 0x90
 $0:
+	.cfi_startproc
 .endmacro
 
 //////////////////////////////////////////////////////////////////////
@@ -147,229 +217,255 @@ $0:
 //////////////////////////////////////////////////////////////////////
 
 .macro END_ENTRY
+	.cfi_endproc
 .endmacro
 
 
 /////////////////////////////////////////////////////////////////////
 //
-//
-// CacheLookup	WORD_RETURN | STRUCT_RETURN, MSG_SEND | MSG_SENDSUPER | MSG_SENDSUPER2 | CACHE_GET, cacheMissLabel
+// CacheLookup	return-type
 //
 // Locate the implementation for a selector in a class method cache.
 //
-// Takes: WORD_RETURN	   (first parameter is at sp+4)
-//        STRUCT_RETURN	   (struct address is at sp+4, first parameter at sp+8)
-//        MSG_SEND	   (first parameter is receiver)
-//        MSG_SENDSUPER[2] (first parameter is address of objc_super structure)
-//        CACHE_GET	   (first parameter is class; return method triplet)
-//        selector in %ecx
-//        class to search in %edx
+// Takes: 
+//	  $0 = NORMAL, FPRET, STRET, SUPER, SUPER_STRET, GETIMP
+//	  ecx = selector to search for
+//	  edx = class to search
 //
-//	  cacheMissLabel = label to branch to iff method is not cached
+// On exit: ecx clobbered
+//	    (found) calls or returns IMP in eax, eq/ne set for forwarding
+//	    (not found) jumps to LCacheMiss, class still in edx
 //
-// On exit: (found) MSG_SEND and MSG_SENDSUPER[2]: return imp in eax
-//          (found) CACHE_GET: return method triplet in eax
-//          (not found) jumps to cacheMissLabel
-//	
 /////////////////////////////////////////////////////////////////////
 
+.macro CacheHit
 
-// Values to specify to method lookup macros whether the return type of
-// the method is word or structure.
-WORD_RETURN   = 0
-STRUCT_RETURN = 1
+	// CacheHit must always be preceded by a not-taken `jne` instruction
+	// in case the imp is _objc_msgForward_impcache.
 
-// Values to specify to method lookup macros whether the first argument
-// is an object/class reference or a 'objc_super' structure.
-MSG_SEND       = 0	// first argument is receiver, search the isa
-MSG_SENDSUPER  = 1	// first argument is objc_super, search the class
-MSG_SENDSUPER2 = 2	// first argument is objc_super, search the class
-CACHE_GET      = 3	// first argument is class, search that class
+.if $0 == GETIMP
+	movl	4(%eax), %eax		// return imp
+	call	4f
+4:	pop	%edx
+	leal	__objc_msgSend_uncached_impcache-4b(%edx), %edx
+	cmpl	%edx, %eax
+	jne	4f
+	xor	%eax, %eax		// don't return msgSend_uncached
+4:	ret
+.elseif $0 == NORMAL  ||  $0 == FPRET
+	// eq already set for forwarding by `jne`
+	MESSENGER_END_FAST
+	jmp	*4(%eax)		// call imp
+.elseif $0 == STRET
+	test	%eax, %eax		// set ne for stret forwarding
+	MESSENGER_END_FAST
+	jmp	*4(%eax)		// call imp
+.elseif $0 == SUPER	
+	// replace "super" arg with "receiver"
+	movl	super(%esp), %ecx	// get super structure
+	movl	receiver(%ecx), %ecx	// get messaged object
+	movl	%ecx, super(%esp)	// make it the first argument
+	cmp	%eax, %eax		// set eq for non-stret forwarding
+	MESSENGER_END_FAST
+	jmp	*4(%eax)		// call imp
+.elseif $0 == SUPER_STRET
+	// replace "super" arg with "receiver"
+	movl	super_stret(%esp), %ecx	// get super structure
+	movl	receiver(%ecx), %ecx	// get messaged object
+	movl	%ecx, super_stret(%esp)	// make it the first argument
+	test	%eax, %eax		// set ne for stret forwarding
+	MESSENGER_END_FAST
+	jmp	*4(%eax)		// call imp
+.else
+.abort oops
+.endif
+
+.endmacro
+
 
 .macro	CacheLookup
 
-// load variables and save caller registers.
+	movzwl	12(%edx), %eax		// eax = mask
+	andl	%ecx, %eax		// eax = SEL & mask
+	shll	$$3, %eax		// eax = offset = (SEL & mask) * 8
+	addl	8(%edx), %eax		// eax = bucket = cache->buckets+offset
+	cmpl	(%eax), %ecx		// if (bucket->sel != SEL)
+	jne	1f			//     scan more
+	// The `jne` above sets flags for CacheHit
+	CacheHit $0			// call or return imp
 
-	pushl	%edi			// save scratch register
-	movl	cache(%edx), %edi	// cache = class->cache
-	pushl	%esi			// save scratch register
+1:
+	// loop
+	cmpl	$$0, (%eax)
+	je	LCacheMiss_f		// if (bucket->sel == 0) cache miss
+	cmpl	8(%edx), %eax
+	je	3f			// if (bucket = cache->buckets) wrap
+	
+	subl	$$8, %eax		// bucket--
+2:
+	cmpl	(%eax), %ecx		// if (bucket->sel != sel)
+	jne	1b			//     scan more
+	// The `jne` above sets flags for CacheHit
+	CacheHit $0			// call or return imp
 
-	movl	mask(%edi), %esi		// mask = cache->mask
-	movl	%ecx, %edx		// index = selector
-	shrl	$$2, %edx		// index = selector >> 2
+3:	
+	// wrap
+	movzwl	12(%edx), %eax		// eax = mask
+	shll	$$3, %eax		// eax = offset = mask * 8
+	addl	8(%edx), %eax		// eax = bucket = cache->buckets+offset
+	jmp	2f
 
-// search the receiver's cache
-// ecx = selector
-// edi = cache
-// esi = mask
-// edx = index
-// eax = method (soon)
-LMsgSendProbeCache_$0_$1_$2:
-	andl	%esi, %edx		// index &= mask
-	movl	buckets(%edi, %edx, 4), %eax	// meth = cache->buckets[index]
+	// clone scanning loop to crash instead of hang when cache is corrupt
 
-	testl	%eax, %eax		// check for end of bucket
-	je	LMsgSendCacheMiss_$0_$1_$2	// go to cache miss code
-	cmpl	method_name(%eax), %ecx	// check for method name match
-	je	LMsgSendCacheHit_$0_$1_$2	// go handle cache hit
-	addl	$$1, %edx			// bump index ...
-	jmp	LMsgSendProbeCache_$0_$1_$2 // ... and loop
+1:
+	// loop
+	cmpl	$$0, (%eax)
+	je	LCacheMiss_f		// if (bucket->sel == 0) cache miss
+	cmpl	8(%edx), %eax
+	je	3f			// if (bucket = cache->buckets) wrap
+	
+	subl	$$8, %eax		// bucket--
+2:
+	cmpl	(%eax), %ecx		// if (bucket->sel != sel)
+	jne	1b			//     scan more
+	// The `jne` above sets flags for CacheHit
+	CacheHit $0			// call or return imp
 
-// not found in cache: restore state and go to callers handler
-LMsgSendCacheMiss_$0_$1_$2:
+3:	
+	// double wrap - busted
 
-.if $0 == WORD_RETURN			// Regular word return
-.if $1 == MSG_SEND			// MSG_SEND
-	popl	%esi			//  restore callers register
-	popl	%edi			//  restore callers register
-	movl	self(%esp), %edx	//  get messaged object
-	movl	isa(%edx), %eax		//  get objects class
-.elseif $1 == MSG_SENDSUPER || $1 == MSG_SENDSUPER2  // MSG_SENDSUPER[2]
-	// replace "super" arg with "receiver"
-	movl	super+8(%esp), %edi	//  get super structure
-	movl	receiver(%edi), %edx	//  get messaged object
-	movl	%edx, super+8(%esp)	//  make it the first argument
-	movl	class(%edi), %eax	//  get messaged class
-	.if $1 == MSG_SENDSUPER2
-	movl	superclass(%eax), %eax	//  get messaged class
-	.endif
-	popl	%esi			//  restore callers register
-	popl	%edi			//  restore callers register
-.else					// CACHE_GET
-	popl	%esi			//  restore callers register
-	popl	%edi			//  restore callers register
-.endif
-.else					// Struct return
-.if $1 == MSG_SEND			// MSG_SEND (stret)
-	popl	%esi			//  restore callers register
-	popl	%edi			//  restore callers register
-	movl	self_stret(%esp), %edx	//  get messaged object
-	movl	isa(%edx), %eax		//  get objects class
-.elseif $1 == MSG_SENDSUPER || $1 == MSG_SENDSUPER2 // MSG_SENDSUPER[2] (stret)
-	// replace "super" arg with "receiver"
-	movl	super_stret+8(%esp), %edi//  get super structure
-	movl	receiver(%edi), %edx	//  get messaged object
-	movl	%edx, super_stret+8(%esp)//  make it the first argument
-	movl	class(%edi), %eax	//  get messaged class
-	.if $1 == MSG_SENDSUPER2
-	movl	superclass(%eax), %eax	//  get messaged class
-	.endif
-	popl	%esi			//  restore callers register
-	popl	%edi			//  restore callers register
-.else					// CACHE_GET
-	!! This should not happen.
-.endif
-.endif
-
-					// edx = receiver
-					// ecx = selector
-					// eax = class
-	jmp	$2			// go to callers handler
-
-// eax points to matching cache entry
-	.align	4, 0x90
-LMsgSendCacheHit_$0_$1_$2:
-
-// load implementation address, restore state, and we're done
-.if $1 == CACHE_GET
-	// method triplet is already in eax
+	pushl	%ebp
+	movl	%esp, %ebp
+	pushl	$$0
+	pushl	$$0
+	pushl	$$0		// stack alignment
+	pushl	%edx		// isa
+	pushl	%ecx		// SEL
+.if $0 == STRET  ||  $0 == SUPER_STRET
+	movl	self_stret+4(%ebp), %ecx
+.elseif $0 == GETIMP
+	movl	$$0, %ecx
 .else
-	movl	method_imp(%eax), %eax	// imp = method->method_imp
+	movl	self+4(%ebp), %ecx
 .endif
+	pushl	%ecx		// receiver
 
-.if $0 == WORD_RETURN			// Regular word return
-.if $1 == MSG_SENDSUPER || $1 == MSG_SENDSUPER2
-	// replace "super" arg with "self"
-	movl	super+8(%esp), %edi
-	movl	receiver(%edi), %esi
-	movl	%esi, super+8(%esp)
+.if $0 == GETIMP
+	call	_cache_getImp_corrupt_cache_error
+.else
+	call	_objc_msgSend_corrupt_cache_error
 .endif
-.else					// Struct return
-.if $1 == MSG_SENDSUPER || $1 == MSG_SENDSUPER2
-	// replace "super" arg with "self"
-	movl	super_stret+8(%esp), %edi
-	movl	receiver(%edi), %esi
-	movl	%esi, super_stret+8(%esp)
-.endif
-.endif
-
-	// restore caller registers
-	popl	%esi
-	popl	%edi
+	
 .endmacro
 
 
 /////////////////////////////////////////////////////////////////////
 //
-// MethodTableLookup WORD_RETURN | STRUCT_RETURN, MSG_SEND | MSG_SENDSUPER
+// MethodTableLookup
 //
-// Takes: WORD_RETURN	(first parameter is at sp+4)
-//	  STRUCT_RETURN	(struct address is at sp+4, first parameter at sp+8)
-// 	  MSG_SEND	(first parameter is receiver)
-//	  MSG_SENDSUPER	(first parameter is address of objc_super structure)
-//
-//	  edx = receiver
+// Takes:
+//	  $0 = NORMAL, FPRET, STRET, SUPER, SUPER_STRET
+//	  eax = receiver
 // 	  ecx = selector
-// 	  eax = class
-//        (all set by CacheLookup's miss case)
-// 
-// Stack must be at 0xXXXXXXXc on entrance.
+// 	  edx = class to search
 //
-// On exit:  esp unchanged
-//           imp in eax
+// On exit: calls IMP, eq/ne set for forwarding
 //
 /////////////////////////////////////////////////////////////////////
 
 .macro MethodTableLookup
-	// stack is already aligned
-	pushl	%eax			// class
+	MESSENGER_END_SLOW
+	pushl	%ebp
+	.cfi_def_cfa_offset 8
+	.cfi_offset ebp, -8
+	
+	movl	%esp, %ebp
+	.cfi_def_cfa_register ebp
+	
+	sub	$$12, %esp		// align stack
+	
+	pushl	%edx			// class
 	pushl	%ecx			// selector
-	pushl	%edx			// receiver
+	pushl	%eax			// receiver
 	call	__class_lookupMethodAndLoadCache3
-	addl    $$12, %esp		// pop parameters
+
+	// imp in eax
+	
+	leave
+	.cfi_def_cfa esp, 4
+	.cfi_same_value ebp
+
+.if $0 == SUPER
+	// replace "super" arg with "receiver"
+	movl	super(%esp), %ecx	//  get super structure
+	movl	receiver(%ecx), %ecx	//  get messaged object
+	movl	%ecx, super(%esp)	//  make it the first argument
+.elseif $0 == SUPER_STRET
+	// replace "super" arg with "receiver"
+	movl	super_stret(%esp), %ecx	//  get super structure
+	movl	receiver(%ecx), %ecx	//  get messaged object
+	movl	%ecx, super_stret(%esp)	//  make it the first argument
+.endif
+
+.if $0 == STRET  ||  $0 == SUPER_STRET
+	// set ne (stret) for forwarding; eax != 0
+	test	%eax, %eax
+	jmp	*%eax		// call imp
+.else
+	// set eq (non-stret) for forwarding
+	cmp	%eax, %eax
+	jmp	*%eax		// call imp
+.endif
+
 .endmacro
 
 
-/********************************************************************
- * Method _cache_getMethod(Class cls, SEL sel, IMP msgForward_internal_imp)
- *
- * If found, returns method triplet pointer.
- * If not found, returns NULL.
- *
- * NOTE: _cache_getMethod never returns any cache entry whose implementation
- * is _objc_msgForward_internal. It returns 1 instead. This prevents thread-
- * safety and memory management bugs in _class_lookupMethodAndLoadCache. 
- * See _class_lookupMethodAndLoadCache for details.
- *
- * _objc_msgForward_internal is passed as a parameter because it's more 
- * efficient to do the (PIC) lookup once in the caller than repeatedly here.
- ********************************************************************/
-        
-	.private_extern __cache_getMethod
-	ENTRY __cache_getMethod
+/////////////////////////////////////////////////////////////////////
+//
+// NilTest return-type
+//
+// Takes:	$0 = NORMAL or FPRET or STRET
+//		eax = receiver
+//
+// On exit: 	Loads non-nil receiver in eax and self(esp) or self_stret(esp),
+//		or returns zero.
+//
+// NilTestSupport return-type
+//
+// Takes:	$0 = NORMAL or FPRET or STRET
+//		eax = receiver
+//
+// On exit: 	Loads non-nil receiver in eax and self(esp) or self_stret(esp),
+//		or returns zero.
+//
+/////////////////////////////////////////////////////////////////////
 
-// load the class and selector
-	movl	selector(%esp), %ecx
-	movl	self(%esp), %edx
+.macro NilTest
+	testl	%eax, %eax
+	jz	LNilTestSlow_f
+LNilTestDone:
+.endmacro
 
-// do lookup
-	CacheLookup WORD_RETURN, CACHE_GET, LGetMethodMiss
+.macro NilTestSupport
+	.align 3
+LNilTestSlow:
 
-// cache hit, method triplet in %eax
-	movl    first_arg(%esp), %ecx   // check for _objc_msgForward_internal
-	cmpl    method_imp(%eax), %ecx  // if (imp==_objc_msgForward_internal)
-	je      1f                      //     return (Method)1
-	ret                             // else return method triplet address
-1:	movl	$1, %eax
+.if $0 == FPRET
+	fldz
+	MESSENGER_END_NIL
 	ret
-
-LGetMethodMiss:
-// cache miss, return nil
-	xorl    %eax, %eax      // zero %eax
+.elseif $0 == STRET
+	MESSENGER_END_NIL
+	ret $$4
+.elseif $0 == NORMAL
+	// eax is already zero
+	xorl	%edx, %edx
+	xorps	%xmm0, %xmm0
+	xorps	%xmm1, %xmm1
+	MESSENGER_END_NIL
 	ret
-
-LGetMethodExit:
-	END_ENTRY __cache_getMethod
+.endif
+.endmacro
 
 
 /********************************************************************
@@ -379,27 +475,21 @@ LGetMethodExit:
  * If not found, returns NULL.
  ********************************************************************/
 
-	.private_extern __cache_getImp
-	ENTRY __cache_getImp
+	STATIC_ENTRY _cache_getImp
 
 // load the class and selector
 	movl    selector(%esp), %ecx
 	movl	self(%esp), %edx
 
-// do lookup
-	CacheLookup WORD_RETURN, CACHE_GET, LGetImpMiss
+	CacheLookup GETIMP		// returns IMP on success
 
-// cache hit, method triplet in %eax
-	movl    method_imp(%eax), %eax  // return method imp
-	ret
-
-LGetImpMiss:
+LCacheMiss:
 // cache miss, return nil
-	xorl    %eax, %eax      // zero %eax
+	xorl    %eax, %eax
 	ret
 
 LGetImpExit:
-	END_ENTRY __cache_getImp
+	END_ENTRY _cache_getImp
 
 
 /********************************************************************
@@ -409,50 +499,27 @@ LGetImpExit:
  ********************************************************************/
 
 	ENTRY	_objc_msgSend
-
-// load receiver and selector
+	MESSENGER_START
+	
 	movl    selector(%esp), %ecx
 	movl	self(%esp), %eax
 
-#if SUPPORT_IGNORED_SELECTOR_CONSTANT
-// check whether selector is ignored
-	cmpl    $ kIgnore, %ecx
-	je      LMsgSendDone		// return self from %eax
-#endif
+	NilTest NORMAL
 
-// check whether receiver is nil 
-	testl	%eax, %eax
-	je	LMsgSendNilSelf
-
-// receiver (in %eax) is non-nil: search the cache
-LMsgSendReceiverOk:
 	movl	isa(%eax), %edx		// class = self->isa
-	CacheLookup WORD_RETURN, MSG_SEND, LMsgSendCacheMiss
-	xor	%edx, %edx		// set nonstret for msgForward_internal
-	jmp	*%eax
+	CacheLookup NORMAL		// calls IMP on success
 
-// cache miss: go search the method lists
-LMsgSendCacheMiss:
-	MethodTableLookup WORD_RETURN, MSG_SEND
-	xor	%edx, %edx		// set nonstret for msgForward_internal
-	jmp	*%eax			// goto *imp
+	NilTestSupport NORMAL
 
-// message sent to nil: redirect to nil receiver, if any
-LMsgSendNilSelf:
-	call	1f			// load new receiver
-1:	popl	%edx
-	movl	__objc_nilReceiver-1b(%edx),%eax
-	testl	%eax, %eax		// return nil if no new receiver
-	je	LMsgSendReturnZero
-	movl	%eax, self(%esp)	// send to new receiver
-	jmp	LMsgSendReceiverOk	// receiver must be in %eax
-LMsgSendReturnZero:
-	// %eax is already zero
-	movl	$0,%edx
-LMsgSendDone:
-	ret
+LCacheMiss:
+	// isa still in edx
+	movl    selector(%esp), %ecx
+	movl	self(%esp), %eax
+	MethodTableLookup NORMAL	// calls IMP
+
 LMsgSendExit:
 	END_ENTRY	_objc_msgSend
+
 
 /********************************************************************
  *
@@ -465,70 +532,40 @@ LMsgSendExit:
  ********************************************************************/
 
 	ENTRY	_objc_msgSendSuper
+	MESSENGER_START
 
-// load selector and class to search
-	movl	super(%esp), %eax	// struct objc_super
 	movl    selector(%esp), %ecx
+	movl	super(%esp), %eax	// struct objc_super
 	movl	class(%eax), %edx	// struct objc_super->class
+	CacheLookup SUPER		// calls IMP on success
 
-#if SUPPORT_IGNORED_SELECTOR_CONSTANT
-// check whether selector is ignored
-	cmpl    $ kIgnore, %ecx
-	je      LMsgSendSuperIgnored	// return self from %eax
-#endif
-
-// search the cache (class in %edx)
-	CacheLookup WORD_RETURN, MSG_SENDSUPER, LMsgSendSuperCacheMiss
-	xor	%edx, %edx		// set nonstret for msgForward_internal
-	jmp	*%eax			// goto *imp
-
-// cache miss: go search the method lists
-LMsgSendSuperCacheMiss:
-	MethodTableLookup WORD_RETURN, MSG_SENDSUPER
-	xor	%edx, %edx		// set nonstret for msgForward_internal
-	jmp	*%eax			// goto *imp
-
-// ignored selector: return self
-LMsgSendSuperIgnored:
+LCacheMiss:	
+	// class still in edx
+	movl    selector(%esp), %ecx
 	movl	super(%esp), %eax
-	movl    receiver(%eax), %eax
-	ret
+	movl	receiver(%eax), %eax
+	MethodTableLookup SUPER		// calls IMP
 	
 LMsgSendSuperExit:
 	END_ENTRY	_objc_msgSendSuper
 
 
 	ENTRY	_objc_msgSendSuper2
+	MESSENGER_START
 
-// load selector and class to search
-	movl	super(%esp), %eax	// struct objc_super
 	movl    selector(%esp), %ecx
+	movl	super(%esp), %eax	// struct objc_super
 	movl	class(%eax), %eax	// struct objc_super->class
 	mov	superclass(%eax), %edx	// edx = objc_super->class->super_class
+	CacheLookup SUPER		// calls IMP on success
 
-#if SUPPORT_IGNORED_SELECTOR_CONSTANT
-// check whether selector is ignored
-	cmpl    $ kIgnore, %ecx
-	je      LMsgSendSuperIgnored	// return self from %eax
-#endif
-
-// search the cache (class in %edx)
-	CacheLookup WORD_RETURN, MSG_SENDSUPER2, LMsgSendSuper2CacheMiss
-	xor	%edx, %edx		// set nonstret for msgForward_internal
-	jmp	*%eax			// goto *imp
-
-// cache miss: go search the method lists
-LMsgSendSuper2CacheMiss:
-	MethodTableLookup WORD_RETURN, MSG_SENDSUPER2
-	xor	%edx, %edx		// set nonstret for msgForward_internal
-	jmp	*%eax			// goto *imp
-
-// ignored selector: return self
-LMsgSendSuper2Ignored:
+LCacheMiss:
+	// class still in edx
+	movl    selector(%esp), %ecx
 	movl	super(%esp), %eax
-	movl    receiver(%eax), %eax
-	ret
-	
+	movl	receiver(%eax), %eax
+	MethodTableLookup SUPER		// calls IMP
+
 LMsgSendSuper2Exit:
 	END_ENTRY	_objc_msgSendSuper2
 
@@ -540,47 +577,23 @@ LMsgSendSuper2Exit:
  ********************************************************************/
 
 	ENTRY	_objc_msgSend_fpret
+	MESSENGER_START
 
-// load receiver and selector
 	movl    selector(%esp), %ecx
 	movl	self(%esp), %eax
 
-#if SUPPORT_IGNORED_SELECTOR_CONSTANT
-// check whether selector is ignored
-	cmpl    $ kIgnore, %ecx
-	je      LMsgSendFpretDone	// return self from %eax
-#endif
+	NilTest FPRET
 
-// check whether receiver is nil 
-	testl	%eax, %eax
-	je	LMsgSendFpretNilSelf
-
-// receiver (in %eax) is non-nil: search the cache
-LMsgSendFpretReceiverOk:
 	movl	isa(%eax), %edx		// class = self->isa
-	CacheLookup WORD_RETURN, MSG_SEND, LMsgSendFpretCacheMiss
-	xor	%edx, %edx		// set nonstret for msgForward_internal
-	jmp	*%eax			// goto *imp
+	CacheLookup FPRET		// calls IMP on success
 
-// cache miss: go search the method lists
-LMsgSendFpretCacheMiss:
-	MethodTableLookup WORD_RETURN, MSG_SEND
-	xor	%edx, %edx		// set nonstret for msgForward_internal
-	jmp	*%eax			// goto *imp
-
-// message sent to nil: redirect to nil receiver, if any
-LMsgSendFpretNilSelf:
-	call	1f			// load new receiver
-1:	popl	%edx
-	movl	__objc_nilReceiver-1b(%edx),%eax
-	testl	%eax, %eax		// return zero if no new receiver
-	je	LMsgSendFpretReturnZero
-	movl	%eax, self(%esp)	// send to new receiver
-	jmp	LMsgSendFpretReceiverOk	// receiver must be in %eax
-LMsgSendFpretReturnZero:
-	fldz
-LMsgSendFpretDone:
-	ret
+	NilTestSupport FPRET
+	
+LCacheMiss:	
+	// class still in edx
+	movl    selector(%esp), %ecx
+	movl	self(%esp), %eax
+	MethodTableLookup FPRET		// calls IMP
 
 LMsgSendFpretExit:
 	END_ENTRY	_objc_msgSend_fpret
@@ -601,42 +614,28 @@ LMsgSendFpretExit:
  ********************************************************************/
 
 	ENTRY	_objc_msgSend_stret
+	MESSENGER_START
 
-// load receiver and selector
+	movl	selector_stret(%esp), %ecx
 	movl	self_stret(%esp), %eax
-	movl	(selector_stret)(%esp), %ecx
 
-// check whether receiver is nil 
-	testl	%eax, %eax
-	je	LMsgSendStretNilSelf
+	NilTest STRET
 
-// receiver (in %eax) is non-nil: search the cache
-LMsgSendStretReceiverOk:
-	movl	isa(%eax), %edx		//   class = self->isa
-	CacheLookup STRUCT_RETURN, MSG_SEND, LMsgSendStretCacheMiss
-	movl	$1, %edx		// set stret for objc_msgForward
-	jmp	*%eax			// goto *imp
+	movl	isa(%eax), %edx		// class = self->isa
+	CacheLookup STRET		// calls IMP on success
 
-// cache miss: go search the method lists
-LMsgSendStretCacheMiss:
-	MethodTableLookup STRUCT_RETURN, MSG_SEND
-	movl	$1, %edx		// set stret for objc_msgForward
-	jmp	*%eax			// goto *imp
+	NilTestSupport STRET
+	
+LCacheMiss:
+	// class still in edx
+	movl	selector_stret(%esp), %ecx
+	movl	self_stret(%esp), %eax
+	MethodTableLookup STRET		// calls IMP
 
-// message sent to nil: redirect to nil receiver, if any
-LMsgSendStretNilSelf:
-	call	1f			// load new receiver
-1:	popl	%edx
-	movl	__objc_nilReceiver-1b(%edx),%eax
-	testl	%eax, %eax		// return nil if no new receiver
-	je	LMsgSendStretDone
-	movl	%eax, self_stret(%esp)	// send to new receiver
-	jmp	LMsgSendStretReceiverOk	// receiver must be in %eax
-LMsgSendStretDone:
-	ret	$4			// pop struct return address (#2995932)
 LMsgSendStretExit:
 	END_ENTRY	_objc_msgSend_stret
 
+	
 /********************************************************************
  *
  * void objc_msgSendSuper_stret(void *st_addr, struct objc_super *super, SEL _cmd, ...);
@@ -657,45 +656,40 @@ LMsgSendStretExit:
  ********************************************************************/
 
 	ENTRY	_objc_msgSendSuper_stret
+	MESSENGER_START
 
-// load selector and class to search
+	movl	selector_stret(%esp), %ecx
 	movl	super_stret(%esp), %eax	// struct objc_super
-	movl	(selector_stret)(%esp), %ecx	//   get selector
 	movl	class(%eax), %edx	// struct objc_super->class
+	CacheLookup SUPER_STRET		// calls IMP on success
 
-// search the cache (class in %edx)
-	CacheLookup STRUCT_RETURN, MSG_SENDSUPER, LMsgSendSuperStretCacheMiss
-	movl	$1, %edx		// set stret for objc_msgForward
-	jmp	*%eax			// goto *imp
-
-// cache miss: go search the method lists
-LMsgSendSuperStretCacheMiss:
-	MethodTableLookup STRUCT_RETURN, MSG_SENDSUPER
-	movl	$1, %edx		// set stret for objc_msgForward
-	jmp	*%eax			// goto *imp
+LCacheMiss:
+	// class still in edx
+	movl	selector_stret(%esp), %ecx
+	movl	super_stret(%esp), %eax
+	movl	receiver(%eax), %eax
+	MethodTableLookup SUPER_STRET	// calls IMP
 
 LMsgSendSuperStretExit:
 	END_ENTRY	_objc_msgSendSuper_stret
 
 
 	ENTRY	_objc_msgSendSuper2_stret
+	MESSENGER_START
 
-// load selector and class to search
+	movl	selector_stret(%esp), %ecx
 	movl	super_stret(%esp), %eax	// struct objc_super
-	movl	(selector_stret)(%esp), %ecx	//   get selector
 	movl	class(%eax), %eax	// struct objc_super->class
 	mov	superclass(%eax), %edx	// edx = objc_super->class->super_class
-
-// search the cache (class in %edx)
-	CacheLookup STRUCT_RETURN, MSG_SENDSUPER2, LMsgSendSuper2StretCacheMiss
-	movl	$1, %edx		// set stret for objc_msgForward
-	jmp	*%eax			// goto *imp
+	CacheLookup SUPER_STRET		// calls IMP on success
 
 // cache miss: go search the method lists
-LMsgSendSuper2StretCacheMiss:
-	MethodTableLookup STRUCT_RETURN, MSG_SENDSUPER2
-	movl	$1, %edx		// set stret for objc_msgForward
-	jmp	*%eax			// goto *imp
+LCacheMiss:
+	// class still in edx
+	movl	selector_stret(%esp), %ecx
+	movl	super_stret(%esp), %eax
+	movl	receiver(%eax), %eax
+	MethodTableLookup SUPER_STRET	// calls IMP
 
 LMsgSendSuper2StretExit:
 	END_ENTRY	_objc_msgSendSuper2_stret
@@ -703,96 +697,99 @@ LMsgSendSuper2StretExit:
 
 /********************************************************************
  *
- * id _objc_msgForward(id self, SEL _cmd,...);
+ * _objc_msgSend_uncached_impcache
+ * _objc_msgSend_uncached
+ * _objc_msgSend_stret_uncached
+ * 
+ * Used to erase method cache entries in-place by 
+ * bouncing them to the uncached lookup.
  *
  ********************************************************************/
+	
+	STATIC_ENTRY __objc_msgSend_uncached_impcache
+	// Method cache version
 
-// _FwdSel is @selector(forward::), set up in map_images().
-// ALWAYS dereference _FwdSel to get to "forward::" !!
-	.data
-	.align 2
-	.private_extern _FwdSel
-_FwdSel: .long 0
+	// THIS IS NOT A CALLABLE C FUNCTION
+	// Out-of-band condition register is NE for stret, EQ otherwise.
+	// Out-of-band edx is the searched class
+
+	MESSENGER_START
+	nop
+	MESSENGER_END_SLOW
+	
+	jne	__objc_msgSend_stret_uncached
+	jmp	__objc_msgSend_uncached
+
+	END_ENTRY __objc_msgSend_uncached_impcache
 
 
-	.cstring
-	.align 2
-LUnkSelStr: .ascii "Does not recognize selector %s\0"
+	STATIC_ENTRY __objc_msgSend_uncached
 
-	.data
-	.align 2
-	.private_extern __objc_forward_handler
-__objc_forward_handler:	.long 0
+	// THIS IS NOT A CALLABLE C FUNCTION
+	// Out-of-band edx is the searched class
 
-	.data
-	.align 2
-	.private_extern __objc_forward_stret_handler
-__objc_forward_stret_handler:	.long 0
+	// edx is already the class to search
+	movl    selector(%esp), %ecx
+	MethodTableLookup NORMAL	// calls IMP
 
-	ENTRY	__objc_msgForward_internal
-	.private_extern __objc_msgForward_internal
+	END_ENTRY __objc_msgSend_uncached
+
+	
+	STATIC_ENTRY __objc_msgSend_stret_uncached
+
+	// THIS IS NOT A CALLABLE C FUNCTION
+	// Out-of-band edx is the searched class
+
+	// edx is already the class to search
+	movl    selector_stret(%esp), %ecx
+	MethodTableLookup STRET		// calls IMP
+
+	END_ENTRY __objc_msgSend_stret_uncached
+
+
+	
+/********************************************************************
+*
+* id _objc_msgForward(id self, SEL _cmd,...);
+*
+* _objc_msgForward and _objc_msgForward_stret are the externally-callable
+*   functions returned by things like method_getImplementation().
+* _objc_msgForward_impcache is the function pointer actually stored in
+*   method caches.
+*
+********************************************************************/
+
+	.non_lazy_symbol_pointer
+L_forward_handler:
+	.indirect_symbol __objc_forward_handler
+	.long 0
+L_forward_stret_handler:
+	.indirect_symbol __objc_forward_stret_handler
+	.long 0
+
+	STATIC_ENTRY	__objc_msgForward_impcache
 	// Method cache version
 	
 	// THIS IS NOT A CALLABLE C FUNCTION
-	// Out-of-band register %edx is nonzero for stret, zero otherwise
-	
-	// Check return type (stret or not)
-	testl	%edx, %edx
-	jnz	__objc_msgForward_stret
+	// Out-of-band condition register is NE for stret, EQ otherwise.
+
+	MESSENGER_START
+	nop
+	MESSENGER_END_SLOW
+
+	jne	__objc_msgForward_stret
 	jmp	__objc_msgForward
 	
-	END_ENTRY	_objc_msgForward_internal
+	END_ENTRY	_objc_msgForward_impcache
 
 	
 	ENTRY	__objc_msgForward
 	// Non-struct return version
 
-	// Get PIC base into %edx
-	call	L__objc_msgForward$pic_base
-L__objc_msgForward$pic_base:
-	popl	%edx
-	
-	// Call user handler, if any
-	movl	__objc_forward_handler-L__objc_msgForward$pic_base(%edx),%ecx
-	testl	%ecx, %ecx		// if not NULL
-	je	1f			//   skip to default handler
-	jmp	*%ecx			// call __objc_forward_handler
-1:	
-	// No user handler
-	// Push stack frame
-	pushl   %ebp
-	movl    %esp, %ebp
-	
-	// Die if forwarding "forward::"
-	movl    (selector+4)(%ebp), %eax
-	movl	_FwdSel-L__objc_msgForward$pic_base(%edx),%ecx
-	cmpl	%ecx, %eax
-	je	LMsgForwardError
-
-	// Call [receiver forward:sel :margs]
-	subl    $8, %esp		// 16-byte align the stack
-	leal    (self+4)(%ebp), %ecx
-	pushl	%ecx			// &margs
-	pushl	%eax			// sel
-	movl	_FwdSel-L__objc_msgForward$pic_base(%edx),%ecx
-	pushl	%ecx			// forward::
-	pushl   (self+4)(%ebp)		// receiver
-	
-	call	_objc_msgSend
-	
-	movl    %ebp, %esp
-	popl    %ebp
-	ret
-
-LMsgForwardError:
-	// Call __objc_error(receiver, "unknown selector %s", "forward::")
-	subl    $12, %esp		// 16-byte align the stack
-	movl	_FwdSel-L__objc_msgForward$pic_base(%edx),%eax
-	pushl 	%eax
-	leal	LUnkSelStr-L__objc_msgForward$pic_base(%edx),%eax
-	pushl 	%eax
-	pushl   (self+4)(%ebp)
-	call	___objc_error	// never returns
+	call	1f
+1:	popl	%edx
+	movl	L_forward_handler-1b(%edx), %edx
+	jmp	*(%edx)
 
 	END_ENTRY	__objc_msgForward
 
@@ -800,52 +797,10 @@ LMsgForwardError:
 	ENTRY	__objc_msgForward_stret
 	// Struct return version
 
-	// Get PIC base into %edx
-	call	L__objc_msgForwardStret$pic_base
-L__objc_msgForwardStret$pic_base:
-	popl	%edx
-
-	// Call user handler, if any
-	movl	__objc_forward_stret_handler-L__objc_msgForwardStret$pic_base(%edx), %ecx
-	testl	%ecx, %ecx		// if not NULL
-	je	1f			//   skip to default handler
-	jmp	*%ecx			// call __objc_forward_stret_handler
-1:	
-	// No user handler
-	// Push stack frame
-	pushl	%ebp
-	movl	%esp, %ebp
-
-	// Die if forwarding "forward::"
-	movl	(selector_stret+4)(%ebp), %eax
-	movl	_FwdSel-L__objc_msgForwardStret$pic_base(%edx), %ecx
-	cmpl	%ecx, %eax
-	je	LMsgForwardStretError
-
-	// Call [receiver forward:sel :margs]
-	subl    $8, %esp		// 16-byte align the stack
-	leal    (self_stret+4)(%ebp), %ecx
-	pushl	%ecx			// &margs
-	pushl	%eax			// sel
-	movl	_FwdSel-L__objc_msgForwardStret$pic_base(%edx),%ecx
-	pushl	%ecx			// forward::
-	pushl   (self_stret+4)(%ebp)	// receiver
-	
-	call	_objc_msgSend
-	
-	movl    %ebp, %esp
-	popl    %ebp
-	ret	$4			// pop struct return address (#2995932)
-
-LMsgForwardStretError:
-	// Call __objc_error(receiver, "unknown selector %s", "forward::")
-	subl    $12, %esp		// 16-byte align the stack
-	leal	_FwdSel-L__objc_msgForwardStret$pic_base(%edx),%eax
-	pushl 	%eax
-	leal	LUnkSelStr-L__objc_msgForwardStret$pic_base(%edx),%eax
-	pushl 	%eax
-	pushl   (self_stret+4)(%ebp)
-	call	___objc_error	// never returns
+	call	1f
+1:	popl	%edx
+	movl	L_forward_stret_handler-1b(%edx), %edx
+	jmp	*(%edx)
 
 	END_ENTRY	__objc_msgForward_stret
 
@@ -905,5 +860,10 @@ LMsgForwardStretError:
 	
 	END_ENTRY __objc_ignored_method
 #endif
+	
+
+.section __DATA,__objc_msg_break
+.long 0
+.long 0
 
 #endif

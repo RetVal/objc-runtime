@@ -61,198 +61,37 @@
  *
  * Cache readers (PC-checked by collecting_in_critical())
  * objc_msgSend*
- * _cache_getImp
- * _cache_getMethod
+ * cache_getImp
  *
  * Cache writers (hold cacheUpdateLock while reading or writing; not PC-checked)
- * _cache_fill         (acquires lock)
- * _cache_expand       (only called from cache_fill)
- * _cache_create       (only called from cache_expand)
+ * cache_fill         (acquires lock)
+ * cache_expand       (only called from cache_fill)
+ * cache_create       (only called from cache_expand)
  * bcopy               (only called from instrumented cache_expand)
  * flush_caches        (acquires lock)
- * _cache_flush        (only called from cache_fill and flush_caches)
- * _cache_collect_free (only called from cache_expand and cache_flush)
+ * cache_flush        (only called from cache_fill and flush_caches)
+ * cache_collect_free (only called from cache_expand and cache_flush)
  *
  * UNPROTECTED cache readers (NOT thread-safe; used for debug info only)
- * _cache_print
+ * cache_print
  * _class_printMethodCaches
  * _class_printDuplicateCacheEntries
  * _class_printMethodCacheStatistics
  *
- * _class_lookupMethodAndLoadCache is a special case. It may read a 
- * method triplet out of one cache and store it in another cache. This 
- * is unsafe if the method triplet is a forward:: entry, because the 
- * triplet itself could be freed unless _class_lookupMethodAndLoadCache 
- * were PC-checked or used a lock. Additionally, storing the method 
- * triplet in both caches would result in double-freeing if both caches 
- * were flushed or expanded. The solution is for _cache_getMethod to 
- * ignore all entries whose implementation is _objc_msgForward_internal, 
- * so _class_lookupMethodAndLoadCache cannot look at a forward:: entry
- * unsafely or place it in multiple caches.
  ***********************************************************************/
 
-#include "objc-private.h"
-#include "hashtable2.h"
-
-typedef struct {
-    SEL name;     // same layout as struct old_method
-    void *unused;
-    IMP imp;  // same layout as struct old_method
-} cache_entry;
 
 #if __OBJC2__
 
-#ifndef __LP64__
-# define CACHE_HASH(sel, mask) (((uintptr_t)(sel)>>2) & (mask))
-#else
-# define CACHE_HASH(sel, mask) (((unsigned int)((uintptr_t)(sel)>>0)) & (mask))
-#endif
+#include "objc-private.h"
+#include "objc-cache.h"
 
-struct objc_cache {
-    uintptr_t mask;            /* total = mask + 1 */
-    uintptr_t occupied;        
-    cache_entry *buckets[1];
-};
-
-#define CACHE_BUCKET(e) ((cache_entry *)e)
-
-#else
-
-/* Most definitions are in runtime.h */
-#define CACHE_BUCKET(e) ((Method)e)
-
-#endif
-
-
-/* When _class_slow_grow is non-zero, any given cache is actually grown
- * only on the odd-numbered times it becomes full; on the even-numbered
- * times, it is simply emptied and re-used.  When this flag is zero,
- * caches are grown every time. */
-static const int _class_slow_grow = 1;
-
-/* For min cache size: clear_cache=1, slow_grow=1
-   For max cache size: clear_cache=0, slow_grow=0 */
 
 /* Initial cache bucket count. INIT_CACHE_SIZE must be a power of two. */
 enum {
     INIT_CACHE_SIZE_LOG2 = 2,
     INIT_CACHE_SIZE      = (1 << INIT_CACHE_SIZE_LOG2)
 };
-
-
-/* Amount of space required for `count` hash table buckets, knowing that
- * one entry is embedded in the cache structure itself. */
-#define TABLE_SIZE(count)  ((count - 1) * sizeof(cache_entry *))
-
-
-#if !TARGET_OS_WIN32
-#   define CACHE_ALLOCATOR
-#endif
-
-/* Custom cache allocator parameters.
- * CACHE_REGION_SIZE must be a multiple of CACHE_QUANTUM. */
-#define CACHE_ALLOCATOR_MIN 512
-#define CACHE_QUANTUM (CACHE_ALLOCATOR_MIN+sizeof(struct objc_cache)-sizeof(cache_entry*))
-#define CACHE_REGION_SIZE ((128*1024 / CACHE_QUANTUM) * CACHE_QUANTUM)
-// #define CACHE_REGION_SIZE ((256*1024 / CACHE_QUANTUM) * CACHE_QUANTUM)
-
-static uintptr_t cache_allocator_mask_for_size(size_t size)
-{
-    return (size - sizeof(struct objc_cache)) / sizeof(cache_entry *);
-}
-
-static size_t cache_allocator_size_for_mask(uintptr_t mask)
-{
-    size_t requested = sizeof(struct objc_cache) + TABLE_SIZE(mask+1);
-    size_t actual = CACHE_QUANTUM;
-    while (actual < requested) actual += CACHE_QUANTUM;
-    return actual;
-}
-
-
-/* Cache instrumentation data. Immediately follows the cache block itself. */
-#ifdef OBJC_INSTRUMENTED
-typedef struct
-{
-    unsigned int hitCount;           // cache lookup success tally
-    unsigned int hitProbes;          // sum entries checked to hit
-    unsigned int maxHitProbes;       // max entries checked to hit
-    unsigned int missCount;          // cache lookup no-find tally
-    unsigned int missProbes;         // sum entries checked to miss
-    unsigned int maxMissProbes;      // max entries checked to miss
-    unsigned int flushCount;         // cache flush tally
-    unsigned int flushedEntries;     // sum cache entries flushed
-    unsigned int maxFlushedEntries;  // max cache entries flushed
-} CacheInstrumentation;
-
-#define CACHE_INSTRUMENTATION(cache)  (CacheInstrumentation *) &cache->buckets[cache->mask + 1];
-#endif
-
-/* Cache filling and flushing instrumentation */
-
-static int totalCacheFills = 0;
-
-#ifdef OBJC_INSTRUMENTED
-unsigned int LinearFlushCachesCount              = 0;
-unsigned int LinearFlushCachesVisitedCount       = 0;
-unsigned int MaxLinearFlushCachesVisitedCount    = 0;
-unsigned int NonlinearFlushCachesCount           = 0;
-unsigned int NonlinearFlushCachesClassCount      = 0;
-unsigned int NonlinearFlushCachesVisitedCount    = 0;
-unsigned int MaxNonlinearFlushCachesVisitedCount = 0;
-unsigned int IdealFlushCachesCount               = 0;
-unsigned int MaxIdealFlushCachesCount            = 0;
-#endif
-
-
-/***********************************************************************
-* A static empty cache.  All classes initially point at this cache.
-* When the first message is sent it misses in the cache, and when
-* the cache is grown it checks for this case and uses malloc rather
-* than realloc.  This avoids the need to check for NULL caches in the
-* messenger.
-***********************************************************************/
-
-struct objc_cache _objc_empty_cache =
-{
-    0,        // mask
-    0,        // occupied
-    { NULL }  // buckets
-};
-#ifdef OBJC_INSTRUMENTED
-CacheInstrumentation emptyCacheInstrumentation = {0};
-#endif
-
-
-/* Local prototypes */
-
-static BOOL _cache_isEmpty(Cache cache);
-static Cache _cache_malloc(uintptr_t slotCount);
-static Cache _cache_create(Class cls);
-static Cache _cache_expand(Class cls);
-#if __OBJC2__
-static void _cache_flush(Class cls);
-#else
-extern "C" void _cache_flush(Class cls);
-#endif
-
-static int _collecting_in_critical(void);
-static void _garbage_make_room(void);
-static void _cache_collect_free(void *data, size_t size);
-
-#if defined(CACHE_ALLOCATOR)
-static BOOL cache_allocator_is_block(void *block);
-static Cache cache_allocator_calloc(size_t size);
-static void cache_allocator_free(void *block);
-#endif
-
-/***********************************************************************
-* Cache statistics for OBJC_PRINT_CACHE_SETUP
-**********************************************************************/
-static unsigned int cache_counts[16];
-static size_t cache_allocations;
-static size_t cache_collections;
-static size_t cache_allocator_regions;
 
 static size_t log2u(size_t x)
 {
@@ -265,461 +104,522 @@ static size_t log2u(size_t x)
     return log;
 }
 
+static void cache_collect_free(struct bucket_t *data, size_t size);
+static int _collecting_in_critical(void);
+static void _garbage_make_room(void);
+
 
 /***********************************************************************
-* _cache_isEmpty.
-* Returns YES if the given cache is some empty cache.
-* Empty caches should never be allocated on the heap.
+* Cache statistics for OBJC_PRINT_CACHE_SETUP
 **********************************************************************/
-static BOOL _cache_isEmpty(Cache cache)
+static unsigned int cache_counts[16];
+static size_t cache_allocations;
+static size_t cache_collections;
+
+
+/***********************************************************************
+* Pointers used by compiled class objects
+* These use asm to avoid conflicts with the compiler's internal declarations
+**********************************************************************/
+
+// "cache" is cache->buckets; "vtable" is cache->mask/occupied
+// hack to avoid conflicts with compiler's internal declaration
+asm("\n .section __TEXT,__const"
+    "\n .globl __objc_empty_cache"
+#if __LP64__
+    "\n .align 3"
+    "\n __objc_empty_cache: .quad 0"
+#else
+    "\n .align 2"
+    "\n __objc_empty_cache: .long 0"
+#endif
+    "\n .globl __objc_empty_vtable"
+    "\n .set __objc_empty_vtable, 0"
+    );
+
+
+#if __arm__
+// objc_msgSend has few registers available.
+// Cache scan increments and wraps at special end-marking bucket.
+#define CACHE_END_MARKER 1
+static inline mask_t cache_next(mask_t i, mask_t mask) {
+    return (i+1) & mask;
+}
+
+#elif __i386__  ||  __x86_64__  ||  __arm64__
+// objc_msgSend has lots of registers and/or memory operands available.
+// Cache scan decrements. No end marker needed.
+#define CACHE_END_MARKER 0
+static inline mask_t cache_next(mask_t i, mask_t mask) {
+    return i ? i-1 : mask;
+}
+
+#else
+#error unknown architecture
+#endif
+
+
+// cannot mix sel-side caches with ignored selector constant
+// ignored selector constant also not implemented for class-side caches here
+#if SUPPORT_IGNORED_SELECTOR_CONSTANT
+#error sorry
+#endif
+
+
+// copied from dispatch_atomic_maximally_synchronizing_barrier
+// fixme verify that this barrier hack does in fact work here
+#if __x86_64__
+#define mega_barrier() \
+    do { unsigned long _clbr; __asm__ __volatile__( \
+        "cpuid" \
+        : "=a" (_clbr) : "0" (0) : "rbx", "rcx", "rdx", "cc", "memory" \
+                                                    ); } while(0)
+
+#elif __i386__
+#define mega_barrier() \
+    do { unsigned long _clbr; __asm__ __volatile__( \
+        "cpuid" \
+        : "=a" (_clbr) : "0" (0) : "ebx", "ecx", "edx", "cc", "memory" \
+                                                    ); } while(0)
+
+#elif __arm__
+#define mega_barrier() \
+    __asm__ __volatile__( \
+        "dsb    ish" \
+        : : : "memory")
+
+#elif __arm64__
+// Use atomic double-word updates instead.
+// This requires cache buckets not cross cache line boundaries.
+#undef mega_barrier
+#define stp(onep, twop, destp)                  \
+    __asm__ ("stp %[one], %[two], [%[dest]]"    \
+             : "=m" (((uint64_t *)(destp))[0]), \
+               "=m" (((uint64_t *)(destp))[1])  \
+             : [one] "r" (onep),                \
+               [two] "r" (twop),                \
+               [dest] "r" (destp)               \
+             : /* no clobbers */                \
+             )
+#define ldp(onep, twop, srcp)                   \
+    __asm__ ("ldp %[one], %[two], [%[src]]"     \
+             : [one] "=r" (onep),               \
+               [two] "=r" (twop),               \
+             : "m" (((uint64_t *)(srcp))[0]),   \
+               "m" (((uint64_t *)(srcp))[1])    \
+               [src] "r" (srcp)                 \
+             : /* no clobbers */                \
+             )
+
+#else
+#error unknown architecture
+#endif
+
+
+// Class points to cache. SEL is key. Cache buckets store SEL+IMP.
+// Caches are never built in the dyld shared cache.
+
+static inline mask_t cache_hash(cache_key_t key, mask_t mask) 
 {
-    return (cache == NULL  ||  cache == (Cache)&_objc_empty_cache  ||  cache->mask == 0);
+    return (mask_t)(key & mask);
+}
+
+cache_t *getCache(Class cls, SEL sel __unused) 
+{
+    assert(cls);
+    return &cls->cache;
+}
+
+cache_key_t getKey(Class cls __unused, SEL sel) 
+{
+    assert(sel);
+    return (cache_key_t)sel;
 }
 
 
-/***********************************************************************
-* _cache_malloc.
-*
-* Called from _cache_create() and cache_expand()
-* Cache locks: cacheUpdateLock must be held by the caller.
-**********************************************************************/
-static Cache _cache_malloc(uintptr_t slotCount)
+
+#if __arm64__
+
+void bucket_t::set(cache_key_t newKey, IMP newImp)
 {
-    Cache new_cache;
-    size_t size;
+    assert(_key == 0  ||  _key == newKey);
 
-    mutex_assert_locked(&cacheUpdateLock);
+    // LDP/STP guarantees that all observers get 
+    // either key/imp or newKey/newImp
+    stp(newKey, newImp, this);
+}
 
-    // Allocate table (why not check for failure?)
-    size = sizeof(struct objc_cache) + TABLE_SIZE(slotCount);
-#if defined(OBJC_INSTRUMENTED)
-    // Custom cache allocator can't handle instrumentation.
-    size += sizeof(CacheInstrumentation);
-    new_cache = _calloc_internal(size, 1);
-    new_cache->mask = slotCount - 1;
-#elif !defined(CACHE_ALLOCATOR)
-    // fixme cache allocator implementation isn't 64-bit clean
-    new_cache = _calloc_internal(size, 1);
-    new_cache->mask = (unsigned int)(slotCount - 1);
+void cache_t::setBucketsAndMask(struct bucket_t *newBuckets, mask_t newMask)
+{
+    // ensure other threads see buckets contents before buckets pointer
+    // see Barrier Litmus Tests and Cookbook, 
+    // "Address Dependency with object construction"
+    __sync_synchronize();
+
+    // LDP/STP guarantees that all observers get 
+    // old mask/buckets or new mask/buckets
+
+    mask_t newOccupied = 0;
+    uint64_t mask_and_occupied =
+        (uint64_t)newMask | ((uint64_t)newOccupied << 32);
+    stp(newBuckets, mask_and_occupied, this);
+}
+
+// arm64
 #else
-    if (size < CACHE_ALLOCATOR_MIN  ||  UseInternalZone) {
-        new_cache = (Cache)_calloc_internal(size, 1);
-        new_cache->mask = slotCount - 1;
-        // occupied and buckets and instrumentation are all zero
-    } else {
-        new_cache = cache_allocator_calloc(size);
-        // mask is already set
-        // occupied and buckets and instrumentation are all zero
+// not arm64
+
+void bucket_t::set(cache_key_t newKey, IMP newImp)
+{
+    assert(_key == 0  ||  _key == newKey);
+
+    // objc_msgSend uses key and imp with no locks.
+    // It is safe for objc_msgSend to see new imp but NULL key
+    // (It will get a cache miss but not dispatch to the wrong place.)
+    // It is unsafe for objc_msgSend to see old imp and new key.
+    // Therefore we write new imp, wait a lot, then write new key.
+    
+    _imp = newImp;
+    
+    if (_key != newKey) {
+        mega_barrier();
+        _key = newKey;
     }
+}
+
+void cache_t::setBucketsAndMask(struct bucket_t *newBuckets, mask_t newMask)
+{
+    // objc_msgSend uses mask and buckets with no locks.
+    // It is safe for objc_msgSend to see new buckets but old mask.
+    // (It will get a cache miss but not overrun the buckets' bounds).
+    // It is unsafe for objc_msgSend to see old buckets and new mask.
+    // Therefore we write new buckets, wait a lot, then write new mask.
+    // objc_msgSend reads mask first, then buckets.
+
+    // ensure other threads see buckets contents before buckets pointer
+    mega_barrier();
+
+    _buckets = newBuckets;
+    
+    // ensure other threads see new buckets before new mask
+    mega_barrier();
+    
+    _mask = newMask;
+    _occupied = 0;
+}
+
+// not arm64
 #endif
 
+struct bucket_t *cache_t::buckets() 
+{
+    return _buckets; 
+}
+
+mask_t cache_t::mask() 
+{
+    return _mask; 
+}
+
+mask_t cache_t::occupied() 
+{
+    return _occupied;
+}
+
+void cache_t::incrementOccupied() 
+{
+    _occupied++;
+}
+
+void cache_t::setEmpty()
+{
+    bzero(this, sizeof(*this));
+    _buckets = (bucket_t *)&_objc_empty_cache;
+}
+
+
+mask_t cache_t::capacity() 
+{
+    return mask() ? mask()+1 : 0; 
+}
+
+
+#if CACHE_END_MARKER
+
+size_t cache_t::bytesForCapacity(uint32_t cap) 
+{
+    // fixme put end marker inline when capacity+1 malloc is inefficient
+    return sizeof(cache_t) * (cap + 1);
+}
+
+bucket_t *cache_t::endMarker(struct bucket_t *b, uint32_t cap) 
+{
+    // bytesForCapacity() chooses whether the end marker is inline or not
+    return (bucket_t *)((uintptr_t)b + bytesForCapacity(cap)) - 1;
+}
+
+bucket_t *allocateBuckets(mask_t newCapacity)
+{
+    // Allocate one extra bucket to mark the end of the list.
+    // This can't overflow mask_t because newCapacity is a power of 2.
+    // fixme instead put the end mark inline when +1 is malloc-inefficient
+    bucket_t *newBuckets = (bucket_t *)
+        _calloc_internal(cache_t::bytesForCapacity(newCapacity), 1);
+
+    bucket_t *end = cache_t::endMarker(newBuckets, newCapacity);
+
+#if __arm__
+    // End marker's key is 1 and imp points BEFORE the first bucket.
+    // This saves an instruction in objc_msgSend.
+    end->setKey((cache_key_t)(uintptr_t)1);
+    end->setImp((IMP)(newBuckets - 1));
+#else
+#   error unknown architecture
+#endif
+    
+    return newBuckets;
+}
+
+#else
+
+bucket_t *allocateBuckets(mask_t newCapacity)
+{
+    return (bucket_t *)_calloc_internal(newCapacity, sizeof(bucket_t));
+}
+
+#endif
+
+
+bool cache_t::canBeFreed()
+{
+    return buckets() != (bucket_t *)&_objc_empty_cache;
+}
+
+
+void cache_t::reallocate(mask_t oldCapacity, mask_t newCapacity)
+{
     if (PrintCaches) {
-        size_t bucket = log2u(slotCount);
+        size_t bucket = log2u(newCapacity);
         if (bucket < sizeof(cache_counts) / sizeof(cache_counts[0])) {
             cache_counts[bucket]++;
         }
         cache_allocations++;
-    }
-
-    return new_cache;
-}
-
-/***********************************************************************
-* _cache_free_block.
-*
-* Called from _cache_free() and _cache_collect_free().
-* block may be a cache or a forward:: entry.
-* If block is a cache, forward:: entries it points to will NOT be freed.
-* Cache locks: cacheUpdateLock must be held by the caller.
-**********************************************************************/
-static void _cache_free_block(void *block)
-{
-    mutex_assert_locked(&cacheUpdateLock);
-
-#if !TARGET_OS_WIN32
-    if (PrintCaches) {
-        Cache cache = (Cache)block;
-        size_t slotCount = cache->mask + 1;
-        if (isPowerOf2(slotCount)) {
-            size_t bucket = log2u(slotCount);
+        
+        if (oldCapacity) {
+            bucket = log2u(oldCapacity);
             if (bucket < sizeof(cache_counts) / sizeof(cache_counts[0])) {
                 cache_counts[bucket]--;
             }
         }
     }
-#endif
 
-#if defined(CACHE_ALLOCATOR)
-    if (cache_allocator_is_block(block)) {
-        cache_allocator_free(block);
-    } else 
-#endif
-    {
-        free(block);
-    }
-}
+    bool freeOld = canBeFreed();
 
+    bucket_t *oldBuckets = buckets();
+    bucket_t *newBuckets = allocateBuckets(newCapacity);
 
-/***********************************************************************
-* _cache_free.
-*
-* Called from _objc_remove_classes_in_image().
-* forward:: entries in the cache ARE freed.
-* Cache locks: cacheUpdateLock must NOT be held by the caller.
-**********************************************************************/
-void _cache_free(Cache cache)
-{
-    unsigned int i;
+    // Cache's old contents are not propagated. 
+    // This is thought to save cache memory at the cost of extra cache fills.
+    // fixme re-measure this
 
-    mutex_lock(&cacheUpdateLock);
+    assert(newCapacity > 0);
+    assert((uintptr_t)(mask_t)(newCapacity-1) == newCapacity-1);
 
-    for (i = 0; i < cache->mask + 1; i++) {
-        cache_entry *entry = (cache_entry *)cache->buckets[i];
-        if (entry  &&  entry->imp == _objc_msgForward_internal) {
-            _cache_free_block(entry);
-        }
-    }
+    setBucketsAndMask(newBuckets, newCapacity - 1);
     
-    _cache_free_block(cache);
-
-    mutex_unlock(&cacheUpdateLock);
-}
-
-
-/***********************************************************************
-* _cache_create.
-*
-* Called from _cache_expand().
-* Cache locks: cacheUpdateLock must be held by the caller.
-**********************************************************************/
-static Cache _cache_create(Class cls)
-{
-    Cache new_cache;
-
-    mutex_assert_locked(&cacheUpdateLock);
-
-    // Allocate new cache block
-    new_cache = _cache_malloc(INIT_CACHE_SIZE);
-
-    // Install the cache
-    _class_setCache(cls, new_cache);
-
-    // Clear the grow flag so that we will re-use the current storage,
-    // rather than actually grow the cache, when expanding the cache
-    // for the first time
-    if (_class_slow_grow) {
-        _class_setGrowCache(cls, NO);
+    if (freeOld) {
+        cache_collect_free(oldBuckets, oldCapacity * sizeof(bucket_t));
+        cache_collect(false);
     }
-
-    // Return our creation
-    return new_cache;
 }
 
 
-/***********************************************************************
-* _cache_expand.
-*
-* Called from _cache_fill ()
-* Cache locks: cacheUpdateLock must be held by the caller.
-**********************************************************************/
-static Cache _cache_expand(Class cls)
+// called by objc_msgSend
+extern "C" 
+void objc_msgSend_corrupt_cache_error(id receiver, SEL sel, Class isa)
 {
-    Cache old_cache;
-    Cache new_cache;
-    uintptr_t slotCount;
-    uintptr_t index;
+    cache_t::bad_cache(receiver, sel, isa);
+}
 
-    mutex_assert_locked(&cacheUpdateLock);
+extern "C" 
+void cache_getImp_corrupt_cache_error(id receiver, SEL sel, Class isa)
+{
+    cache_t::bad_cache(receiver, sel, isa);
+}
 
-    // First growth goes from empty cache to a real one
-    old_cache = _class_getCache(cls);
-    if (_cache_isEmpty(old_cache))
-        return _cache_create (cls);
+void cache_t::bad_cache(id receiver, SEL sel, Class isa)
+{
+    // Log in separate steps in case the logging itself causes a crash.
+    _objc_inform_now_and_on_crash
+        ("Method cache corrupted. This may be a message to an "
+         "invalid object, or a memory error somewhere else.");
+    cache_t *cache = &isa->cache;
+    _objc_inform_now_and_on_crash
+        ("%s %p, SEL %p, isa %p, cache %p, buckets %p, "
+         "mask 0x%x, occupied 0x%x", 
+         receiver ? "receiver" : "unused", receiver, 
+         sel, isa, cache, cache->_buckets, 
+         cache->_mask, cache->_occupied);
+    _objc_inform_now_and_on_crash
+        ("%s %zu bytes, buckets %zu bytes", 
+         receiver ? "receiver" : "unused", malloc_size(receiver), 
+         malloc_size(cache->_buckets));
+    _objc_inform_now_and_on_crash
+        ("selector '%s'", sel_getName(sel));
+    _objc_inform_now_and_on_crash
+        ("isa '%s'", isa->nameForLogging());
+    _objc_fatal
+        ("Method cache corrupted.");
+}
 
-    if (_class_slow_grow) {
-        // Cache grows every other time only.
-        if (_class_shouldGrowCache(cls)) {
-            // Grow the cache this time. Don't grow next time.
-            _class_setGrowCache(cls, NO);
-        } 
-        else {
-            // Reuse the current cache storage this time. Do grow next time.
-            _class_setGrowCache(cls, YES);
 
-            // Clear the valid-entry counter
-            old_cache->occupied = 0;
+bucket_t * cache_t::find(cache_key_t k)
+{
+    assert(k != 0);
 
-            // Invalidate all the cache entries
-            for (index = 0; index < old_cache->mask + 1; index += 1)
-            {
-                // Remember what this entry was, so we can possibly
-                // deallocate it after the bucket has been invalidated
-                cache_entry *oldEntry = (cache_entry *)old_cache->buckets[index];
-                
-                // Skip invalid entry
-                if (!oldEntry)
-                    continue;
-
-                // Invalidate this entry
-                old_cache->buckets[index] = NULL;
-
-                // Deallocate "forward::" entry
-                if (oldEntry->imp == _objc_msgForward_internal) {
-                    _cache_collect_free (oldEntry, sizeof(cache_entry));
-                }
-            }
-
-            // Return the same old cache, freshly emptied
-            return old_cache;
+    bucket_t *b = buckets();
+    mask_t m = mask();
+    mask_t begin = cache_hash(k, m);
+    mask_t i = begin;
+    do {
+        if (b[i].key() == 0  ||  b[i].key() == k) {
+            return &b[i];
         }
-    }
+    } while ((i = cache_next(i, m)) != begin);
 
-    // Double the cache size
-    slotCount = (old_cache->mask + 1) << 1;
-
-    new_cache = _cache_malloc(slotCount);
-
-#ifdef OBJC_INSTRUMENTED
-    // Propagate the instrumentation data
-    {
-        CacheInstrumentation *oldCacheData;
-        CacheInstrumentation *newCacheData;
-
-        oldCacheData = CACHE_INSTRUMENTATION(old_cache);
-        newCacheData = CACHE_INSTRUMENTATION(new_cache);
-        bcopy ((const char *)oldCacheData, (char *)newCacheData, sizeof(CacheInstrumentation));
-    }
-#endif
-
-    // Deallocate "forward::" entries from the old cache
-    for (index = 0; index < old_cache->mask + 1; index++) {
-        cache_entry *entry = (cache_entry *)old_cache->buckets[index];
-        if (entry && entry->imp == _objc_msgForward_internal) {
-            _cache_collect_free (entry, sizeof(cache_entry));
-        }
-    }
-
-    // Install new cache
-    _class_setCache(cls, new_cache);
-
-    // Deallocate old cache, try freeing all the garbage
-    _cache_collect_free (old_cache, old_cache->mask * sizeof(cache_entry *));
-    _cache_collect(false);
-
-    return new_cache;
+    // hack
+    Class cls = (Class)((uintptr_t)this - offsetof(objc_class, cache));
+    cache_t::bad_cache(nil, (SEL)k, cls);
 }
 
 
-/***********************************************************************
-* _cache_fill.  Add the specified method to the specified class' cache.
-* Returns NO if the cache entry wasn't added: cache was busy, 
-*  class is still being initialized, new entry is a duplicate.
-*
-* Called only from _class_lookupMethodAndLoadCache and
-* class_respondsToMethod and _cache_addForwardEntry.
-*
-* Cache locks: cacheUpdateLock must not be held.
-**********************************************************************/
-BOOL _cache_fill(Class cls, Method smt, SEL sel)
+void cache_t::expand()
 {
-    uintptr_t newOccupied;
-    uintptr_t index;
-    cache_entry **buckets;
-    cache_entry *entry;
-    Cache cache;
+    mutex_assert_locked(&cacheUpdateLock);
+    
+    uint32_t oldCapacity = capacity();
+    uint32_t newCapacity = oldCapacity ? oldCapacity*2 : INIT_CACHE_SIZE;
 
-    mutex_assert_unlocked(&cacheUpdateLock);
+    if ((uint32_t)(mask_t)newCapacity != newCapacity) {
+        // mask overflow - can't grow further
+        // fixme this wastes one bit of mask
+        newCapacity = oldCapacity;
+    }
+
+    reallocate(oldCapacity, newCapacity);
+}
+
+
+static void cache_fill_nolock(Class cls, SEL sel, IMP imp)
+{
+    mutex_assert_locked(&cacheUpdateLock);
 
     // Never cache before +initialize is done
-    if (!_class_isInitialized(cls)) {
-        return NO;
-    }
-
-    // Keep tally of cache additions
-    totalCacheFills += 1;
-
-    mutex_lock(&cacheUpdateLock);
-
-    entry = (cache_entry *)smt;
-
-    cache = _class_getCache(cls);
+    if (!cls->isInitialized()) return;
 
     // Make sure the entry wasn't added to the cache by some other thread 
     // before we grabbed the cacheUpdateLock.
-    // Don't use _cache_getMethod() because _cache_getMethod() doesn't 
-    // return forward:: entries.
-    if (_cache_getImp(cls, sel)) {
-        mutex_unlock(&cacheUpdateLock);
-        return NO; // entry is already cached, didn't add new one
-    }
+    if (cache_getImp(cls, sel)) return;
+
+    cache_t *cache = getCache(cls, sel);
+    cache_key_t key = getKey(cls, sel);
 
     // Use the cache as-is if it is less than 3/4 full
-    newOccupied = cache->occupied + 1;
-    if ((newOccupied * 4) <= (cache->mask + 1) * 3) {
+    mask_t newOccupied = cache->occupied() + 1;
+    if ((newOccupied * 4) <= (cache->mask() + 1) * 3) {
         // Cache is less than 3/4 full.
-        cache->occupied = (unsigned int)newOccupied;
     } else {
         // Cache is too full. Expand it.
-        cache = _cache_expand (cls);
-
-        // Account for the addition
-        cache->occupied += 1;
+        cache->expand();
     }
 
-    // Scan for the first unused slot and insert there.
+    // Scan for the first unused slot (or used for this class) and insert there
     // There is guaranteed to be an empty slot because the 
     // minimum size is 4 and we resized at 3/4 full.
-    buckets = (cache_entry **)cache->buckets;
-    for (index = CACHE_HASH(sel, cache->mask); 
-         buckets[index] != NULL; 
-         index = (index+1) & cache->mask)
-    {
-        // empty
-    }
-    buckets[index] = entry;
+    bucket_t *bucket = cache->find(key);
+    if (bucket->key() == 0) cache->incrementOccupied();
+    bucket->set(key, imp);
+}
 
+void cache_fill(Class cls, SEL sel, IMP imp)
+{
+#if !DEBUG_TASK_THREADS
+    mutex_lock(&cacheUpdateLock);
+    cache_fill_nolock(cls, sel, imp);
     mutex_unlock(&cacheUpdateLock);
-
-    return YES; // successfully added new cache entry
-}
-
-
-/***********************************************************************
-* _cache_addForwardEntry
-* Add a forward:: entry  for the given selector to cls's method cache.
-* Does nothing if the cache addition fails for any reason.
-* Called from class_respondsToMethod and _class_lookupMethodAndLoadCache.
-* Cache locks: cacheUpdateLock must not be held.
-**********************************************************************/
-void _cache_addForwardEntry(Class cls, SEL sel)
-{
-    cache_entry *smt;
-  
-    smt = (cache_entry *)_malloc_internal(sizeof(cache_entry));
-    smt->name = sel;
-    smt->imp = _objc_msgForward_internal;
-    if (! _cache_fill(cls, (Method)smt, sel)) {  // fixme hack
-        // Entry not added to cache. Don't leak the method struct.
-        _free_internal(smt);
-    }
-}
-
-
-/***********************************************************************
-* _cache_addIgnoredEntry
-* Add an entry for the ignored selector to cls's method cache.
-* Does nothing if the cache addition fails for any reason.
-* Returns the ignored IMP.
-* Cache locks: cacheUpdateLock must not be held.
-**********************************************************************/
-#if SUPPORT_GC  &&  !SUPPORT_IGNORED_SELECTOR_CONSTANT
-static cache_entry *alloc_ignored_entries(void)
-{
-    cache_entry *e = (cache_entry *)_malloc_internal(5 * sizeof(cache_entry));
-    e[0] = (cache_entry){ @selector(retain),     0,(IMP)&_objc_ignored_method};
-    e[1] = (cache_entry){ @selector(release),    0,(IMP)&_objc_ignored_method};
-    e[2] = (cache_entry){ @selector(autorelease),0,(IMP)&_objc_ignored_method};
-    e[3] = (cache_entry){ @selector(retainCount),0,(IMP)&_objc_ignored_method};
-    e[4] = (cache_entry){ @selector(dealloc),    0,(IMP)&_objc_ignored_method};
-    return e;
-}
-#endif
-
-IMP _cache_addIgnoredEntry(Class cls, SEL sel)
-{
-    cache_entry *entryp = NULL;
-
-#if !SUPPORT_GC
-    _objc_fatal("selector ignored with GC off");
-#elif SUPPORT_IGNORED_SELECTOR_CONSTANT
-    static cache_entry entry = { (SEL)kIgnore, 0, (IMP)&_objc_ignored_method };
-    entryp = &entry;
-    assert(sel == (SEL)kIgnore);
 #else
-    // hack
-    int i;
-    static cache_entry *entries;
-    INIT_ONCE_PTR(entries, alloc_ignored_entries(), free(v));
-
-    assert(ignoreSelector(sel));
-    for (i = 0; i < 5; i++) {
-        if (sel == entries[i].name) { 
-            entryp = &entries[i];
-            break;
-        }
-    }
-    if (!entryp) _objc_fatal("selector %s (%p) is not ignored", 
-                             sel_getName(sel), sel);
+    _collecting_in_critical();
+    return;
 #endif
-
-    _cache_fill(cls, (Method)entryp, sel);
-    return entryp->imp;
 }
 
 
-/***********************************************************************
-* _cache_flush.  Invalidate all valid entries in the given class' cache.
-*
-* Called from flush_caches() and _cache_fill()
-* Cache locks: cacheUpdateLock must be held by the caller.
-**********************************************************************/
-#if __OBJC2__
-static 
-#endif
-void _cache_flush(Class cls)
+// Reset any entry for cls/sel to the uncached lookup
+static void cache_eraseMethod_nolock(Class cls, SEL sel)
 {
-    Cache cache;
-    unsigned int index;
-
     mutex_assert_locked(&cacheUpdateLock);
 
-    // Locate cache.  Ignore unused cache.
-    cache = _class_getCache(cls);
-    if (_cache_isEmpty(cache)) return;
+    cache_t *cache = getCache(cls, sel);
+    cache_key_t key = getKey(cls, sel);
 
-#ifdef OBJC_INSTRUMENTED
-    {
-        CacheInstrumentation *cacheData;
-
-        // Tally this flush
-        cacheData = CACHE_INSTRUMENTATION(cache);
-        cacheData->flushCount += 1;
-        cacheData->flushedEntries += cache->occupied;
-        if (cache->occupied > cacheData->maxFlushedEntries)
-            cacheData->maxFlushedEntries = cache->occupied;
+    bucket_t *bucket = cache->find(key);
+    if (bucket->key() == key) {
+        bucket->setImp(_objc_msgSend_uncached_impcache);
     }
-#endif
-
-    // Traverse the cache
-    for (index = 0; index <= cache->mask; index += 1)
-    {
-        // Remember what this entry was, so we can possibly
-        // deallocate it after the bucket has been invalidated
-        cache_entry *oldEntry = (cache_entry *)cache->buckets[index];
-
-        // Invalidate this entry
-        cache->buckets[index] = NULL;
-
-        // Deallocate "forward::" entry
-        if (oldEntry && oldEntry->imp == _objc_msgForward_internal)
-            _cache_collect_free (oldEntry, sizeof(cache_entry));
-    }
-
-    // Clear the valid-entry counter
-    cache->occupied = 0;
 }
 
 
-/***********************************************************************
-* flush_cache.  Flushes the instance method cache for class cls only.
-* Use flush_caches() if cls might have in-use subclasses.
-**********************************************************************/
-void flush_cache(Class cls)
+// Resets cache entries for all methods in mlist for cls and its subclasses.
+void cache_eraseMethods(Class cls, method_list_t *mlist)
 {
-    if (cls) {
-        mutex_lock(&cacheUpdateLock);
-        _cache_flush(cls);
-        mutex_unlock(&cacheUpdateLock);
+    rwlock_assert_writing(&runtimeLock);
+    mutex_lock(&cacheUpdateLock);
+
+    foreach_realized_class_and_subclass(cls, ^(Class c){
+        for (uint32_t m = 0; m < mlist->count; m++) {
+            SEL sel = mlist->get(m).name;
+            cache_eraseMethod_nolock(c, sel);
+        }
+    });
+
+    mutex_unlock(&cacheUpdateLock);
+}
+
+
+// Reset any copies of imp in this cache to the uncached lookup
+void cache_eraseImp_nolock(Class cls, SEL sel, IMP imp)
+{
+    mutex_assert_locked(&cacheUpdateLock);
+
+    cache_t *cache = getCache(cls, sel);
+
+    bucket_t *b = cache->buckets();
+    mask_t count = cache->capacity();
+    for (mask_t i = 0; i < count; i++) {
+        if (b[i].imp() == imp) {
+            b[i].setImp(_objc_msgSend_uncached_impcache);
+        }
+    }
+}
+
+
+void cache_eraseImp(Class cls, SEL sel, IMP imp) 
+{
+    mutex_lock(&cacheUpdateLock);
+    cache_eraseImp_nolock(cls, sel, imp);
+    mutex_unlock(&cacheUpdateLock);
+}
+
+
+// Reset this entire cache to the uncached lookup by reallocating it.
+// This must not shrink the cache - that breaks the lock-free scheme.
+void cache_erase_nolock(cache_t *cache)
+{
+    mutex_assert_locked(&cacheUpdateLock);
+
+    mask_t capacity = cache->capacity();
+    if (capacity > 0  &&  cache->occupied() > 0) {
+        cache->reallocate(capacity, capacity);
     }
 }
 
@@ -734,12 +634,6 @@ void flush_cache(Class cls)
 // Must not be a valid PC.
 // Must not be zero - thread_get_state() on a new thread returns PC == 0.
 #define PC_SENTINEL  1
-
-// UNIX03 compliance hack (4508809)
-#if !__DARWIN_UNIX03
-#define __srr0 srr0
-#define __eip eip
-#endif
 
 static uintptr_t _get_pc_for_thread(thread_t thread)
 #if defined(__i386__)
@@ -761,6 +655,13 @@ static uintptr_t _get_pc_for_thread(thread_t thread)
     arm_thread_state_t state;
     unsigned int count = ARM_THREAD_STATE_COUNT;
     kern_return_t okay = thread_get_state (thread, ARM_THREAD_STATE, (thread_state_t)&state, &count);
+    return (okay == KERN_SUCCESS) ? state.__pc : PC_SENTINEL;
+}
+#elif defined(__arm64__)
+{
+    arm_thread_state64_t state;
+    unsigned int count = ARM_THREAD_STATE64_COUNT;
+    kern_return_t okay = thread_get_state (thread, ARM_THREAD_STATE64, (thread_state_t)&state, &count);
     return (okay == KERN_SUCCESS) ? state.__pc : PC_SENTINEL;
 }
 #else
@@ -795,10 +696,15 @@ static int _collecting_in_critical(void)
     mach_port_t mythread = pthread_mach_thread_np(pthread_self());
 
     // Get a list of all the threads in the current task
-    ret = task_threads (mach_task_self (), &threads, &number);
-    if (ret != KERN_SUCCESS)
-    {
-        _objc_fatal("task_thread failed (result %d)\n", ret);
+#if !DEBUG_TASK_THREADS
+    ret = task_threads(mach_task_self(), &threads, &number);
+#else
+    ret = objc_task_threads(mach_task_self(), &threads, &number);
+#endif
+
+    if (ret != KERN_SUCCESS) {
+        // See DEBUG_TASK_THREADS below to help debug this.
+        _objc_fatal("task_threads failed (result 0x%x)\n", ret);
     }
 
     // Check whether any thread is in the cache lookup code
@@ -861,7 +767,7 @@ static size_t garbage_byte_size = 0;
 static size_t garbage_threshold = 32*1024;
 
 // table of refs to free
-static void **garbage_refs = 0;
+static bucket_t **garbage_refs = 0;
 
 // current number of refs in garbage_refs
 static size_t garbage_count = 0;
@@ -882,7 +788,7 @@ static void _garbage_make_room(void)
     if (first)
     {
         first = 0;
-        garbage_refs = (void**)
+        garbage_refs = (bucket_t**)
             _malloc_internal(INIT_GARBAGE_COUNT * sizeof(void *));
         garbage_max = INIT_GARBAGE_COUNT;
     }
@@ -890,7 +796,7 @@ static void _garbage_make_room(void)
     // Double the table if it is full
     else if (garbage_count == garbage_max)
     {
-        garbage_refs = (void**)
+        garbage_refs = (bucket_t**)
             _realloc_internal(garbage_refs, garbage_max * 2 * sizeof(void *));
         garbage_max *= 2;
     }
@@ -898,13 +804,13 @@ static void _garbage_make_room(void)
 
 
 /***********************************************************************
-* _cache_collect_free.  Add the specified malloc'd memory to the list
+* cache_collect_free.  Add the specified malloc'd memory to the list
 * of them to free at some later point.
 * size is used for the collection threshold. It does not have to be 
 * precisely the block's size.
 * Cache locks: cacheUpdateLock must be held by the caller.
 **********************************************************************/
-static void _cache_collect_free(void *data, size_t size)
+static void cache_collect_free(bucket_t *data, size_t size)
 {
     mutex_assert_locked(&cacheUpdateLock);
 
@@ -915,11 +821,11 @@ static void _cache_collect_free(void *data, size_t size)
 
 
 /***********************************************************************
-* _cache_collect.  Try to free accumulated dead caches.
+* cache_collect.  Try to free accumulated dead caches.
 * collectALot tries harder to free memory.
 * Cache locks: cacheUpdateLock must be held by the caller.
 **********************************************************************/
-void _cache_collect(bool collectALot)
+void cache_collect(bool collectALot)
 {
     mutex_assert_locked(&cacheUpdateLock);
 
@@ -951,12 +857,12 @@ void _cache_collect(bool collectALot)
     // Log our progress
     if (PrintCaches) {
         cache_collections++;
-        _objc_inform ("CACHES: COLLECTING %zu bytes (%zu regions, %zu allocations, %zu collections)", garbage_byte_size, cache_allocator_regions, cache_allocations, cache_collections);
+        _objc_inform ("CACHES: COLLECTING %zu bytes (%zu allocations, %zu collections)", garbage_byte_size, cache_allocations, cache_collections);
     }
     
     // Dispose all refs now in the garbage
     while (garbage_count--) {
-        _cache_free_block(garbage_refs[garbage_count]);
+        free(garbage_refs[garbage_count]);
     }
     
     // Clear the garbage count and total size indicator
@@ -965,910 +871,250 @@ void _cache_collect(bool collectALot)
 
     if (PrintCaches) {
         size_t i;
-        size_t total = 0;
-        size_t ideal_total = 0;
-        size_t malloc_total = 0;
-        size_t local_total = 0;
+        size_t total_count = 0;
+        size_t total_size = 0;
 
         for (i = 0; i < sizeof(cache_counts) / sizeof(cache_counts[0]); i++) {
             int count = cache_counts[i];
             int slots = 1 << i;
-            size_t size = sizeof(struct objc_cache) + TABLE_SIZE(slots);
-            size_t ideal = size;
-#if TARGET_OS_WIN32
-            size_t malloc = size;
-#else
-            size_t malloc = malloc_good_size(size);
-#endif
-            size_t local = size < CACHE_ALLOCATOR_MIN ? malloc : cache_allocator_size_for_mask(cache_allocator_mask_for_size(size));
+            size_t size = count * slots * sizeof(bucket_t);
 
             if (!count) continue;
 
-            _objc_inform("CACHES: %4d slots: %4d caches, %6zu / %6zu / %6zu bytes ideal/malloc/local, %6zu / %6zu bytes wasted malloc/local", slots, count, ideal*count, malloc*count, local*count, malloc*count-ideal*count, local*count-ideal*count);
+            _objc_inform("CACHES: %4d slots: %4d caches, %6zu bytes", 
+                         slots, count, size);
 
-            total += count;
-            ideal_total += ideal*count;
-            malloc_total += malloc*count;
-            local_total += local*count;
+            total_count += count;
+            total_size += size;
         }
 
-        _objc_inform("CACHES:      total: %4zu caches, %6zu / %6zu / %6zu bytes ideal/malloc/local, %6zu / %6zu bytes wasted malloc/local", total, ideal_total, malloc_total, local_total, malloc_total-ideal_total, local_total-ideal_total);
+        _objc_inform("CACHES:      total: %4zu caches, %6zu bytes", 
+                     total_count, total_size);
     }
 }
 
 
-
-
-
-#if defined(CACHE_ALLOCATOR)
-
 /***********************************************************************
-* Custom method cache allocator.
-* Method cache block sizes are 2^slots+2 words, which is a pessimal 
-* case for the system allocator. It wastes 504 bytes per cache block 
-* with 128 or more slots, which adds up to tens of KB for an AppKit process.
-* To save memory, the custom cache allocator below is used.
-* 
-* The cache allocator uses 128 KB allocation regions. Few processes will 
-* require a second region. Within a region, allocation is address-ordered 
-* first fit.
-* 
-* The cache allocator uses a quantum of 520.
-* Cache block ideal sizes: 520, 1032, 2056, 4104
-* Cache allocator sizes:   520, 1040, 2080, 4160
+* objc_task_threads
+* Replacement for task_threads(). Define DEBUG_TASK_THREADS to debug 
+* crashes when task_threads() is failing.
 *
-* Because all blocks are known to be genuine method caches, the ordinary 
-* cache->mask and cache->occupied fields are used as block headers. 
-* No out-of-band headers are maintained. The number of blocks will 
-* almost always be fewer than 200, so for simplicity there is no free 
-* list or other optimization.
-* 
-* Block in use: mask != 0, occupied != -1 (mask indicates block size)
-* Block free:   mask != 0, occupied == -1 (mask is precisely block size)
-* 
-* No cache allocator functions take any locks. Instead, the caller 
-* must hold the cacheUpdateLock.
-* 
-* fixme with 128 KB regions and 520 B min block size, an allocation
-* bitmap would be only 32 bytes - better than free list?
+* A failure in task_threads() usually means somebody has botched their 
+* Mach or MIG traffic. For example, somebody's error handling was wrong 
+* and they left a message queued on the MIG reply port for task_threads() 
+* to trip over.
+*
+* The code below is a modified version of task_threads(). It logs 
+* the msgh_id of the reply message. The msgh_id can identify the sender 
+* of the message, which can help pinpoint the faulty code.
+* DEBUG_TASK_THREADS also calls collecting_in_critical() during every 
+* message dispatch, which can increase reproducibility of bugs.
+*
+* This code can be regenerated by running 
+* `mig /usr/include/mach/task.defs`.
 **********************************************************************/
+#if DEBUG_TASK_THREADS
 
-typedef struct cache_allocator_block {
-    uintptr_t size;
-    uintptr_t state;
-    struct cache_allocator_block *nextFree;
-} cache_allocator_block;
+#include <mach/mach.h>
+#include <mach/message.h>
+#include <mach/mig.h>
 
-typedef struct cache_allocator_region {
-    cache_allocator_block *start;
-    cache_allocator_block *end;    // first non-block address
-    cache_allocator_block *freeList;
-    struct cache_allocator_region *next;
-} cache_allocator_region;
+#define __MIG_check__Reply__task_subsystem__ 1
+#define mig_internal static inline
+#define __DeclareSendRpc(a, b)
+#define __BeforeSendRpc(a, b)
+#define __AfterSendRpc(a, b)
+#define msgh_request_port       msgh_remote_port
+#define msgh_reply_port         msgh_local_port
 
-static cache_allocator_region *cacheRegion = NULL;
-
-
-/***********************************************************************
-* cache_allocator_add_region
-* Allocates and returns a new region that can hold at least size 
-*   bytes of large method caches. 
-* The actual size will be rounded up to a CACHE_QUANTUM boundary, 
-*   with a minimum of CACHE_REGION_SIZE. 
-* The new region is lowest-priority for new allocations. Callers that 
-*   know the other regions are already full should allocate directly 
-*   into the returned region.
-**********************************************************************/
-static cache_allocator_region *cache_allocator_add_region(size_t size)
-{
-    vm_address_t addr;
-    cache_allocator_block *b;
-    cache_allocator_region **rgnP;
-    cache_allocator_region *newRegion = (cache_allocator_region *)
-        _calloc_internal(1, sizeof(cache_allocator_region));
-
-    // Round size up to quantum boundary, and apply the minimum size.
-    size += CACHE_QUANTUM - (size % CACHE_QUANTUM);
-    if (size < CACHE_REGION_SIZE) size = CACHE_REGION_SIZE;
-
-    // Allocate the region
-    addr = (vm_address_t)calloc(size, 1);
-    newRegion->start = (cache_allocator_block *)addr;
-    newRegion->end = (cache_allocator_block *)(addr + size);
-
-    // Mark the first block: free and covers the entire region
-    b = newRegion->start;
-    b->size = size;
-    b->state = (uintptr_t)-1;
-    b->nextFree = NULL;
-    newRegion->freeList = b;
-
-    // Add to end of the linked list of regions.
-    // Other regions should be re-used before this one is touched.
-    newRegion->next = NULL;
-    rgnP = &cacheRegion;
-    while (*rgnP) {
-        rgnP = &(**rgnP).next;
+#ifndef __MachMsgErrorWithTimeout
+#define __MachMsgErrorWithTimeout(_R_) { \
+        switch (_R_) { \
+        case MACH_SEND_INVALID_DATA: \
+        case MACH_SEND_INVALID_DEST: \
+        case MACH_SEND_INVALID_HEADER: \
+            mig_put_reply_port(InP->Head.msgh_reply_port); \
+            break; \
+        case MACH_SEND_TIMED_OUT: \
+        case MACH_RCV_TIMED_OUT: \
+        default: \
+            mig_dealloc_reply_port(InP->Head.msgh_reply_port); \
+        } \
     }
-    *rgnP = newRegion;
+#endif  /* __MachMsgErrorWithTimeout */
 
-    cache_allocator_regions++;
+#ifndef __MachMsgErrorWithoutTimeout
+#define __MachMsgErrorWithoutTimeout(_R_) { \
+        switch (_R_) { \
+        case MACH_SEND_INVALID_DATA: \
+        case MACH_SEND_INVALID_DEST: \
+        case MACH_SEND_INVALID_HEADER: \
+            mig_put_reply_port(InP->Head.msgh_reply_port); \
+            break; \
+        default: \
+            mig_dealloc_reply_port(InP->Head.msgh_reply_port); \
+        } \
+    }
+#endif  /* __MachMsgErrorWithoutTimeout */
 
-    return newRegion;
+
+#if ( __MigTypeCheck )
+#if __MIG_check__Reply__task_subsystem__
+#if !defined(__MIG_check__Reply__task_threads_t__defined)
+#define __MIG_check__Reply__task_threads_t__defined
+
+mig_internal kern_return_t __MIG_check__Reply__task_threads_t(__Reply__task_threads_t *Out0P)
+{
+
+	typedef __Reply__task_threads_t __Reply;
+	boolean_t msgh_simple;
+#if	__MigTypeCheck
+	unsigned int msgh_size;
+#endif	/* __MigTypeCheck */
+	if (Out0P->Head.msgh_id != 3502) {
+	    if (Out0P->Head.msgh_id == MACH_NOTIFY_SEND_ONCE)
+		{ return MIG_SERVER_DIED; }
+	    else
+		{ return MIG_REPLY_MISMATCH; }
+	}
+
+	msgh_simple = !(Out0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX);
+#if	__MigTypeCheck
+	msgh_size = Out0P->Head.msgh_size;
+
+	if ((msgh_simple || Out0P->msgh_body.msgh_descriptor_count != 1 ||
+	    msgh_size != (mach_msg_size_t)sizeof(__Reply)) &&
+	    (!msgh_simple || msgh_size != (mach_msg_size_t)sizeof(mig_reply_error_t) ||
+	    ((mig_reply_error_t *)Out0P)->RetCode == KERN_SUCCESS))
+		{ return MIG_TYPE_ERROR ; }
+#endif	/* __MigTypeCheck */
+
+	if (msgh_simple) {
+		return ((mig_reply_error_t *)Out0P)->RetCode;
+	}
+
+#if	__MigTypeCheck
+	if (Out0P->act_list.type != MACH_MSG_OOL_PORTS_DESCRIPTOR ||
+	    Out0P->act_list.disposition != 17) {
+		return MIG_TYPE_ERROR;
+	}
+#endif	/* __MigTypeCheck */
+
+	return MACH_MSG_SUCCESS;
+}
+#endif /* !defined(__MIG_check__Reply__task_threads_t__defined) */
+#endif /* __MIG_check__Reply__task_subsystem__ */
+#endif /* ( __MigTypeCheck ) */
+
+
+/* Routine task_threads */
+static kern_return_t objc_task_threads
+(
+	task_t target_task,
+	thread_act_array_t *act_list,
+	mach_msg_type_number_t *act_listCnt
+)
+{
+
+#ifdef  __MigPackStructs
+#pragma pack(4)
+#endif
+	typedef struct {
+		mach_msg_header_t Head;
+	} Request;
+#ifdef  __MigPackStructs
+#pragma pack()
+#endif
+
+#ifdef  __MigPackStructs
+#pragma pack(4)
+#endif
+	typedef struct {
+		mach_msg_header_t Head;
+		/* start of the kernel processed data */
+		mach_msg_body_t msgh_body;
+		mach_msg_ool_ports_descriptor_t act_list;
+		/* end of the kernel processed data */
+		NDR_record_t NDR;
+		mach_msg_type_number_t act_listCnt;
+		mach_msg_trailer_t trailer;
+	} Reply;
+#ifdef  __MigPackStructs
+#pragma pack()
+#endif
+
+#ifdef  __MigPackStructs
+#pragma pack(4)
+#endif
+	typedef struct {
+		mach_msg_header_t Head;
+		/* start of the kernel processed data */
+		mach_msg_body_t msgh_body;
+		mach_msg_ool_ports_descriptor_t act_list;
+		/* end of the kernel processed data */
+		NDR_record_t NDR;
+		mach_msg_type_number_t act_listCnt;
+	} __Reply;
+#ifdef  __MigPackStructs
+#pragma pack()
+#endif
+	/*
+	 * typedef struct {
+	 * 	mach_msg_header_t Head;
+	 * 	NDR_record_t NDR;
+	 * 	kern_return_t RetCode;
+	 * } mig_reply_error_t;
+	 */
+
+	union {
+		Request In;
+		Reply Out;
+	} Mess;
+
+	Request *InP = &Mess.In;
+	Reply *Out0P = &Mess.Out;
+
+	mach_msg_return_t msg_result;
+
+#ifdef	__MIG_check__Reply__task_threads_t__defined
+	kern_return_t check_result;
+#endif	/* __MIG_check__Reply__task_threads_t__defined */
+
+	__DeclareSendRpc(3402, "task_threads")
+
+	InP->Head.msgh_bits =
+		MACH_MSGH_BITS(19, MACH_MSG_TYPE_MAKE_SEND_ONCE);
+	/* msgh_size passed as argument */
+	InP->Head.msgh_request_port = target_task;
+	InP->Head.msgh_reply_port = mig_get_reply_port();
+	InP->Head.msgh_id = 3402;
+
+	__BeforeSendRpc(3402, "task_threads")
+	msg_result = mach_msg(&InP->Head, MACH_SEND_MSG|MACH_RCV_MSG|MACH_MSG_OPTION_NONE, (mach_msg_size_t)sizeof(Request), (mach_msg_size_t)sizeof(Reply), InP->Head.msgh_reply_port, MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL);
+	__AfterSendRpc(3402, "task_threads")
+	if (msg_result != MACH_MSG_SUCCESS) {
+		_objc_inform("task_threads received unexpected reply msgh_id 0x%zx", 
+                             (size_t)Out0P->Head.msgh_id);
+		__MachMsgErrorWithoutTimeout(msg_result);
+		{ return msg_result; }
+	}
+
+
+#if	defined(__MIG_check__Reply__task_threads_t__defined)
+	check_result = __MIG_check__Reply__task_threads_t((__Reply__task_threads_t *)Out0P);
+	if (check_result != MACH_MSG_SUCCESS)
+		{ return check_result; }
+#endif	/* defined(__MIG_check__Reply__task_threads_t__defined) */
+
+	*act_list = (thread_act_array_t)(Out0P->act_list.address);
+	*act_listCnt = Out0P->act_listCnt;
+
+	return KERN_SUCCESS;
 }
 
-
-/***********************************************************************
-* cache_allocator_coalesce
-* Attempts to coalesce a free block with the single free block following 
-* it in the free list, if any.
-**********************************************************************/
-static void cache_allocator_coalesce(cache_allocator_block *block)
-{
-    if (block->size + (uintptr_t)block == (uintptr_t)block->nextFree) {
-        block->size += block->nextFree->size;
-        block->nextFree = block->nextFree->nextFree;
-    }
-}
-
-
-/***********************************************************************
-* cache_region_calloc
-* Attempt to allocate a size-byte block in the given region. 
-* Allocation is first-fit. The free list is already fully coalesced.
-* Returns NULL if there is not enough room in the region for the block.
-**********************************************************************/
-static void *cache_region_calloc(cache_allocator_region *rgn, size_t size)
-{
-    cache_allocator_block **blockP;
-    uintptr_t mask;
-
-    // Save mask for allocated block, then round size 
-    // up to CACHE_QUANTUM boundary
-    mask = cache_allocator_mask_for_size(size);
-    size = cache_allocator_size_for_mask(mask);
-
-    // Search the free list for a sufficiently large free block.
-
-    for (blockP = &rgn->freeList; 
-         *blockP != NULL; 
-         blockP = &(**blockP).nextFree) 
-    {
-        cache_allocator_block *block = *blockP;
-        if (block->size < size) continue;  // not big enough
-
-        // block is now big enough. Allocate from it.
-
-        // Slice off unneeded fragment of block, if any, 
-        // and reconnect the free list around block.
-        if (block->size - size >= CACHE_QUANTUM) {
-            cache_allocator_block *leftover = 
-                (cache_allocator_block *)(size + (uintptr_t)block);
-            leftover->size = block->size - size;
-            leftover->state = (uintptr_t)-1;
-            leftover->nextFree = block->nextFree;
-            *blockP = leftover;
-        } else {
-            *blockP = block->nextFree;
-        }
-            
-        // block is now exactly the right size.
-
-        bzero(block, size);
-        block->size = mask;  // Cache->mask
-        block->state = 0;    // Cache->occupied
-
-        return block;
-    }
-
-    // No room in this region.
-    return NULL;
-}
-
-
-/***********************************************************************
-* cache_allocator_calloc
-* Custom allocator for large method caches (128+ slots)
-* The returned cache block already has cache->mask set. 
-* cache->occupied and the cache contents are zero.
-* Cache locks: cacheUpdateLock must be held by the caller
-**********************************************************************/
-static Cache cache_allocator_calloc(size_t size)
-{
-    cache_allocator_region *rgn;
-
-    mutex_assert_locked(&cacheUpdateLock);
-
-    for (rgn = cacheRegion; rgn != NULL; rgn = rgn->next) {
-        void *p = cache_region_calloc(rgn, size);
-        if (p) {
-            return (Cache)p;
-        }
-    }
-
-    // No regions or all regions full - make a region and try one more time
-    // In the unlikely case of a cache over 256KB, it will get its own region.
-    return (Cache)cache_region_calloc(cache_allocator_add_region(size), size);
-}
-
-
-/***********************************************************************
-* cache_allocator_region_for_block
-* Returns the cache allocator region that ptr points into, or NULL.
-**********************************************************************/
-static cache_allocator_region *cache_allocator_region_for_block(cache_allocator_block *block) 
-{
-    cache_allocator_region *rgn;
-    for (rgn = cacheRegion; rgn != NULL; rgn = rgn->next) {
-        if (block >= rgn->start  &&  block < rgn->end) return rgn;
-    }
-    return NULL;
-}
-
-
-/***********************************************************************
-* cache_allocator_is_block
-* If ptr is a live block from the cache allocator, return YES
-* If ptr is a block from some other allocator, return NO.
-* If ptr is a dead block from the cache allocator, result is undefined.
-* Cache locks: cacheUpdateLock must be held by the caller
-**********************************************************************/
-static BOOL cache_allocator_is_block(void *ptr)
-{
-    mutex_assert_locked(&cacheUpdateLock);
-    return (cache_allocator_region_for_block((cache_allocator_block *)ptr) != NULL);
-}
-
-/***********************************************************************
-* cache_allocator_free
-* Frees a block allocated by the cache allocator.
-* Cache locks: cacheUpdateLock must be held by the caller.
-**********************************************************************/
-static void cache_allocator_free(void *ptr)
-{
-    cache_allocator_block *dead = (cache_allocator_block *)ptr;
-    cache_allocator_block *cur;
-    cache_allocator_region *rgn;
-
-    mutex_assert_locked(&cacheUpdateLock);
-
-    if (! (rgn = cache_allocator_region_for_block(dead))) {
-        // free of non-pointer
-        _objc_inform("cache_allocator_free of non-pointer %p", dead);
-        return;
-    }    
-
-    dead->size = cache_allocator_size_for_mask(dead->size);
-    dead->state = (uintptr_t)-1;
-
-    if (!rgn->freeList  ||  rgn->freeList > dead) {
-        // dead block belongs at front of free list
-        dead->nextFree = rgn->freeList;
-        rgn->freeList = dead;
-        cache_allocator_coalesce(dead);
-        return;
-    }
-
-    // dead block belongs in the middle or end of free list
-    for (cur = rgn->freeList; cur != NULL; cur = cur->nextFree) {
-        cache_allocator_block *ahead = cur->nextFree;
-        
-        if (!ahead  ||  ahead > dead) {
-            // cur and ahead straddle dead, OR dead belongs at end of free list
-            cur->nextFree = dead;
-            dead->nextFree = ahead;
-            
-            // coalesce into dead first in case both succeed
-            cache_allocator_coalesce(dead);
-            cache_allocator_coalesce(cur);
-            return;
-        }
-    }
-
-    // uh-oh
-    _objc_inform("cache_allocator_free of non-pointer %p", ptr);
-}
-
-// defined(CACHE_ALLOCATOR)
-#endif
-
-/***********************************************************************
-* Cache instrumentation and debugging
-**********************************************************************/
-
-#ifdef OBJC_INSTRUMENTED
-enum {
-    CACHE_HISTOGRAM_SIZE	= 512
-};
-
-unsigned int	CacheHitHistogram [CACHE_HISTOGRAM_SIZE];
-unsigned int	CacheMissHistogram [CACHE_HISTOGRAM_SIZE];
+// DEBUG_TASK_THREADS
 #endif
 
 
-/***********************************************************************
-* _cache_print.
-**********************************************************************/
-static void _cache_print(Cache cache)
-{
-    uintptr_t index;
-    uintptr_t count;
-
-    count = cache->mask + 1;
-    for (index = 0; index < count; index += 1) {
-        cache_entry *entry = (cache_entry *)cache->buckets[index];
-        if (entry) {
-            if (entry->imp == _objc_msgForward_internal)
-                printf ("does not recognize: \n");
-            printf ("%s\n", sel_getName(entry->name));
-        }
-    }
-}
-
-
-/***********************************************************************
-* _class_printMethodCaches.
-**********************************************************************/
-void _class_printMethodCaches(Class cls)
-{
-    if (_cache_isEmpty(_class_getCache(cls))) {
-        printf("no instance-method cache for class %s\n", _class_getName(cls));
-    } else {
-        printf("instance-method cache for class %s:\n", _class_getName(cls));
-        _cache_print(_class_getCache(cls));
-    }
-
-    if (_cache_isEmpty(_class_getCache(((id)cls)->isa))) {
-        printf("no class-method cache for class %s\n", _class_getName(cls));
-    } else {
-        printf ("class-method cache for class %s:\n", _class_getName(cls));
-        _cache_print(_class_getCache(((id)cls)->isa));
-    }
-}
-
-
-#if 0
-#warning fixme
-
-
-/***********************************************************************
-* _class_printDuplicateCacheEntries.
-**********************************************************************/
-void _class_printDuplicateCacheEntries(BOOL detail)
-{
-    NXHashState state;
-    Class cls;
-    unsigned int duplicates;
-    unsigned int index1;
-    unsigned int index2;
-    unsigned int mask;
-    unsigned int count;
-    unsigned int isMeta;
-    Cache cache;
-
-
-    printf ("Checking for duplicate cache entries \n");
-
-    // Outermost loop - iterate over all classes
-    state = NXInitHashState (class_hash);
-    duplicates = 0;
-    while (NXNextHashState (class_hash, &state, (void **) &cls))
-    {
-        // Control loop - do given class' cache, then its isa's cache
-        for (isMeta = 0; isMeta <= 1; isMeta += 1)
-        {
-            // Select cache of interest and make sure it exists
-            cache = _class_getCache(isMeta ? ((id)cls)->isa : cls);
-            if (_cache_isEmpty(cache))
-                continue;
-
-            // Middle loop - check each entry in the given cache
-            mask  = cache->mask;
-            count = mask + 1;
-            for (index1 = 0; index1 < count; index1 += 1)
-            {
-                // Skip invalid entry
-                if (!cache->buckets[index1])
-                    continue;
-
-                // Inner loop - check that given entry matches no later entry
-                for (index2 = index1 + 1; index2 < count; index2 += 1)
-                {
-                    // Skip invalid entry
-                    if (!cache->buckets[index2])
-                        continue;
-
-                    // Check for duplication by method name comparison
-                    if (strcmp ((char *) cache->buckets[index1]->name),
-                                (char *) cache->buckets[index2]->name)) == 0)
-                    {
-                        if (detail)
-                            printf ("%s %s\n", _class_getName(cls), sel_getName(cache->buckets[index1]->name));
-                        duplicates += 1;
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    // Log the findings
-    printf ("duplicates = %d\n", duplicates);
-    printf ("total cache fills = %d\n", totalCacheFills);
-}
-
-
-/***********************************************************************
-* PrintCacheHeader.
-**********************************************************************/
-static void PrintCacheHeader(void)
-{
-#ifdef OBJC_INSTRUMENTED
-    printf ("Cache  Cache  Slots  Avg    Max   AvgS  MaxS  AvgS  MaxS  TotalD   AvgD  MaxD  TotalD   AvgD  MaxD  TotD  AvgD  MaxD\n");
-    printf ("Size   Count  Used   Used   Used  Hit   Hit   Miss  Miss  Hits     Prbs  Prbs  Misses   Prbs  Prbs  Flsh  Flsh  Flsh\n");
-    printf ("-----  -----  -----  -----  ----  ----  ----  ----  ----  -------  ----  ----  -------  ----  ----  ----  ----  ----\n");
-#else
-    printf ("Cache  Cache  Slots  Avg    Max   AvgS  MaxS  AvgS  MaxS\n");
-    printf ("Size   Count  Used   Used   Used  Hit   Hit   Miss  Miss\n");
-    printf ("-----  -----  -----  -----  ----  ----  ----  ----  ----\n");
-#endif
-}
-
-
-/***********************************************************************
-* PrintCacheInfo.
-**********************************************************************/
-static void PrintCacheInfo(unsigned int cacheSize,
-                           unsigned int cacheCount,
-                           unsigned int slotsUsed,
-                           float avgUsed, unsigned int maxUsed,
-                           float avgSHit, unsigned int maxSHit,
-                           float avgSMiss, unsigned int maxSMiss
-#ifdef OBJC_INSTRUMENTED
-                           , unsigned int totDHits,
-                           float avgDHit,
-                           unsigned int maxDHit,
-                           unsigned int totDMisses,
-                           float avgDMiss,
-                           unsigned int maxDMiss,
-                           unsigned int totDFlsh,
-                           float avgDFlsh,
-                           unsigned int maxDFlsh
-#endif
-                           )
-{
-#ifdef OBJC_INSTRUMENTED
-    printf ("%5u  %5u  %5u  %5.1f  %4u  %4.1f  %4u  %4.1f  %4u  %7u  %4.1f  %4u  %7u  %4.1f  %4u  %4u  %4.1f  %4u\n",
-#else
-            printf ("%5u  %5u  %5u  %5.1f  %4u  %4.1f  %4u  %4.1f  %4u\n",
-#endif
-                    cacheSize, cacheCount, slotsUsed, avgUsed, maxUsed, avgSHit, maxSHit, avgSMiss, maxSMiss
-#ifdef OBJC_INSTRUMENTED
-                    , totDHits, avgDHit, maxDHit, totDMisses, avgDMiss, maxDMiss, totDFlsh, avgDFlsh, maxDFlsh
-#endif
-                    );
-            
-}
-
-
-#ifdef OBJC_INSTRUMENTED
-/***********************************************************************
-* PrintCacheHistogram.  Show the non-zero entries from the specified
-* cache histogram.
-**********************************************************************/
-static void PrintCacheHistogram(char *title,
-                                unsigned int *firstEntry,
-                                unsigned int entryCount)
-{
-    unsigned int index;
-    unsigned int *thisEntry;
-
-    printf ("%s\n", title);
-    printf ("    Probes    Tally\n");
-    printf ("    ------    -----\n");
-    for (index = 0, thisEntry = firstEntry;
-         index < entryCount;
-         index += 1, thisEntry += 1)
-    {
-        if (*thisEntry == 0)
-            continue;
-
-        printf ("    %6d    %5d\n", index, *thisEntry);
-    }
-}
-#endif
-
-
-/***********************************************************************
-* _class_printMethodCacheStatistics.
-**********************************************************************/
-
-#define MAX_LOG2_SIZE   32
-#define MAX_CHAIN_SIZE  100
-
-void _class_printMethodCacheStatistics(void)
-{
-    unsigned int isMeta;
-    unsigned int index;
-    NXHashState state;
-    Class cls;
-    unsigned int totalChain;
-    unsigned int totalMissChain;
-    unsigned int maxChain;
-    unsigned int maxMissChain;
-    unsigned int classCount;
-    unsigned int negativeEntryCount;
-    unsigned int cacheExpandCount;
-    unsigned int cacheCountBySize[2][MAX_LOG2_SIZE]        = {{0}};
-    unsigned int totalEntriesBySize[2][MAX_LOG2_SIZE]      = {{0}};
-    unsigned int maxEntriesBySize[2][MAX_LOG2_SIZE]        = {{0}};
-    unsigned int totalChainBySize[2][MAX_LOG2_SIZE]        = {{0}};
-    unsigned int totalMissChainBySize[2][MAX_LOG2_SIZE]    = {{0}};
-    unsigned int totalMaxChainBySize[2][MAX_LOG2_SIZE]     = {{0}};
-    unsigned int totalMaxMissChainBySize[2][MAX_LOG2_SIZE] = {{0}};
-    unsigned int maxChainBySize[2][MAX_LOG2_SIZE]          = {{0}};
-    unsigned int maxMissChainBySize[2][MAX_LOG2_SIZE]      = {{0}};
-    unsigned int chainCount[MAX_CHAIN_SIZE]                = {0};
-    unsigned int missChainCount[MAX_CHAIN_SIZE]            = {0};
-#ifdef OBJC_INSTRUMENTED
-    unsigned int hitCountBySize[2][MAX_LOG2_SIZE]          = {{0}};
-    unsigned int hitProbesBySize[2][MAX_LOG2_SIZE]         = {{0}};
-    unsigned int maxHitProbesBySize[2][MAX_LOG2_SIZE]      = {{0}};
-    unsigned int missCountBySize[2][MAX_LOG2_SIZE]         = {{0}};
-    unsigned int missProbesBySize[2][MAX_LOG2_SIZE]        = {{0}};
-    unsigned int maxMissProbesBySize[2][MAX_LOG2_SIZE]     = {{0}};
-    unsigned int flushCountBySize[2][MAX_LOG2_SIZE]        = {{0}};
-    unsigned int flushedEntriesBySize[2][MAX_LOG2_SIZE]    = {{0}};
-    unsigned int maxFlushedEntriesBySize[2][MAX_LOG2_SIZE] = {{0}};
-#endif
-
-    printf ("Printing cache statistics\n");
-
-    // Outermost loop - iterate over all classes
-    state = NXInitHashState (class_hash);
-    classCount = 0;
-    negativeEntryCount = 0;
-    cacheExpandCount = 0;
-    while (NXNextHashState (class_hash, &state, (void **) &cls))
-    {
-        // Tally classes
-        classCount += 1;
-
-        // Control loop - do given class' cache, then its isa's cache
-        for (isMeta = 0; isMeta <= 1; isMeta += 1)
-        {
-            Cache cache;
-            unsigned int mask;
-            unsigned int log2Size;
-            unsigned int entryCount;
-
-            // Select cache of interest
-            cache = _class_getCache(isMeta ? ((id)cls)->isa : cls);
-
-            // Ignore empty cache... should we?
-            if (_cache_isEmpty(cache))
-                continue;
-
-            // Middle loop - do each entry in the given cache
-            mask = cache->mask;
-            entryCount = 0;
-            totalChain = 0;
-            totalMissChain = 0;
-            maxChain = 0;
-            maxMissChain = 0;
-            for (index = 0; index < mask + 1; index += 1)
-            {
-                cache_entry **buckets;
-                cache_entry *entry;
-                unsigned int hash;
-                unsigned int methodChain;
-                unsigned int methodMissChain;
-                unsigned int index2;
-
-                // If entry is invalid, the only item of
-                // interest is that future insert hashes
-                // to this entry can use it directly.
-                buckets = (cache_entry **)cache->buckets;
-                if (!buckets[index])
-                {
-                    missChainCount[0] += 1;
-                    continue;
-                }
-
-                entry = buckets[index];
-
-                // Tally valid entries
-                entryCount += 1;
-
-                // Tally "forward::" entries
-                if (entry->imp == _objc_msgForward_internal)
-                    negativeEntryCount += 1;
-
-                // Calculate search distance (chain length) for this method
-                // The chain may wrap around to the beginning of the table.
-                hash = CACHE_HASH(entry->name, mask);
-                if (index >= hash) methodChain = index - hash;
-                else methodChain = (mask+1) + index - hash;
-
-                // Tally chains of this length
-                if (methodChain < MAX_CHAIN_SIZE)
-                    chainCount[methodChain] += 1;
-
-                // Keep sum of all chain lengths
-                totalChain += methodChain;
-
-                // Record greatest chain length
-                if (methodChain > maxChain)
-                    maxChain = methodChain;
-
-                // Calculate search distance for miss that hashes here
-                index2 = index;
-                while (buckets[index2])
-                {
-                    index2 += 1;
-                    index2 &= mask;
-                }
-                methodMissChain = ((index2 - index) & mask);
-
-                // Tally miss chains of this length
-                if (methodMissChain < MAX_CHAIN_SIZE)
-                    missChainCount[methodMissChain] += 1;
-
-                // Keep sum of all miss chain lengths in this class
-                totalMissChain += methodMissChain;
-
-                // Record greatest miss chain length
-                if (methodMissChain > maxMissChain)
-                    maxMissChain = methodMissChain;
-            }
-
-            // Factor this cache into statistics about caches of the same
-            // type and size (all caches are a power of two in size)
-            log2Size = log2u (mask + 1);
-            cacheCountBySize[isMeta][log2Size] += 1;
-            totalEntriesBySize[isMeta][log2Size] += entryCount;
-            if (entryCount > maxEntriesBySize[isMeta][log2Size])
-                maxEntriesBySize[isMeta][log2Size] = entryCount;
-            totalChainBySize[isMeta][log2Size] += totalChain;
-            totalMissChainBySize[isMeta][log2Size] += totalMissChain;
-            totalMaxChainBySize[isMeta][log2Size] += maxChain;
-            totalMaxMissChainBySize[isMeta][log2Size] += maxMissChain;
-            if (maxChain > maxChainBySize[isMeta][log2Size])
-                maxChainBySize[isMeta][log2Size] = maxChain;
-            if (maxMissChain > maxMissChainBySize[isMeta][log2Size])
-                maxMissChainBySize[isMeta][log2Size] = maxMissChain;
-#ifdef OBJC_INSTRUMENTED
-            {
-                CacheInstrumentation *cacheData;
-
-                cacheData = CACHE_INSTRUMENTATION(cache);
-                hitCountBySize[isMeta][log2Size] += cacheData->hitCount;
-                hitProbesBySize[isMeta][log2Size] += cacheData->hitProbes;
-                if (cacheData->maxHitProbes > maxHitProbesBySize[isMeta][log2Size])
-                    maxHitProbesBySize[isMeta][log2Size] = cacheData->maxHitProbes;
-                missCountBySize[isMeta][log2Size] += cacheData->missCount;
-                missProbesBySize[isMeta][log2Size] += cacheData->missProbes;
-                if (cacheData->maxMissProbes > maxMissProbesBySize[isMeta][log2Size])
-                    maxMissProbesBySize[isMeta][log2Size] = cacheData->maxMissProbes;
-                flushCountBySize[isMeta][log2Size] += cacheData->flushCount;
-                flushedEntriesBySize[isMeta][log2Size] += cacheData->flushedEntries;
-                if (cacheData->maxFlushedEntries > maxFlushedEntriesBySize[isMeta][log2Size])
-                    maxFlushedEntriesBySize[isMeta][log2Size] = cacheData->maxFlushedEntries;
-            }
-#endif
-            // Caches start with a power of two number of entries, and grow by doubling, so
-            // we can calculate the number of times this cache has expanded
-            cacheExpandCount += log2Size - INIT_CACHE_SIZE_LOG2;
-        }
-    }
-
-    {
-        unsigned int cacheCountByType[2] = {0};
-        unsigned int totalCacheCount     = 0;
-        unsigned int totalEntries        = 0;
-        unsigned int maxEntries          = 0;
-        unsigned int totalSlots          = 0;
-#ifdef OBJC_INSTRUMENTED
-        unsigned int totalHitCount       = 0;
-        unsigned int totalHitProbes      = 0;
-        unsigned int maxHitProbes        = 0;
-        unsigned int totalMissCount      = 0;
-        unsigned int totalMissProbes     = 0;
-        unsigned int maxMissProbes       = 0;
-        unsigned int totalFlushCount     = 0;
-        unsigned int totalFlushedEntries = 0;
-        unsigned int maxFlushedEntries   = 0;
-#endif
-
-        totalChain = 0;
-        maxChain = 0;
-        totalMissChain = 0;
-        maxMissChain = 0;
-
-        // Sum information over all caches
-        for (isMeta = 0; isMeta <= 1; isMeta += 1)
-        {
-            for (index = 0; index < MAX_LOG2_SIZE; index += 1)
-            {
-                cacheCountByType[isMeta] += cacheCountBySize[isMeta][index];
-                totalEntries += totalEntriesBySize[isMeta][index];
-                totalSlots += cacheCountBySize[isMeta][index] * (1 << index);
-                totalChain += totalChainBySize[isMeta][index];
-                if (maxEntriesBySize[isMeta][index] > maxEntries)
-                    maxEntries = maxEntriesBySize[isMeta][index];
-                if (maxChainBySize[isMeta][index] > maxChain)
-                    maxChain   = maxChainBySize[isMeta][index];
-                totalMissChain += totalMissChainBySize[isMeta][index];
-                if (maxMissChainBySize[isMeta][index] > maxMissChain)
-                    maxMissChain = maxMissChainBySize[isMeta][index];
-#ifdef OBJC_INSTRUMENTED
-                totalHitCount += hitCountBySize[isMeta][index];
-                totalHitProbes += hitProbesBySize[isMeta][index];
-                if (maxHitProbesBySize[isMeta][index] > maxHitProbes)
-                    maxHitProbes = maxHitProbesBySize[isMeta][index];
-                totalMissCount += missCountBySize[isMeta][index];
-                totalMissProbes += missProbesBySize[isMeta][index];
-                if (maxMissProbesBySize[isMeta][index] > maxMissProbes)
-                    maxMissProbes = maxMissProbesBySize[isMeta][index];
-                totalFlushCount += flushCountBySize[isMeta][index];
-                totalFlushedEntries += flushedEntriesBySize[isMeta][index];
-                if (maxFlushedEntriesBySize[isMeta][index] > maxFlushedEntries)
-                    maxFlushedEntries = maxFlushedEntriesBySize[isMeta][index];
-#endif
-            }
-
-            totalCacheCount += cacheCountByType[isMeta];
-        }
-
-        // Log our findings
-        printf ("There are %u classes\n", classCount);
-
-        for (isMeta = 0; isMeta <= 1; isMeta += 1)
-        {
-            // Number of this type of class
-            printf    ("\nThere are %u %s-method caches, broken down by size (slot count):\n",
-                       cacheCountByType[isMeta],
-                       isMeta ? "class" : "instance");
-
-            // Print header
-            PrintCacheHeader ();
-
-            // Keep format consistent even if there are caches of this kind
-            if (cacheCountByType[isMeta] == 0)
-            {
-                printf ("(none)\n");
-                continue;
-            }
-
-            // Usage information by cache size
-            for (index = 0; index < MAX_LOG2_SIZE; index += 1)
-            {
-                unsigned int cacheCount;
-                unsigned int cacheSlotCount;
-                unsigned int cacheEntryCount;
-
-                // Get number of caches of this type and size
-                cacheCount = cacheCountBySize[isMeta][index];
-                if (cacheCount == 0)
-                    continue;
-
-                // Get the cache slot count and the total number of valid entries
-                cacheSlotCount  = (1 << index);
-                cacheEntryCount = totalEntriesBySize[isMeta][index];
-
-                // Give the analysis
-                PrintCacheInfo (cacheSlotCount,
-                                cacheCount,
-                                cacheEntryCount,
-                                (float) cacheEntryCount / (float) cacheCount,
-                                maxEntriesBySize[isMeta][index],
-                                (float) totalChainBySize[isMeta][index] / (float) cacheEntryCount,
-                                maxChainBySize[isMeta][index],
-                                (float) totalMissChainBySize[isMeta][index] / (float) (cacheCount * cacheSlotCount),
-                                maxMissChainBySize[isMeta][index]
-#ifdef OBJC_INSTRUMENTED
-                                , hitCountBySize[isMeta][index],
-                                hitCountBySize[isMeta][index] ?
-                                (float) hitProbesBySize[isMeta][index] / (float) hitCountBySize[isMeta][index] : 0.0,
-                                maxHitProbesBySize[isMeta][index],
-                                missCountBySize[isMeta][index],
-                                missCountBySize[isMeta][index] ?
-                                (float) missProbesBySize[isMeta][index] / (float) missCountBySize[isMeta][index] : 0.0,
-                                maxMissProbesBySize[isMeta][index],
-                                flushCountBySize[isMeta][index],
-                                flushCountBySize[isMeta][index] ?
-                                (float) flushedEntriesBySize[isMeta][index] / (float) flushCountBySize[isMeta][index] : 0.0,
-                                maxFlushedEntriesBySize[isMeta][index]
-#endif
-                                );
-            }
-        }
-
-        // Give overall numbers
-        printf ("\nCumulative:\n");
-        PrintCacheHeader ();
-        PrintCacheInfo (totalSlots,
-                        totalCacheCount,
-                        totalEntries,
-                        (float) totalEntries / (float) totalCacheCount,
-                        maxEntries,
-                        (float) totalChain / (float) totalEntries,
-                        maxChain,
-                        (float) totalMissChain / (float) totalSlots,
-                        maxMissChain
-#ifdef OBJC_INSTRUMENTED
-                        , totalHitCount,
-                        totalHitCount ?
-                        (float) totalHitProbes / (float) totalHitCount : 0.0,
-                        maxHitProbes,
-                        totalMissCount,
-                        totalMissCount ?
-                        (float) totalMissProbes / (float) totalMissCount : 0.0,
-                        maxMissProbes,
-                        totalFlushCount,
-                        totalFlushCount ?
-                        (float) totalFlushedEntries / (float) totalFlushCount : 0.0,
-                        maxFlushedEntries
-#endif
-                        );
-
-        printf ("\nNumber of \"forward::\" entries: %d\n", negativeEntryCount);
-        printf ("Number of cache expansions: %d\n", cacheExpandCount);
-#ifdef OBJC_INSTRUMENTED
-        printf ("flush_caches:   total calls  total visits  average visits  max visits  total classes  visits/class\n");
-        printf ("                -----------  ------------  --------------  ----------  -------------  -------------\n");
-        printf ("  linear        %11u  %12u  %14.1f  %10u  %13u  %12.2f\n",
-                LinearFlushCachesCount,
-                LinearFlushCachesVisitedCount,
-                LinearFlushCachesCount ?
-                (float) LinearFlushCachesVisitedCount / (float) LinearFlushCachesCount : 0.0,
-                MaxLinearFlushCachesVisitedCount,
-                LinearFlushCachesVisitedCount,
-                1.0);
-        printf ("  nonlinear     %11u  %12u  %14.1f  %10u  %13u  %12.2f\n",
-                NonlinearFlushCachesCount,
-                NonlinearFlushCachesVisitedCount,
-                NonlinearFlushCachesCount ?
-                (float) NonlinearFlushCachesVisitedCount / (float) NonlinearFlushCachesCount : 0.0,
-                MaxNonlinearFlushCachesVisitedCount,
-                NonlinearFlushCachesClassCount,
-                NonlinearFlushCachesClassCount ?
-                (float) NonlinearFlushCachesVisitedCount / (float) NonlinearFlushCachesClassCount : 0.0);
-        printf ("  ideal         %11u  %12u  %14.1f  %10u  %13u  %12.2f\n",
-                LinearFlushCachesCount + NonlinearFlushCachesCount,
-                IdealFlushCachesCount,
-                LinearFlushCachesCount + NonlinearFlushCachesCount ?
-                (float) IdealFlushCachesCount / (float) (LinearFlushCachesCount + NonlinearFlushCachesCount) : 0.0,
-                MaxIdealFlushCachesCount,
-                LinearFlushCachesVisitedCount + NonlinearFlushCachesClassCount,
-                LinearFlushCachesVisitedCount + NonlinearFlushCachesClassCount ?
-                (float) IdealFlushCachesCount / (float) (LinearFlushCachesVisitedCount + NonlinearFlushCachesClassCount) : 0.0);
-
-        PrintCacheHistogram ("\nCache hit histogram:",  &CacheHitHistogram[0],  CACHE_HISTOGRAM_SIZE);
-        PrintCacheHistogram ("\nCache miss histogram:", &CacheMissHistogram[0], CACHE_HISTOGRAM_SIZE);
-#endif
-
-#if 0
-        printf ("\nLookup chains:");
-        for (index = 0; index < MAX_CHAIN_SIZE; index += 1)
-        {
-            if (chainCount[index] != 0)
-                printf ("  %u:%u", index, chainCount[index]);
-        }
-
-        printf ("\nMiss chains:");
-        for (index = 0; index < MAX_CHAIN_SIZE; index += 1)
-        {
-            if (missChainCount[index] != 0)
-                printf ("  %u:%u", index, missChainCount[index]);
-        }
-
-        printf ("\nTotal memory usage for cache data structures: %lu bytes\n",
-                totalCacheCount * (sizeof(struct objc_cache) - sizeof(cache_entry *)) +
-                totalSlots * sizeof(cache_entry *) +
-                negativeEntryCount * sizeof(cache_entry));
-#endif
-    }
-}
-
+// __OBJC2__
 #endif

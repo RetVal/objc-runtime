@@ -21,11 +21,12 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
+#include "objc-private.h"
+
 #include <malloc/malloc.h>
 #include <assert.h>
 #include "runtime.h"
 #include "objc-os.h"
-#include "objc-private.h"
 #include "message.h"
 #if SUPPORT_GC
 #include "auto_zone.h"
@@ -84,7 +85,7 @@ static void _initialize_gc() {
 // grow the buffer by one page
 static bool _grow_list(external_ref_list *list) {
     auto_memory_type_t memory_type = (is_strong(list) ? AUTO_MEMORY_ALL_POINTERS : AUTO_MEMORY_ALL_WEAK_POINTERS);
-    size_t new_size = list->_size + PAGE_SIZE / sizeof(void *);
+    size_t new_size = list->_size + PAGE_MAX_SIZE / sizeof(void *);
     // auto_realloc() has been enhanced to handle strong and weak memory.
     void **new_list = (void **)(list->_buffer ? malloc_zone_realloc(gc_zone, list->_buffer, new_size * sizeof(void *)) : auto_zone_allocate_object(gc_zone, new_size * sizeof(void *), memory_type, false, false));
     if (!new_list) _objc_fatal("unable to allocate, size = %ld\n", new_size);
@@ -122,7 +123,6 @@ inline static external_ref_list *_list_for_type(objc_xref_type_t ref_type) {
 
 
 // create a GC external reference
-OBJC_EXTERN
 objc_xref_t _object_addExternalReference_gc(id obj, objc_xref_type_t ref_type) {
     _initialize_gc();
     __block size_t index;
@@ -149,7 +149,7 @@ objc_xref_t _object_addExternalReference_gc(id obj, objc_xref_type_t ref_type) {
     return xref;
 }
 
-OBJC_EXTERN
+
 id _object_readExternalReference_gc(objc_xref_t ref) {
     _initialize_gc();
     __block id result;
@@ -176,7 +176,7 @@ id _object_readExternalReference_gc(objc_xref_t ref) {
     return result;
 }
 
-OBJC_EXTERN
+
 void _object_removeExternalReference_gc(objc_xref_t ref) {
     _initialize_gc();
     objc_xref_type_t ref_type = decode_type(ref);
@@ -207,11 +207,12 @@ void _object_removeExternalReference_gc(objc_xref_t ref) {
     }
 }
 
+
 // SUPPORT_GC
 #endif
 
-OBJC_EXTERN
-objc_xref_t _object_addExternalReference_rr(id obj, objc_xref_type_t ref_type) {
+
+objc_xref_t _object_addExternalReference_non_gc(id obj, objc_xref_type_t ref_type) {
     switch (ref_type) {
         case OBJC_XREF_STRONG:
             ((id(*)(id, SEL))objc_msgSend)(obj, SEL_retain);
@@ -225,14 +226,14 @@ objc_xref_t _object_addExternalReference_rr(id obj, objc_xref_type_t ref_type) {
     return encode_pointer_and_type(obj, ref_type);
 }
 
-OBJC_EXTERN
-id _object_readExternalReference_rr(objc_xref_t ref) {
+
+id _object_readExternalReference_non_gc(objc_xref_t ref) {
     id obj = decode_pointer(ref);
     return obj;
 }
 
-OBJC_EXTERN
-void _object_removeExternalReference_rr(objc_xref_t ref) {
+
+void _object_removeExternalReference_non_gc(objc_xref_t ref) {
     id obj = decode_pointer(ref);
     objc_xref_type_t ref_type = decode_type(ref);
     switch (ref_type) {
@@ -247,38 +248,36 @@ void _object_removeExternalReference_rr(objc_xref_t ref) {
     }
 }
 
-objc_xref_t _object_addExternalReference(id obj, objc_xref_t type) {
-#if SUPPORT_GC
-    if (UseGC) 
-        return _object_addExternalReference_gc(obj, type);
-    else
-#endif
-        return _object_addExternalReference_rr(obj, type);
-}
-
-id _object_readExternalReference(objc_xref_t ref) {
-#if SUPPORT_GC
-    if (UseGC) 
-        return _object_readExternalReference_gc(ref);
-    else
-#endif
-        return _object_readExternalReference_rr(ref);
-}
-
-void _object_removeExternalReference(objc_xref_t ref) {
-#if SUPPORT_GC
-    if (UseGC)
-        _object_removeExternalReference_gc(ref);
-    else
-#endif
-        _object_removeExternalReference_rr(ref);
-}
 
 uintptr_t _object_getExternalHash(id object) {
-#if SUPPORT_GC
-    if (UseCompaction)
-        return auto_zone_get_associative_hash(gc_zone, object);
-    else
-#endif
-        return (uintptr_t)object;
+    return (uintptr_t)object;
 }
+
+
+#if SUPPORT_GC
+
+// These functions are resolver functions in objc-auto.mm.
+
+#else
+
+objc_xref_t 
+_object_addExternalReference(id obj, objc_xref_t type) 
+{
+    return _object_addExternalReference_non_gc(obj, type);
+}
+
+
+id 
+_object_readExternalReference(objc_xref_t ref) 
+{
+    return _object_readExternalReference_non_gc(ref);
+}
+
+
+void 
+_object_removeExternalReference(objc_xref_t ref) 
+{
+    _object_removeExternalReference_non_gc(ref);
+}
+
+#endif

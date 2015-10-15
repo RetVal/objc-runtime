@@ -191,11 +191,11 @@ using namespace objc_references_support;
 // lazily allocates it.
 
 class AssociationsManager {
-    static OSSpinLock _lock;
+    static spinlock_t _lock;
     static AssociationsHashMap *_map;               // associative references:  object pointer -> PtrPtrHashMap.
 public:
-    AssociationsManager()   { OSSpinLockLock(&_lock); }
-    ~AssociationsManager()  { OSSpinLockUnlock(&_lock); }
+    AssociationsManager()   { spinlock_lock(&_lock); }
+    ~AssociationsManager()  { spinlock_unlock(&_lock); }
     
     AssociationsHashMap &associations() {
         if (_map == NULL)
@@ -204,7 +204,7 @@ public:
     }
 };
 
-OSSpinLock AssociationsManager::_lock = OS_SPINLOCK_INIT;
+spinlock_t AssociationsManager::_lock = SPINLOCK_INITIALIZER;
 AssociationsHashMap *AssociationsManager::_map = NULL;
 
 // expanded policy bits.
@@ -291,7 +291,7 @@ void _object_set_associative_reference(id object, void *key, id value, uintptr_t
                 ObjectAssociationMap *refs = new ObjectAssociationMap;
                 associations[disguised_object] = refs;
                 (*refs)[key] = ObjcAssociation(policy, new_value);
-                _class_setInstancesHaveAssociatedObjects(_object_getClass(object));
+                object->setHasAssociatedObjects();
             }
         } else {
             // setting the association to nil breaks the association.

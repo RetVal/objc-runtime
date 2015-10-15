@@ -39,7 +39,6 @@
 #define OBJC_IMAGE_SUPPORTS_GC (1<<1)
 #define OBJC_IMAGE_REQUIRES_GC (1<<2)
 #define OBJC_IMAGE_OPTIMIZED_BY_DYLD (1<<3)
-#define OBJC_IMAGE_SUPPORTS_COMPACTION (1<<4)
 
 bool debug;
 bool verbose;
@@ -130,7 +129,7 @@ uint32_t iiflags(struct imageInfo *ii, size_t size, bool needsFlip) {
         ii->flags = OSSwapInt32(ii->flags);
     }
     if (debug) printf("flags->%x, nitems %lu\n", ii->flags, size/sizeof(struct imageInfo));
-    uint32_t support_mask = (OBJC_IMAGE_SUPPORTS_GC | OBJC_IMAGE_SUPPORTS_COMPACTION);
+    uint32_t support_mask = OBJC_IMAGE_SUPPORTS_GC;
     uint32_t flags = ii->flags;
     if (patch && (flags & support_mask) != support_mask) {
         //printf("will patch %s at offset %p\n", FileName, (char*)(&ii->flags) - FileBase);

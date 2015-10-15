@@ -35,9 +35,10 @@
 #include <stdarg.h>
 #include <objc/objc-runtime.h>
 
-#if ! __OBJC2__
+#if __OBJC__  &&  !__OBJC2__
 
 __OSX_AVAILABLE_STARTING(__MAC_10_0, __IPHONE_NA)
+OBJC_ROOT_CLASS
 @interface Object
 {
 	Class isa;	/* A pointer to the instance's class structure */

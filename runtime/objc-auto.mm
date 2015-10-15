@@ -21,6 +21,8 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
+#include "objc-private.h"
+
 #include "objc-config.h"
 #include "objc-auto.h"
 #include "objc-accessors.h"
@@ -53,19 +55,15 @@
 #endif
 
 
-static auto_zone_t *gc_zone_init(BOOL wantsCompaction);
+static auto_zone_t *gc_zone_init(void);
 static void gc_block_init(void);
 static void registeredClassTableInit(void);
 static BOOL objc_isRegisteredClass(Class candidate);
 
-BOOL UseGC = NO;
-BOOL UseCompaction = NO;
+int8_t UseGC = -1;
 static BOOL WantsMainThreadFinalization = NO;
 
-auto_zone_t *gc_zone = NULL;
-
-// Pointer magic to make dyld happy. See notes in objc-private.h
-id (*objc_assign_ivar_internal)(id, id, ptrdiff_t) = objc_assign_ivar;
+auto_zone_t *gc_zone = nil;
 
 
 /* Method prototypes */
@@ -123,7 +121,7 @@ void objc_set_collection_ratio(size_t ratio) {  // old naming
 void objc_finalizeOnMainThread(Class cls) {
     if (UseGC) {
         WantsMainThreadFinalization = YES;
-        _class_setFinalizeOnMainThread(cls);
+        cls->setShouldFinalizeOnMainThread();
     }
 }
 
@@ -273,7 +271,7 @@ id objc_assign_global_gc(id value, id *slot) {
     // use explicit root registration.
     if (value && auto_zone_is_valid_pointer(gc_zone, value)) {
         if (auto_zone_is_finalized(gc_zone, value)) {
-            _objc_inform("GC: storing an already collected object %p into global memory at %p, break on objc_assign_global_error to debug\n", value, slot);
+            _objc_inform("GC: storing an already collected object %p into global memory at %p, break on objc_assign_global_error to debug\n", (void*)value, slot);
             objc_assign_global_error(value, slot);
         }
         auto_zone_add_root(gc_zone, slot, value);
@@ -302,7 +300,7 @@ id objc_assign_ivar_gc(id value, id base, ptrdiff_t offset)
 
     if (value) {
         if (!auto_zone_set_write_barrier(gc_zone, (char *)base + offset, value)) {
-            _objc_inform("GC: %p + %tu isn't in the auto_zone, break on objc_assign_ivar_error to debug.\n", base, offset);
+            _objc_inform("GC: %p + %tu isn't in the auto_zone, break on objc_assign_ivar_error to debug.\n", (void*)base, offset);
             objc_assign_ivar_error(base, offset);
         }
     }
@@ -329,151 +327,10 @@ id objc_assign_ivar_non_gc(id value, id base, ptrdiff_t offset) {
     return (*slot = value);
 }
 
+
 /***********************************************************************
-* Write barrier exports
-* Called by pretty much all GC-supporting code.
+* Non-trivial write barriers
 **********************************************************************/
-
-id objc_assign_strongCast(id value, id *dest) 
-{
-    if (UseGC) {
-        return objc_assign_strongCast_gc(value, dest);
-    } else {
-        return (*dest = value);
-    }
-}
-
-id objc_assign_global(id value, id *dest) 
-{
-    if (UseGC) {
-        return objc_assign_global_gc(value, dest);
-    } else {
-        return (*dest = value);
-    }
-}
-
-id objc_assign_threadlocal(id value, id *dest) 
-{
-    if (UseGC) {
-        return objc_assign_threadlocal_gc(value, dest);
-    } else {
-        return (*dest = value);
-    }
-}
-
-id objc_assign_ivar(id value, id dest, ptrdiff_t offset) 
-{
-    if (UseGC) {
-        return objc_assign_ivar_gc(value, dest, offset);
-    } else {
-        id *slot = (id*) ((char *)dest + offset);
-        return (*slot = value);
-    }
-}
-
-#if __LP64__
-    #define LC_SEGMENT_COMMAND              LC_SEGMENT_64
-    #define LC_ROUTINES_COMMAND             LC_ROUTINES_64
-    typedef struct mach_header_64           macho_header;
-    typedef struct section_64               macho_section;
-    typedef struct nlist_64                 macho_nlist;
-    typedef struct segment_command_64       macho_segment_command;
-#else
-    #define LC_SEGMENT_COMMAND              LC_SEGMENT
-    #define LC_ROUTINES_COMMAND             LC_ROUTINES
-    typedef struct mach_header              macho_header;
-    typedef struct section                  macho_section;
-    typedef struct nlist                    macho_nlist;
-    typedef struct segment_command          macho_segment_command;
-#endif
-
-void _objc_update_stubs_in_mach_header(const struct mach_header* mh, uint32_t symbol_count, const char *symbols[], void *functions[]) {
-    uint32_t cmd_index, cmd_count = mh->ncmds;
-    intptr_t slide = 0;
-    const struct load_command* const cmds = (struct load_command*)((char*)mh + sizeof(macho_header));
-    const struct load_command* cmd;
-    const uint8_t *linkEditBase = NULL;
-    const macho_nlist *symbolTable = NULL;
-    uint32_t symbolTableCount = 0;
-    const char *stringTable = NULL;
-    uint32_t stringTableSize = 0;
-    const uint32_t *indirectSymbolTable = NULL;
-    uint32_t indirectSymbolTableCount = 0;
-
-    // first pass at load commands gets linkEditBase
-    for (cmd = cmds, cmd_index = 0; cmd_index < cmd_count; ++cmd_index) {
-        if ( cmd->cmd == LC_SEGMENT_COMMAND ) {
-            const macho_segment_command* seg = (macho_segment_command*)cmd;
-            if ( strcmp(seg->segname,"__TEXT") == 0 ) 
-                slide = (uintptr_t)mh - seg->vmaddr;
-            else if ( strcmp(seg->segname,"__LINKEDIT") == 0 ) 
-                linkEditBase = (uint8_t*)(seg->vmaddr + slide - seg->fileoff);
-        }
-        cmd = (const struct load_command*)(((char*)cmd)+cmd->cmdsize);
-    }
-
-    for (cmd = cmds, cmd_index = 0; cmd_index < cmd_count; ++cmd_index) {
-        switch ( cmd->cmd ) {
-        case LC_SYMTAB:
-            {
-                const struct symtab_command* symtab = (struct symtab_command*)cmd;
-                symbolTableCount = symtab->nsyms;
-                symbolTable = (macho_nlist*)(&linkEditBase[symtab->symoff]);
-                stringTableSize = symtab->strsize;
-                stringTable = (const char*)&linkEditBase[symtab->stroff];
-            }
-            break;
-        case LC_DYSYMTAB:
-            {
-                const struct dysymtab_command* dsymtab = (struct dysymtab_command*)cmd;
-                indirectSymbolTableCount = dsymtab->nindirectsyms;
-                indirectSymbolTable = (uint32_t*)(&linkEditBase[dsymtab->indirectsymoff]);
-            }
-            break;
-        }
-        cmd = (const struct load_command*)(((char*)cmd)+cmd->cmdsize);
-    }
-    
-    // walk sections to find one with this lazy pointer
-    for (cmd = cmds, cmd_index = 0; cmd_index < cmd_count; ++cmd_index) {
-        if (cmd->cmd == LC_SEGMENT_COMMAND) {
-            const macho_segment_command* seg = (macho_segment_command*)cmd;
-            const macho_section* const sectionsStart = (macho_section*)((char*)seg + sizeof(macho_segment_command));
-            const macho_section* const sectionsEnd = &sectionsStart[seg->nsects];
-            const macho_section* sect;
-            for (sect = sectionsStart; sect < sectionsEnd; ++sect) {
-                const uint8_t type = sect->flags & SECTION_TYPE;
-                if (type == S_LAZY_DYLIB_SYMBOL_POINTERS || type == S_LAZY_SYMBOL_POINTERS) { // S_LAZY_DYLIB_SYMBOL_POINTERS
-                    uint32_t pointer_index, pointer_count = (uint32_t)(sect->size / sizeof(uintptr_t));
-                    uintptr_t* const symbolPointers = (uintptr_t*)(sect->addr + slide);
-                    for (pointer_index = 0; pointer_index < pointer_count; ++pointer_index) {
-                        const uint32_t indirectTableOffset = sect->reserved1;
-                        if ((indirectTableOffset + pointer_index) < indirectSymbolTableCount) { 
-                            uint32_t symbolIndex = indirectSymbolTable[indirectTableOffset + pointer_index];
-                            // if symbolIndex is INDIRECT_SYMBOL_LOCAL or INDIRECT_SYMBOL_LOCAL|INDIRECT_SYMBOL_ABS, then it will
-                            // by definition be >= symbolTableCount.
-                            if (symbolIndex < symbolTableCount) {
-                                // found symbol for this lazy pointer, now lookup address
-                                uint32_t stringTableOffset = symbolTable[symbolIndex].n_un.n_strx;
-                                if (stringTableOffset < stringTableSize) {
-                                    const char* symbolName = &stringTable[stringTableOffset];
-                                    uint32_t i;
-                                    for (i = 0; i < symbol_count; ++i) {
-                                        if (strcmp(symbols[i], symbolName) == 0) {
-                                            symbolPointers[pointer_index] = (uintptr_t)functions[i];
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        cmd = (const struct load_command*)(((char*)cmd)+cmd->cmdsize);
-    }
-}
 
 void *objc_memmove_collectable(void *dst, const void *src, size_t size)
 {
@@ -544,7 +401,7 @@ BOOL objc_atomicCompareAndSwapInstanceVariableBarrier(id predicate, id replaceme
 id objc_read_weak_gc(id *location) {
     id result = *location;
     if (result) {
-        result = auto_read_weak_reference(gc_zone, (void **)location);
+        result = (id)auto_read_weak_reference(gc_zone, (void **)location);
     }
     return result;
 }
@@ -553,16 +410,8 @@ id objc_read_weak_non_gc(id *location) {
     return *location;
 }
 
-id objc_read_weak(id *location) {
-    id result = *location;
-    if (UseGC && result) {
-        result = auto_read_weak_reference(gc_zone, (void **)location);
-    }
-    return result;
-}
-
 id objc_assign_weak_gc(id value, id *location) {
-    auto_assign_weak_reference(gc_zone, value, (const void **)location, NULL);
+    auto_assign_weak_reference(gc_zone, value, (const void **)location, nil);
     return value;
 }
 
@@ -570,19 +419,10 @@ id objc_assign_weak_non_gc(id value, id *location) {
     return (*location = value);
 }
 
-id objc_assign_weak(id value, id *location) {
-    if (UseGC) {
-        auto_assign_weak_reference(gc_zone, value, (const void **)location, NULL);
-    }
-    else {
-        *location = value;
-    }
-    return value;
-}
 
 void gc_fixup_weakreferences(id newObject, id oldObject) {
     // fix up weak references if any.
-    const unsigned char *weakLayout = (const unsigned char *)class_getWeakIvarLayout(_object_getClass(newObject));
+    const unsigned char *weakLayout = (const unsigned char *)class_getWeakIvarLayout(newObject->ISA());
     if (weakLayout) {
         void **newPtr = (void **)newObject, **oldPtr = (void **)oldObject;
         unsigned char byte;
@@ -591,20 +431,51 @@ void gc_fixup_weakreferences(id newObject, id oldObject) {
             unsigned weaks = (byte & 0x0F);
             newPtr += skips, oldPtr += skips;
             while (weaks--) {
-                *newPtr = NULL;
-                auto_assign_weak_reference(gc_zone, auto_read_weak_reference(gc_zone, oldPtr), (const void **)newPtr, NULL);
+                *newPtr = nil;
+                auto_assign_weak_reference(gc_zone, auto_read_weak_reference(gc_zone, oldPtr), (const void **)newPtr, nil);
                 ++newPtr, ++oldPtr;
             }
         }
     }
 }
 
+
+/***********************************************************************
+* dyld resolver functions for basic GC write barriers
+* dyld calls the resolver function to bind the symbol. 
+* We return the GC or non-GC variant as appropriate.
+**********************************************************************/
+
+#define GC_RESOLVER(name)                                       \
+    OBJC_EXPORT void *name##_resolver(void) __asm__("_" #name); \
+    void *name##_resolver(void)                                 \
+    {                                                           \
+        __asm__(".symbol_resolver _" #name);                    \
+        if (UseGC) return (void*)name##_gc;                     \
+        else return (void*)name##_non_gc;                       \
+    }
+
+GC_RESOLVER(objc_assign_ivar)
+GC_RESOLVER(objc_assign_strongCast)
+GC_RESOLVER(objc_assign_global)
+GC_RESOLVER(objc_assign_threadlocal)
+GC_RESOLVER(objc_read_weak)
+GC_RESOLVER(objc_assign_weak)
+GC_RESOLVER(objc_getProperty)
+GC_RESOLVER(objc_setProperty)
+GC_RESOLVER(objc_getAssociatedObject)
+GC_RESOLVER(objc_setAssociatedObject)
+GC_RESOLVER(_object_addExternalReference)
+GC_RESOLVER(_object_readExternalReference)
+GC_RESOLVER(_object_removeExternalReference)
+
+
 /***********************************************************************
 * Testing tools
 * Used to isolate resurrection of garbage objects during finalization.
 **********************************************************************/
 BOOL objc_is_finalized(void *ptr) {
-    if (ptr != NULL && UseGC) {
+    if (ptr != nil && UseGC) {
         return auto_zone_is_finalized(gc_zone, ptr);
     }
     return NO;
@@ -635,7 +506,7 @@ static void finalizeOneObject(void *obj, void *ignored) {
     id object = (id)obj;
     finalizing_object = obj;
 
-    Class cls = object_getClass(obj);
+    Class cls = object->ISA();
     CRSetCrashLogMessage2(class_getName(cls));
 
     /// call -finalize method.
@@ -643,24 +514,24 @@ static void finalizeOneObject(void *obj, void *ignored) {
 
     // Call C++ destructors. 
     // This would be objc_destructInstance() but for performance.
-    if (_class_hasCxxStructors(cls)) {
+    if (cls->hasCxxDtor()) {
         object_cxxDestruct(object);
     }
 
-    finalizing_object = NULL;
-    CRSetCrashLogMessage2(NULL);
+    finalizing_object = nil;
+    CRSetCrashLogMessage2(nil);
 }
 
 // finalize object only if it is a main-thread-only object.
 // Called only from the main thread.
 static void finalizeOneMainThreadOnlyObject(void *obj, void *arg) {
     id object = (id)obj;
-    Class cls = _object_getClass(object);
-    if (cls == NULL) {
-        _objc_fatal("object with NULL ISA passed to finalizeOneMainThreadOnlyObject:  %p\n", obj);
+    Class cls = object->ISA();
+    if (cls == nil) {
+        _objc_fatal("object with nil ISA passed to finalizeOneMainThreadOnlyObject:  %p\n", obj);
     }
-    if (_class_shouldFinalizeOnMainThread(cls)) {
-        finalizeOneObject(obj, NULL);
+    if (cls->shouldFinalizeOnMainThread()) {
+        finalizeOneObject(obj, nil);
     }
 }
 
@@ -669,13 +540,13 @@ static void finalizeOneMainThreadOnlyObject(void *obj, void *arg) {
 // Important: if a main-thread-only object is passed, return that fact in the needsMain argument
 static void finalizeOneAnywhereObject(void *obj, void *needsMain) {
     id object = (id)obj;
-    Class cls = _object_getClass(object);
-    bool *needsMainThreadWork = needsMain;
-    if (cls == NULL) {
-        _objc_fatal("object with NULL ISA passed to finalizeOneAnywhereObject:  %p\n", obj);
+    Class cls = object->ISA();
+    bool *needsMainThreadWork = (bool *)needsMain;
+    if (cls == nil) {
+        _objc_fatal("object with nil ISA passed to finalizeOneAnywhereObject:  %p\n", obj);
     }
-    if (!_class_shouldFinalizeOnMainThread(cls)) {
-        finalizeOneObject(obj, NULL);
+    if (!cls->shouldFinalizeOnMainThread()) {
+        finalizeOneObject(obj, nil);
     }
     else {
         *needsMainThreadWork = true;
@@ -747,7 +618,7 @@ static void batchFinalizeOnMainThread() {
         pthread_cond_broadcast(&MainThreadWorkQ.condition);
         MainThreadWorkQ.head = bfb->next;
     }
-    MainThreadWorkQ.tail = NULL;
+    MainThreadWorkQ.tail = nil;
     pthread_mutex_unlock(&MainThreadWorkQ.mutex);
 }
 
@@ -777,7 +648,7 @@ static void batchFinalizeOnTwoThreads(auto_zone_t *zone,
     bfb.cursor_size = cursor_size;
     bfb.started = NO;
     bfb.finished = NO;
-    bfb.next = NULL;
+    bfb.next = nil;
     pthread_mutex_lock(&MainThreadWorkQ.mutex);
     if (MainThreadWorkQ.tail) {
     
@@ -839,7 +710,7 @@ static void BatchInvalidate(auto_zone_t *zone,
 // object with information about the resurrection, such as a stack crawl, etc.
 
 static Class _NSResurrectedObjectClass;
-static NXMapTable *_NSResurrectedObjectMap = NULL;
+static NXMapTable *_NSResurrectedObjectMap = nil;
 static pthread_mutex_t _NSResurrectedObjectLock = PTHREAD_MUTEX_INITIALIZER;
 
 static Class resurrectedObjectOriginalClass(id object) {
@@ -853,7 +724,7 @@ static Class resurrectedObjectOriginalClass(id object) {
 static id _NSResurrectedObject_classMethod(id self, SEL selector) { return self; }
 
 static id _NSResurrectedObject_instanceMethod(id self, SEL name) {
-    _objc_inform("**resurrected** object %p of class %s being sent message '%s'\n", self, class_getName(resurrectedObjectOriginalClass(self)), sel_getName(name));
+    _objc_inform("**resurrected** object %p of class %s being sent message '%s'\n", (void*)self, class_getName(resurrectedObjectOriginalClass(self)), sel_getName(name));
     return self;
 }
 
@@ -862,7 +733,7 @@ static void _NSResurrectedObject_finalize(id self, SEL _cmd) {
     pthread_mutex_lock(&_NSResurrectedObjectLock);
     originalClass = (Class) NXMapRemove(_NSResurrectedObjectMap, self);
     pthread_mutex_unlock(&_NSResurrectedObjectLock);
-    if (originalClass) _objc_inform("**resurrected** object %p of class %s being finalized\n", self, class_getName(originalClass));
+    if (originalClass) _objc_inform("**resurrected** object %p of class %s being finalized\n", (void*)self, class_getName(originalClass));
     _objc_rootFinalize(self);
 }
 
@@ -872,7 +743,7 @@ static BOOL _NSResurrectedObject_resolveInstanceMethod(id self, SEL _cmd, SEL na
 }
 
 static BOOL _NSResurrectedObject_resolveClassMethod(id self, SEL _cmd, SEL name) {
-    class_addMethod(_object_getClass(self), name, (IMP)_NSResurrectedObject_classMethod, "@@:");
+    class_addMethod(self->ISA(), name, (IMP)_NSResurrectedObject_classMethod, "@@:");
     return YES;
 }
 
@@ -880,7 +751,7 @@ static void _NSResurrectedObject_initialize() {
     _NSResurrectedObjectMap = NXCreateMapTable(NXPtrValueMapPrototype, 128);
     _NSResurrectedObjectClass = objc_allocateClassPair(objc_getClass("NSObject"), "_NSResurrectedObject", 0);
     class_addMethod(_NSResurrectedObjectClass, @selector(finalize), (IMP)_NSResurrectedObject_finalize, "v@:");
-    Class metaClass = _object_getClass(_NSResurrectedObjectClass);
+    Class metaClass = _NSResurrectedObjectClass->ISA();
     class_addMethod(metaClass, @selector(resolveInstanceMethod:), (IMP)_NSResurrectedObject_resolveInstanceMethod, "c@::");
     class_addMethod(metaClass, @selector(resolveClassMethod:), (IMP)_NSResurrectedObject_resolveClassMethod, "c@::");
     objc_registerClassPair(_NSResurrectedObjectClass);
@@ -888,7 +759,7 @@ static void _NSResurrectedObject_initialize() {
 
 static void resurrectZombie(auto_zone_t *zone, void *ptr) {
     id object = (id) ptr;
-    Class cls = _object_getClass(object);
+    Class cls = object->ISA();
     if (cls != _NSResurrectedObjectClass) {
         // remember the original class for this instance.
         pthread_mutex_lock(&_NSResurrectedObjectLock);
@@ -917,15 +788,6 @@ static const char* objc_name_for_object(auto_zone_t *zone, void *object) {
     return class_getName(cls);
 }
 
-/* Compaction support */
-
-void objc_disableCompaction() {
-    if (UseCompaction) {
-        UseCompaction = NO;
-        auto_zone_disable_compaction(gc_zone);
-    }
-}
-
 /***********************************************************************
 * Collection support
 **********************************************************************/
@@ -934,14 +796,16 @@ static BOOL objc_isRegisteredClass(Class candidate);
 
 static const unsigned char *objc_layout_for_address(auto_zone_t *zone, void *address) {
     id object = (id)address;
-    Class cls = (volatile Class)_object_getClass(object);
-    return objc_isRegisteredClass(cls) ? _object_getIvarLayout(cls, object) : NULL;
+    volatile void *clsptr = (void*)object->ISA();
+    Class cls = (Class)clsptr;
+    return objc_isRegisteredClass(cls) ? _object_getIvarLayout(cls, object) : nil;
 }
 
 static const unsigned char *objc_weak_layout_for_address(auto_zone_t *zone, void *address) {
     id object = (id)address;
-    Class cls = (volatile Class)_object_getClass(object);
-    return objc_isRegisteredClass(cls) ? class_getWeakIvarLayout(cls) : NULL;
+    volatile void *clsptr = (void*)object->ISA();
+    Class cls = (Class)clsptr;
+    return objc_isRegisteredClass(cls) ? class_getWeakIvarLayout(cls) : nil;
 }
 
 void gc_register_datasegment(uintptr_t base, size_t size) {
@@ -952,51 +816,6 @@ void gc_unregister_datasegment(uintptr_t base, size_t size) {
     auto_zone_unregister_datasegment(gc_zone, (void*)base, size);
 }
 
-#define countof(array) (sizeof(array) / sizeof(array[0]))
-
-// defined in objc-externalref.m.
-extern objc_xref_t _object_addExternalReference_gc(id obj, objc_xref_t type);
-extern objc_xref_t _object_addExternalReference_rr(id obj, objc_xref_t type);
-extern id _object_readExternalReference_gc(objc_xref_t ref);
-extern id _object_readExternalReference_rr(objc_xref_t ref);
-extern void _object_removeExternalReference_gc(objc_xref_t ref);
-extern void _object_removeExternalReference_rr(objc_xref_t ref);
-
-void gc_fixup_barrier_stubs(const struct dyld_image_info *info) {
-    static const char *symbols[] = {
-        "_objc_assign_strongCast", "_objc_assign_ivar", 
-        "_objc_assign_global", "_objc_assign_threadlocal", 
-        "_objc_read_weak", "_objc_assign_weak",
-        "_objc_getProperty", "_objc_setProperty",
-        "_objc_getAssociatedObject", "_objc_setAssociatedObject",
-        "__object_addExternalReference", "__object_readExternalReference", "__object_removeExternalReference"
-    };
-    if (UseGC) {
-        // resolve barrier symbols using GC functions.
-        static void *gc_functions[] = {
-            &objc_assign_strongCast_gc, &objc_assign_ivar_gc, 
-            &objc_assign_global_gc, &objc_assign_threadlocal_gc, 
-            &objc_read_weak_gc, &objc_assign_weak_gc,
-            &objc_getProperty_gc, &objc_setProperty_gc,
-            &objc_getAssociatedObject_gc, &objc_setAssociatedObject_gc,
-            &_object_addExternalReference_gc, &_object_readExternalReference_gc, &_object_removeExternalReference_gc
-        };
-        assert(countof(symbols) == countof(gc_functions));
-        _objc_update_stubs_in_mach_header(info->imageLoadAddress, countof(symbols), symbols, gc_functions);
-    } else {
-        // resolve barrier symbols using non-GC functions.
-        static void *nongc_functions[] = {
-            &objc_assign_strongCast_non_gc, &objc_assign_ivar_non_gc, 
-            &objc_assign_global_non_gc, &objc_assign_threadlocal_non_gc, 
-            &objc_read_weak_non_gc, &objc_assign_weak_non_gc,
-            &objc_getProperty_non_gc, &objc_setProperty_non_gc,
-            &objc_getAssociatedObject_non_gc, &objc_setAssociatedObject_non_gc,
-            &_object_addExternalReference_rr, &_object_readExternalReference_rr, &_object_removeExternalReference_rr
-        };
-        assert(countof(symbols) == countof(nongc_functions));
-        _objc_update_stubs_in_mach_header(info->imageLoadAddress, countof(symbols), symbols, nongc_functions);
-    }
-}
 
 /***********************************************************************
 * Initialization
@@ -1012,7 +831,7 @@ static void objc_will_grow(auto_zone_t *zone, auto_heap_growth_info_t info) {
 }
 
 
-static auto_zone_t *gc_zone_init(BOOL wantsCompaction)
+static auto_zone_t *gc_zone_init(void)
 {
     auto_zone_t *result;
     static int didOnce = 0;
@@ -1020,15 +839,15 @@ static auto_zone_t *gc_zone_init(BOOL wantsCompaction)
         didOnce = 1;
         
         // initialize the batch finalization queue
-        MainThreadWorkQ.head = NULL;
-        MainThreadWorkQ.tail = NULL;
-        pthread_mutex_init(&MainThreadWorkQ.mutex, NULL);
-        pthread_cond_init(&MainThreadWorkQ.condition, NULL);
+        MainThreadWorkQ.head = nil;
+        MainThreadWorkQ.tail = nil;
+        pthread_mutex_init(&MainThreadWorkQ.mutex, nil);
+        pthread_cond_init(&MainThreadWorkQ.condition, nil);
     }
     
     result = auto_zone_create("auto_zone");
     
-    if (!wantsCompaction) auto_zone_disable_compaction(result);
+    auto_zone_disable_compaction(result);
     
     auto_collection_control_t *control = auto_collection_parameters(result);
     
@@ -1073,19 +892,18 @@ void objc_assertRegisteredThreadWithCollector()
 }
 
 // Always called by _objcInit, even if GC is off.
-void gc_init(BOOL wantsGC, BOOL wantsCompaction)
+void gc_init(BOOL wantsGC)
 {
+    assert(UseGC == -1);
     UseGC = wantsGC;
-    UseCompaction = wantsCompaction;
 
     if (PrintGC) {
         _objc_inform("GC: is %s", wantsGC ? "ON" : "OFF");
-        _objc_inform("Compaction: is %s", wantsCompaction ? "ON" : "OFF");
     }
 
     if (UseGC) {
         // Set up the GC zone
-        gc_zone = gc_zone_init(wantsCompaction);
+        gc_zone = gc_zone_init();
         
         // tell libdispatch to register its threads with the GC.
         dispatch_begin_thread_4GC = objc_registerThreadWithCollector;
@@ -1188,7 +1006,6 @@ static void registeredClassTableInit() {
     table[0] = INITIALSIZE - 1;
     // set initial count
     table[1] = 0;
-    // Compaction:  we allocate it refcount 1 and then decr when done.
     AllClasses = (Class *)table;
 }
 
@@ -1308,9 +1125,9 @@ void objc_removeRegisteredClass(Class candidate) {
 
 static malloc_zone_t *objc_debug_zone(void)
 {
-    static malloc_zone_t *z = NULL;
+    static malloc_zone_t *z = nil;
     if (!z) {
-        z = malloc_create_zone(4096, 0);
+        z = malloc_create_zone(PAGE_MAX_SIZE, 0);
         malloc_set_zone_name(z, "objc-auto debug");
     }
     return z;
@@ -1344,10 +1161,10 @@ static Ivar ivar_for_offset(Class cls, vm_address_t offset)
     Ivar *ivars;
     unsigned int ivar_count;
 
-    if (!cls) return NULL;
+    if (!cls) return nil;
 
     // scan base classes FIRST
-    super_ivar = ivar_for_offset(class_getSuperclass(cls), offset);
+    super_ivar = ivar_for_offset(cls->superclass, offset);
     // result is best-effort; our ivars may be closer
 
     ivars = class_copyIvarList(cls, &ivar_count);
@@ -1357,10 +1174,10 @@ static Ivar ivar_for_offset(Class cls, vm_address_t offset)
         ivar_offset = ivar_getOffset(ivars[0]);
         if (ivar_offset > offset) result = super_ivar;
         else if (ivar_offset == offset) result = ivars[0];
-        else result = NULL;
+        else result = nil;
 
         // Try our other ivars. If any is too big, use the previous.
-        for (i = 1; result == NULL && i < ivar_count; i++) {
+        for (i = 1; result == nil && i < ivar_count; i++) {
             ivar_offset = ivar_getOffset(ivars[i]);
             if (ivar_offset == offset) {
                 result = ivars[i];
@@ -1370,7 +1187,7 @@ static Ivar ivar_for_offset(Class cls, vm_address_t offset)
         }
 
         // Found nothing. Return our last ivar.
-        if (result == NULL)
+        if (result == nil)
             result = ivars[ivar_count - 1];
         
         free(ivars);
@@ -1383,7 +1200,7 @@ static Ivar ivar_for_offset(Class cls, vm_address_t offset)
 
 static void append_ivar_at_offset(char *buf, Class cls, vm_address_t offset, size_t bufSize)
 {
-    Ivar ivar = NULL;
+    Ivar ivar = nil;
 
     if (offset == 0) return;  // don't bother with isa
     if (offset >= class_getInstanceSize(cls)) {
@@ -1417,10 +1234,16 @@ static const char *cf_class_for_object(void *cfobj)
 {
     // ick - we don't link against CF anymore
 
+    struct fake_cfclass {
+        size_t version;
+        const char *className;
+        // don't care about the rest
+    };
+
     const char *result;
     void *dlh;
     size_t (*CFGetTypeID)(void *);
-    void * (*_CFRuntimeGetClassWithTypeID)(size_t);
+    fake_cfclass * (*_CFRuntimeGetClassWithTypeID)(size_t);
 
     result = "anonymous_NSCFType";
 
@@ -1428,18 +1251,11 @@ static const char *cf_class_for_object(void *cfobj)
     if (!dlh) return result;
 
     CFGetTypeID = (size_t(*)(void*)) dlsym(dlh, "CFGetTypeID");
-    _CFRuntimeGetClassWithTypeID = (void*(*)(size_t)) dlsym(dlh, "_CFRuntimeGetClassWithTypeID");
+    _CFRuntimeGetClassWithTypeID = (fake_cfclass*(*)(size_t)) dlsym(dlh, "_CFRuntimeGetClassWithTypeID");
     
     if (CFGetTypeID  &&  _CFRuntimeGetClassWithTypeID) {
-        struct {
-            size_t version;
-            const char *className;
-            // don't care about the rest
-        } *cfcls;
-        size_t cfid;
-        cfid = (*CFGetTypeID)(cfobj);
-        cfcls = (*_CFRuntimeGetClassWithTypeID)(cfid);
-        result = cfcls->className;
+        size_t cfid = (*CFGetTypeID)(cfobj);
+        result = (*_CFRuntimeGetClassWithTypeID)(cfid)->className;
     }
 
     dlclose(dlh);
@@ -1477,7 +1293,7 @@ static char *name_for_address(auto_zone_t *zone, vm_address_t base, vm_address_t
             strlcat(buf, class_name, sizeof(buf));
         }
         if (offset) {
-            append_ivar_at_offset(buf, _object_getClass((id)base), offset, sizeof(buf));
+            append_ivar_at_offset(buf, ((id)base)->ISA(), offset, sizeof(buf));
         }
         APPEND_SIZE(size);
         break;
@@ -1512,7 +1328,7 @@ static char *name_for_address(auto_zone_t *zone, vm_address_t base, vm_address_t
     }
 
     size_t len = 1 + strlen(buf);
-    result = malloc_zone_malloc(objc_debug_zone(), len);
+    result = (char *)malloc_zone_malloc(objc_debug_zone(), len);
     memcpy(result, buf, len);
     return result;
 

@@ -25,11 +25,18 @@
 	Copyright 1988-1996 NeXT Software, Inc.
 */
 
-#if __OBJC2__
-
 #include "objc-private.h"
 
+#undef id
+#undef Class
+
+typedef struct objc_class *Class;
+typedef struct objc_object *id;
+
+#if __OBJC2__
+
 __OSX_AVAILABLE_STARTING(__MAC_10_0, __IPHONE_NA)
+OBJC_ROOT_CLASS
 @interface Object { 
     Class isa; 
 } 
@@ -94,9 +101,6 @@ __OSX_AVAILABLE_STARTING(__MAC_10_0, __IPHONE_NA)
 #include "objc-runtime.h"
 #include "objc-auto.h"
 
-// hack
-extern void _objc_error(id, const char *, va_list);
-
 
 // Error Messages
 static const char
@@ -128,7 +132,7 @@ static const char
 + (id)new
 {
 	id newObject = (*_alloc)((Class)self, 0);
-	Class metaClass = self->isa;
+	Class metaClass = self->ISA();
 	if (class_getVersion(metaClass) > 1)
 	    return [newObject init];
 	else
@@ -204,12 +208,12 @@ static const char
 
 + (id)superclass
 { 
-	return class_getSuperclass((Class)self); 
+	return self->superclass; 
 }
 
 - (id)superclass
 { 
-	return class_getSuperclass(isa); 
+	return isa->superclass; 
 }
 
 + (int) version
@@ -225,8 +229,8 @@ static const char
 
 - (BOOL)isKindOf:aClass
 {
-	register Class cls;
-	for (cls = isa; cls; cls = class_getSuperclass(cls)) 
+	Class cls;
+	for (cls = isa; cls; cls = cls->superclass) 
 		if (cls == (Class)aClass)
 			return YES;
 	return NO;
@@ -239,8 +243,8 @@ static const char
 
 - (BOOL)isKindOfClassNamed:(const char *)aClassName
 {
-	register Class cls;
-	for (cls = isa; cls; cls = class_getSuperclass(cls)) 
+	Class cls;
+	for (cls = isa; cls; cls = cls->superclass) 
 		if (strcmp(aClassName, class_getName(cls)) == 0)
 			return YES;
 	return NO;
@@ -389,10 +393,10 @@ static const char
 
 + (BOOL) conformsTo: (Protocol *)aProtocolObj
 {
-  Class class;
-  for (class = self; class; class = class_getSuperclass(class))
+  Class cls;
+  for (cls = self; cls; cls = cls->superclass)
     {
-      if (class_conformsToProtocol(class, aProtocolObj)) return YES;
+      if (class_conformsToProtocol(cls, aProtocolObj)) return YES;
     }
   return NO;
 }
@@ -406,11 +410,12 @@ static const char
   struct objc_method_description *m;
 
   /* Look in the protocols first. */
-  for (cls = isa; cls; cls = cls->super_class)
+  for (cls = isa; cls; cls = cls->superclass)
     {
-      if (cls->isa->version >= 3)
+      if (cls->ISA()->version >= 3)
         {
-	  struct objc_protocol_list *protocols = cls->protocols;
+	  struct objc_protocol_list *protocols = 
+              (struct objc_protocol_list *)cls->protocols;
   
 	  while (protocols)
 	    {
@@ -430,7 +435,7 @@ static const char
 		  }
 		}
   
-	      if (cls->isa->version <= 4)
+	      if (cls->ISA()->version <= 4)
 		break;
   
 	      protocols = protocols->next;
@@ -439,7 +444,7 @@ static const char
     }
 
   /* Then try the class implementations. */
-    for (cls = isa; cls; cls = cls->super_class) {
+    for (cls = isa; cls; cls = cls->superclass) {
         void *iterator = 0;
 	int i;
         struct objc_method_list *mlist;
@@ -459,11 +464,12 @@ static const char
   Class cls;
 
   /* Look in the protocols first. */
-  for (cls = self; cls; cls = cls->super_class)
+  for (cls = self; cls; cls = cls->superclass)
     {
-      if (cls->isa->version >= 3)
+      if (cls->ISA()->version >= 3)
         {
-	  struct objc_protocol_list *protocols = cls->protocols;
+	  struct objc_protocol_list *protocols = 
+              (struct objc_protocol_list *)cls->protocols;
   
 	  while (protocols)
 	    {
@@ -478,7 +484,7 @@ static const char
 		    return m;
 		}
   
-	      if (cls->isa->version <= 4)
+	      if (cls->ISA()->version <= 4)
 		break;
   
 	      protocols = protocols->next;
@@ -487,7 +493,7 @@ static const char
     }
 
   /* Then try the class implementations. */
-    for (cls = self; cls; cls = cls->super_class) {
+    for (cls = self; cls; cls = cls->superclass) {
         void *iterator = 0;
 	int i;
         struct objc_method_list *mlist;

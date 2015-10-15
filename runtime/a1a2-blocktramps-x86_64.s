@@ -23,17 +23,19 @@
 
 #ifdef __x86_64__
 
+#include <mach/vm_param.h>
+
     .text
     .private_extern __a1a2_tramphead
     .private_extern __a1a2_firsttramp
     .private_extern __a1a2_nexttramp
     .private_extern __a1a2_trampend
 
-.align 12
+.align PAGE_SHIFT
 __a1a2_tramphead:
     popq %r10
     andq $0xFFFFFFFFFFFFFFF8, %r10
-    subq $0x1000, %r10
+    subq $ PAGE_SIZE, %r10
     movq %rdi, %rsi // arg1 -> arg2
     movq (%r10), %rdi // block -> arg1
     jmp  *16(%rdi)

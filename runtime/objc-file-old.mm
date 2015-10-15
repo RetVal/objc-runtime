@@ -26,7 +26,7 @@
 
 #include "objc-private.h"
 #include "objc-runtime-old.h"
-
+#include "objc-file-old.h"
 
 #if TARGET_OS_WIN32
 
@@ -52,11 +52,11 @@ _getObjcProtocols(const header_info *hi, size_t *nprotos)
     return hi->protocols;
 }
 
-struct old_class **
+Class*
 _getObjcClassRefs(const header_info *hi, size_t *nclasses)
 {
     if (nclasses) *nclasses = hi->clsrefCount;
-    return (struct old_class **)hi->clsrefs;
+    return (Class*)hi->clsrefs;
 }
 
 // __OBJC,__class_names section only emitted by CodeWarrior  rdar://4951638
@@ -81,7 +81,7 @@ _getObjcClassNames(const header_info *hi, size_t *size)
 
 GETSECT(_getObjcModules,      struct objc_module, "__module_info");
 GETSECT(_getObjcSelectorRefs, SEL,                "__message_refs");
-GETSECT(_getObjcClassRefs,    struct old_class *, "__cls_refs");
+GETSECT(_getObjcClassRefs,    Class, "__cls_refs");
 GETSECT(_getObjcClassNames,   const char,         "__class_names");
 // __OBJC,__class_names section only emitted by CodeWarrior  rdar://4951638
 

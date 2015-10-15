@@ -25,111 +25,6 @@
 #define _OBJC_RUNTIME_OLD_H
 
 #include "objc-private.h"
-#include "objc-file-old.h"
-
-
-struct old_class {
-    struct old_class *isa;
-    struct old_class *super_class;
-    const char *name;
-    long version;
-    long info;
-    long instance_size;
-    struct old_ivar_list *ivars;
-    struct old_method_list **methodLists;
-    Cache cache;
-    struct old_protocol_list *protocols;
-    // CLS_EXT only
-    const uint8_t *ivar_layout;
-    struct old_class_ext *ext;
-};
-
-struct old_class_ext {
-    uint32_t size;
-    const uint8_t *weak_ivar_layout;
-    struct old_property_list **propertyLists;
-};
-
-struct old_category {
-    char *category_name;
-    char *class_name;
-    struct old_method_list *instance_methods;
-    struct old_method_list *class_methods;
-    struct old_protocol_list *protocols;
-    uint32_t size;
-    struct old_property_list *instance_properties;
-};
-
-struct old_ivar {
-    char *ivar_name;
-    char *ivar_type;
-    int ivar_offset;
-#ifdef __LP64__
-    int space;
-#endif
-};
-
-struct old_ivar_list {
-    int ivar_count;
-#ifdef __LP64__
-    int space;
-#endif
-    /* variable length structure */
-    struct old_ivar ivar_list[1];
-};
-
-
-struct old_method {
-    SEL method_name;
-    char *method_types;
-    IMP method_imp;
-};
-
-struct old_method_list {
-    struct old_method_list *obsolete;
-
-    int method_count;
-#ifdef __LP64__
-    int space;
-#endif
-    /* variable length structure */
-    struct old_method method_list[1];
-};
-
-struct old_protocol {
-    Class isa;
-    const char *protocol_name;
-    struct old_protocol_list *protocol_list;
-    struct objc_method_description_list *instance_methods;
-    struct objc_method_description_list *class_methods;
-};
-
-struct old_protocol_list {
-    struct old_protocol_list *next;
-    long count;
-    struct old_protocol *list[1];
-};
-
-struct old_protocol_ext {
-    uint32_t size;
-    struct objc_method_description_list *optional_instance_methods;
-    struct objc_method_description_list *optional_class_methods;
-    struct old_property_list *instance_properties;
-    const char **extendedMethodTypes;
-};
-
-
-struct old_property {
-    const char *name;
-    const char *attributes;
-};
-
-struct old_property_list {
-    uint32_t entsize;
-    uint32_t count;
-    struct old_property first;
-};
-
 
 #define CLS_CLASS		0x1
 #define CLS_META		0x2
@@ -179,38 +74,270 @@ struct old_property_list {
 
 #define ISCLASS(cls)		(((cls)->info & CLS_CLASS) != 0)
 #define ISMETA(cls)		(((cls)->info & CLS_META) != 0)
-#define GETMETA(cls)		(ISMETA(cls) ? (cls) : (cls)->isa)
+#define GETMETA(cls)		(ISMETA(cls) ? (cls) : (cls)->ISA())
 
+
+struct objc_class : objc_object {
+    Class superclass;
+    const char *name;
+    uint32_t version;
+    uint32_t info;
+    uint32_t instance_size;
+    struct old_ivar_list *ivars;
+    struct old_method_list **methodLists;
+    Cache cache;
+    struct old_protocol_list *protocols;
+    // CLS_EXT only
+    const uint8_t *ivar_layout;
+    struct old_class_ext *ext;
+
+    void setInfo(uint32_t set) {
+        OSAtomicOr32Barrier(set, (volatile uint32_t *)&info);
+    }
+
+    void clearInfo(uint32_t clear) {
+        OSAtomicXor32Barrier(clear, (volatile uint32_t *)&info);
+    }
+
+
+    // set and clear must not overlap
+    void changeInfo(uint32_t set, uint32_t clear) {
+        assert((set & clear) == 0);
+
+        uint32_t oldf, newf;
+        do {
+            oldf = this->info;
+            newf = (oldf | set) & ~clear;
+        } while (!OSAtomicCompareAndSwap32Barrier(oldf, newf, (volatile int32_t *)&info));
+    }
+
+    bool hasCxxCtor() {
+        // set_superclass propagates the flag from the superclass.
+        return info & CLS_HAS_CXX_STRUCTORS;
+    }
+
+    bool hasCxxDtor() {
+        return hasCxxCtor();  // one bit for both ctor and dtor
+    }
+
+    bool hasCustomRR() { 
+        return true;
+    }
+    void setHasCustomRR(bool = false) { }
+    void setHasDefaultRR() { }
+    void printCustomRR(bool) { }
+
+    bool hasCustomAWZ() { 
+        return true;
+    }
+    void setHasCustomAWZ(bool = false) { }
+    void setHasDefaultAWZ() { }
+    void printCustomAWZ(bool) { }
+
+    bool instancesHaveAssociatedObjects() {
+        return info & CLS_INSTANCES_HAVE_ASSOCIATED_OBJECTS;
+    }
+
+    void setInstancesHaveAssociatedObjects() {
+        setInfo(CLS_INSTANCES_HAVE_ASSOCIATED_OBJECTS);
+    }
+
+    bool shouldGrowCache() {
+        return info & CLS_GROW_CACHE;
+    }
+
+    void setShouldGrowCache(bool grow) {
+        if (grow) setInfo(CLS_GROW_CACHE);
+        else clearInfo(CLS_GROW_CACHE);
+    }
+
+    bool shouldFinalizeOnMainThread() {
+        return info & CLS_FINALIZE_ON_MAIN_THREAD;
+    }
+
+    void setShouldFinalizeOnMainThread() {
+        setInfo(CLS_FINALIZE_ON_MAIN_THREAD);
+    }
+
+    // +initialize bits are stored on the metaclass only
+    bool isInitializing() {
+        return getMeta()->info & CLS_INITIALIZING;
+    }
+
+    // +initialize bits are stored on the metaclass only
+    void setInitializing() {
+        getMeta()->setInfo(CLS_INITIALIZING);
+    }
+
+    // +initialize bits are stored on the metaclass only
+    bool isInitialized() {
+        return getMeta()->info & CLS_INITIALIZED;
+    }
+
+    // +initialize bits are stored on the metaclass only
+    void setInitialized() {
+        getMeta()->changeInfo(CLS_INITIALIZED, CLS_INITIALIZING);
+    }
+
+    bool isLoadable() {
+        // A class registered for +load is ready for +load to be called
+        // if it is connected.
+        return isConnected();
+    }
+
+    IMP getLoadMethod();
+
+    bool isConnected();
+
+    const char *mangledName() { return name; }
+    const char *demangledName() { return name; }
+    const char *nameForLogging() { return name; }
+
+    bool isMetaClass() {
+        return info & CLS_META;
+    }
+
+    // NOT identical to this->ISA() when this is a metaclass
+    Class getMeta() {
+        if (isMetaClass()) return (Class)this;
+        else return this->ISA();
+    }
+
+    // May be unaligned depending on class's ivars.
+    uint32_t unalignedInstanceSize() {
+        return instance_size;
+    }
+
+    // Class's ivar size rounded up to a pointer-size boundary.
+    uint32_t alignedInstanceSize() {
+        return (unalignedInstanceSize() + WORD_MASK) & ~WORD_MASK;
+    }
+
+    size_t instanceSize(size_t extraBytes) {
+        size_t size = alignedInstanceSize() + extraBytes;
+        // CF requires all objects be at least 16 bytes.
+        if (size < 16) size = 16;
+        return size;
+    }
+
+};
+
+struct old_class_ext {
+    uint32_t size;
+    const uint8_t *weak_ivar_layout;
+    struct old_property_list **propertyLists;
+};
+
+struct old_category {
+    char *category_name;
+    char *class_name;
+    struct old_method_list *instance_methods;
+    struct old_method_list *class_methods;
+    struct old_protocol_list *protocols;
+    uint32_t size;
+    struct old_property_list *instance_properties;
+};
+
+struct old_ivar {
+    char *ivar_name;
+    char *ivar_type;
+    int ivar_offset;
+#ifdef __LP64__
+    int space;
+#endif
+};
+
+struct old_ivar_list {
+    int ivar_count;
+#ifdef __LP64__
+    int space;
+#endif
+    /* variable length structure */
+    struct old_ivar ivar_list[1];
+};
+
+
+struct old_method {
+    SEL method_name;
+    char *method_types;
+    IMP method_imp;
+};
+
+struct old_method_list {
+    void *obsolete;
+
+    int method_count;
+#ifdef __LP64__
+    int space;
+#endif
+    /* variable length structure */
+    struct old_method method_list[1];
+};
+
+struct old_protocol {
+    Class isa;
+    const char *protocol_name;
+    struct old_protocol_list *protocol_list;
+    struct objc_method_description_list *instance_methods;
+    struct objc_method_description_list *class_methods;
+};
+
+struct old_protocol_list {
+    struct old_protocol_list *next;
+    long count;
+    struct old_protocol *list[1];
+};
+
+struct old_protocol_ext {
+    uint32_t size;
+    struct objc_method_description_list *optional_instance_methods;
+    struct objc_method_description_list *optional_class_methods;
+    struct old_property_list *instance_properties;
+    const char **extendedMethodTypes;
+};
+
+
+struct old_property {
+    const char *name;
+    const char *attributes;
+};
+
+struct old_property_list {
+    uint32_t entsize;
+    uint32_t count;
+    struct old_property first;
+};
+
+
+#include "hashtable2.h"
 
 __BEGIN_DECLS
 
-#define oldcls(cls) ((struct old_class *)cls)
 #define oldprotocol(proto) ((struct old_protocol *)proto)
 #define oldmethod(meth) ((struct old_method *)meth)
 #define oldcategory(cat) ((struct old_category *)cat)
 #define oldivar(ivar) ((struct old_ivar *)ivar)
 #define oldproperty(prop) ((struct old_property *)prop)
 
-extern void unload_class(struct old_class *cls);
+extern NXHashTable *class_hash;
 
-extern Class objc_getOrigClass (const char *name);
+extern void unload_class(Class cls);
+
 extern IMP lookupNamedMethodInMethodList(struct old_method_list *mlist, const char *meth_name);
-extern void _objc_insertMethods(struct old_class *cls, struct old_method_list *mlist, struct old_category *cat);
-extern void _objc_removeMethods(struct old_class *cls, struct old_method_list *mlist);
+extern void _objc_insertMethods(Class cls, struct old_method_list *mlist, struct old_category *cat);
+extern void _objc_removeMethods(Class cls, struct old_method_list *mlist);
 extern void _objc_flush_caches (Class cls);
-extern BOOL _class_addProperties(struct old_class *cls, struct old_property_list *additions);
-extern void change_class_references(struct old_class *imposter, struct old_class *original, struct old_class *copy, BOOL changeSuperRefs);
+extern BOOL _class_addProperties(Class cls, struct old_property_list *additions);
+extern BOOL _class_hasLoadMethod(Class cls);
+extern void change_class_references(Class imposter, Class original, Class copy, BOOL changeSuperRefs);
 extern void flush_marked_caches(void);
-extern void set_superclass(struct old_class *cls, struct old_class *supercls, BOOL cls_is_new);
+extern void set_superclass(Class cls, Class supercls, BOOL cls_is_new);
 extern void try_free(const void *p);
 
 extern struct old_property *property_list_nth(const struct old_property_list *plist, uint32_t i);
 extern struct old_property **copyPropertyList(struct old_property_list *plist, unsigned int *outCount);
 
-extern void _class_setInfo(Class cls, long set);
-extern void _class_clearInfo(Class cls, long clear);
-extern void _class_changeInfo(Class cls, long set, long clear);
-
+extern struct objc_method_description * lookup_protocol_method(struct old_protocol *proto, SEL aSel, BOOL isRequiredMethod, BOOL isInstanceMethod, BOOL recursive);
 
 // used by flush_caches outside objc-cache.m
 extern void _cache_flush(Class cls);

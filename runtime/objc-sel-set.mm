@@ -34,6 +34,9 @@
 #include "objc-private.h"
 #include "objc-sel-set.h"
 
+#if !__OBJC2__
+
+
 #if !SUPPORT_MOD
 // mod-free power of 2 version
 
@@ -167,3 +170,7 @@ void __objc_sel_set_add(struct __objc_sel_set *sset, SEL value) {
         sset->_count++;
     }
 }
+
+
+// !__OBJC2__
+#endif

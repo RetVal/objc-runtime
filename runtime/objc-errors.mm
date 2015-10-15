@@ -75,6 +75,7 @@ void _objc_error(id rcv, const char *fmt, va_list args)
 #else
 
 #include <vproc_priv.h>
+#include <simple_lock.h>
 
 OBJC_EXPORT void	(*_error)(id, const char *, va_list);
 
@@ -142,7 +143,7 @@ static bool also_do_stderr(void)
 // Print "message" to the console.
 static void _objc_syslog(const char *message)
 {
-    syslog(LOG_ERR, "%s", message);
+//    _simple_asl_log(ASL_LEVEL_ERR, nil, message);
 
     if (also_do_stderr()) {
         write(STDERR_FILENO, message, strlen(message));

@@ -24,14 +24,11 @@
 #ifndef _OBJC_INITIALIZE_H
 #define _OBJC_INITIALIZE_H
 
-#include "objc.h"
+#include "objc-private.h"
 
 __BEGIN_DECLS
 
 struct _objc_initializing_classes;
-
-extern BOOL _class_isInitializing(Class cls);
-BOOL _class_isInitialized(Class cls);
 
 extern void _class_initialize(Class cls);
 

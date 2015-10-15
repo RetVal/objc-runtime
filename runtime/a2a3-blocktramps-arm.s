@@ -1,590 +1,146 @@
 #if __arm__
 	
 #include <arm/arch.h>
+#include <mach/vm_param.h>
 
 .syntax unified
 
 .text
 
+	.private_extern __a2a3_tramphead
+	.private_extern __a2a3_firsttramp
+	.private_extern __a2a3_trampend
 
-// This must match a1a2-blocktramps-arm.s
-#if defined(_ARM_ARCH_7)
-#   define THUMB2 1
-#else
-#   define THUMB2 0
+// Trampoline machinery assumes the trampolines are Thumb function pointers
+#if !__thumb2__
+#   error sorry
 #endif
 
-#if THUMB2
-	.thumb
-	.thumb_func __a2a3_tramphead
-	.thumb_func __a2a3_firsttramp
-	.thumb_func __a2a3_nexttramp
-	.thumb_func __a2a3_trampend
-#else
-	// don't use Thumb-1
-	.arm
-#endif
-	
-.align 12
-.private_extern __a2a3_tramphead
-__a2a3_tramphead_nt:	
+.thumb
+.thumb_func __a2a3_tramphead
+.thumb_func __a2a3_firsttramp
+.thumb_func __a2a3_trampend
+
+.align PAGE_MAX_SHIFT
 __a2a3_tramphead:
 	/*
-	 r0 == stret
 	 r1 == self
-	 r2 == pc of trampoline's first instruction + 4
+	 r12 == pc of trampoline's first instruction + PC bias
 	 lr == original return address
 	 */
 
-	// calculate the trampoline's index (512 entries, 8 bytes each)
-#if THUMB2
-	// PC bias is only 4, no need to correct with 8-byte trampolines
-	ubfx r2, r2, #3, #9
-#else
-	sub  r2, r2, #8               // correct PC bias
-	lsl  r2, r2, #20
-	lsr  r2, r2, #23
-#endif
-
-	// load block pointer from trampoline's data
-	// nt label works around thumb integrated asm bug rdar://11315197
-	adr  r12, __a2a3_tramphead_nt // text page
-	sub  r12, r12, #4096          // data page precedes text page
-	ldr  r12, [r12, r2, LSL #3]   // load block pointer from data + index*8
-
-	// shuffle parameters
 	mov  r2, r1                   // _cmd = self
-	mov  r1, r12                  // self = block pointer
 
-	// tail call block->invoke
-	ldr  pc, [r12, #12]
+	// Trampoline's data is one page before the trampoline text.
+	// Also correct PC bias of 4 bytes.
+	sub  r12, #PAGE_MAX_SIZE
+	ldr  r1, [r12, #-4]          // self = block object
+	ldr  pc, [r1, #12]           // tail call block->invoke
 	// not reached
 
-	// Make v6 and v7 match so they have the same number of TrampolineEntry
-	// below. Debug asserts in objc-block-trampoline.m check this.
-#if THUMB2
-	.space 16
-#endif
-
+	// Align trampolines to 8 bytes
+.align 3
+	
 .macro TrampolineEntry
-	mov r2, pc
+	mov r12, pc
 	b __a2a3_tramphead
-	.align 3
+.align 3
 .endmacro
 
-.align 3
+.macro TrampolineEntryX16
+	TrampolineEntry
+	TrampolineEntry
+	TrampolineEntry
+	TrampolineEntry
+	
+	TrampolineEntry
+	TrampolineEntry
+	TrampolineEntry
+	TrampolineEntry
+	
+	TrampolineEntry
+	TrampolineEntry
+	TrampolineEntry
+	TrampolineEntry
+	
+	TrampolineEntry
+	TrampolineEntry
+	TrampolineEntry
+	TrampolineEntry
+.endmacro
+
+.macro TrampolineEntryX256
+	TrampolineEntryX16
+	TrampolineEntryX16
+	TrampolineEntryX16
+	TrampolineEntryX16
+	
+	TrampolineEntryX16
+	TrampolineEntryX16
+	TrampolineEntryX16
+	TrampolineEntryX16
+	
+	TrampolineEntryX16
+	TrampolineEntryX16
+	TrampolineEntryX16
+	TrampolineEntryX16
+	
+	TrampolineEntryX16
+	TrampolineEntryX16
+	TrampolineEntryX16
+	TrampolineEntryX16
+.endmacro
+
 .private_extern __a2a3_firsttramp
 __a2a3_firsttramp:
-    TrampolineEntry
+	// 2048-2 trampolines to fill 16K page
+	TrampolineEntryX256
+	TrampolineEntryX256
+	TrampolineEntryX256
+	TrampolineEntryX256
 
-.private_extern __a2a3_nexttramp
-__a2a3_nexttramp:
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
-TrampolineEntry
+	TrampolineEntryX256
+	TrampolineEntryX256
+	TrampolineEntryX256
+
+	TrampolineEntryX16
+	TrampolineEntryX16
+	TrampolineEntryX16
+	TrampolineEntryX16
+
+	TrampolineEntryX16
+	TrampolineEntryX16
+	TrampolineEntryX16
+	TrampolineEntryX16
+
+	TrampolineEntryX16
+	TrampolineEntryX16
+	TrampolineEntryX16
+	TrampolineEntryX16
+
+	TrampolineEntryX16
+	TrampolineEntryX16
+	TrampolineEntryX16
+
+	TrampolineEntry
+	TrampolineEntry
+	TrampolineEntry
+	TrampolineEntry
+
+	TrampolineEntry
+	TrampolineEntry
+	TrampolineEntry
+	TrampolineEntry
+
+	TrampolineEntry
+	TrampolineEntry
+	TrampolineEntry
+	TrampolineEntry
+
+	TrampolineEntry
+	TrampolineEntry
+	// TrampolineEntry
+	// TrampolineEntry
 
 .private_extern __a2a3_trampend
 __a2a3_trampend:

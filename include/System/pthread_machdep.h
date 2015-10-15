@@ -66,7 +66,7 @@
 
 /* This header contains pre defined thread specific keys */
 /* 0 is used for pthread_self */
-#define _PTHREAD_TSD_SLOT_PTHREAD_SELF		0
+//#define _PTHREAD_TSD_SLOT_PTHREAD_SELF		0
 /* Keys 1- 9 for use by dyld, directly or indirectly */
 #define _PTHREAD_TSD_SLOT_DYLD_1		1
 #define _PTHREAD_TSD_SLOT_DYLD_2		2
@@ -213,23 +213,23 @@ extern "C" {
 
 typedef int pthread_lock_t;
 
-__inline__ static int
-_pthread_has_direct_tsd(void)
-{
-#if TARGET_IPHONE_SIMULATOR
-	/* Simulator will use the host implementation, so bypass the macro that is in the target code */
-	return 0;
-#elif defined(__ppc__)
-	int *caps = (int *)_COMM_PAGE_CPU_CAPABILITIES;
-	if (*caps & kFastThreadLocalStorage) {
-		return 1;
-	} else {
-		return 0;
-	}
-#else
-	return 1;
-#endif
-}
+//__inline__ static int
+//_pthread_has_direct_tsd(void)
+//{
+//#if TARGET_IPHONE_SIMULATOR
+//	/* Simulator will use the host implementation, so bypass the macro that is in the target code */
+//	return 0;
+//#elif defined(__ppc__)
+//	int *caps = (int *)_COMM_PAGE_CPU_CAPABILITIES;
+//	if (*caps & kFastThreadLocalStorage) {
+//		return 1;
+//	} else {
+//		return 0;
+//	}
+//#else
+//	return 1;
+//#endif
+//}
 
 #if TARGET_IPHONE_SIMULATOR || defined(__ppc__) || defined(__ppc64__) || \
 (defined(__arm__) && !defined(_ARM_ARCH_7) && defined(_ARM_ARCH_6) && defined(__thumb__))
@@ -239,59 +239,61 @@ _pthread_has_direct_tsd(void)
 
 #else
 
-/* To be used with static constant keys only */
-__inline__ static void *
-_pthread_getspecific_direct(unsigned long slot)
-{
-	void *ret;
-#if defined(__i386__) || defined(__x86_64__)
-	__asm__("mov %%gs:%1, %0" : "=r" (ret) : "m" (*(void **)(slot * sizeof(void *))));
-#elif (defined(__arm__) && (defined(_ARM_ARCH_6) || defined(_ARM_ARCH_5)))
-	void **__pthread_tsd;
-#if defined(__arm__) && defined(_ARM_ARCH_6)
-	uintptr_t __pthread_tpid;
-	__asm__("mrc p15, 0, %0, c13, c0, 3" : "=r" (__pthread_tpid));
-	__pthread_tsd = (void**)(__pthread_tpid & ~0x3ul);
-#elif defined(__arm__) && defined(_ARM_ARCH_5)
-	register uintptr_t __pthread_tpid asm ("r9");
-	__pthread_tsd = (void**)__pthread_tpid;
-#endif
-	ret = __pthread_tsd[slot];
-#else
-#error no _pthread_getspecific_direct implementation for this arch
-#endif
-	return ret;
-}
+#include <pthread/tsd_private.h>
 
-/* To be used with static constant keys only */
-__inline__ static int
-_pthread_setspecific_direct(unsigned long slot, void * val)
-{
-#if defined(__i386__)
-#if defined(__PIC__)
-	__asm__("movl %1,%%gs:%0" : "=m" (*(void **)(slot * sizeof(void *))) : "rn" (val));
-#else
-	__asm__("movl %1,%%gs:%0" : "=m" (*(void **)(slot * sizeof(void *))) : "ri" (val));
-#endif
-#elif defined(__x86_64__)
-	/* PIC is free and cannot be disabled, even with: gcc -mdynamic-no-pic ... */
-	__asm__("movq %1,%%gs:%0" : "=m" (*(void **)(slot * sizeof(void *))) : "rn" (val));
-#elif (defined(__arm__) && (defined(_ARM_ARCH_6) || defined(_ARM_ARCH_5)))
-	void **__pthread_tsd;
-#if defined(__arm__) && defined(_ARM_ARCH_6)
-	uintptr_t __pthread_tpid;
-	__asm__("mrc p15, 0, %0, c13, c0, 3" : "=r" (__pthread_tpid));
-	__pthread_tsd = (void**)(__pthread_tpid & ~0x3ul);
-#elif defined(__arm__) && defined(_ARM_ARCH_5)
-	register uintptr_t __pthread_tpid asm ("r9");
-	__pthread_tsd = (void**)__pthread_tpid;
-#endif
-	__pthread_tsd[slot] = val;
-#else
-#error no _pthread_setspecific_direct implementation for this arch
-#endif
-	return 0;
-}
+///* To be used with static constant keys only */
+//__inline__ static void *
+//_pthread_getspecific_direct(unsigned long slot)
+//{
+//	void *ret;
+//#if defined(__i386__) || defined(__x86_64__)
+//	__asm__("mov %%gs:%1, %0" : "=r" (ret) : "m" (*(void **)(slot * sizeof(void *))));
+//#elif (defined(__arm__) && (defined(_ARM_ARCH_6) || defined(_ARM_ARCH_5)))
+//	void **__pthread_tsd;
+//#if defined(__arm__) && defined(_ARM_ARCH_6)
+//	uintptr_t __pthread_tpid;
+//	__asm__("mrc p15, 0, %0, c13, c0, 3" : "=r" (__pthread_tpid));
+//	__pthread_tsd = (void**)(__pthread_tpid & ~0x3ul);
+//#elif defined(__arm__) && defined(_ARM_ARCH_5)
+//	register uintptr_t __pthread_tpid asm ("r9");
+//	__pthread_tsd = (void**)__pthread_tpid;
+//#endif
+//	ret = __pthread_tsd[slot];
+//#else
+//#error no _pthread_getspecific_direct implementation for this arch
+//#endif
+//	return ret;
+//}
+//
+///* To be used with static constant keys only */
+//__inline__ static int
+//_pthread_setspecific_direct(unsigned long slot, void * val)
+//{
+//#if defined(__i386__)
+//#if defined(__PIC__)
+//	__asm__("movl %1,%%gs:%0" : "=m" (*(void **)(slot * sizeof(void *))) : "rn" (val));
+//#else
+//	__asm__("movl %1,%%gs:%0" : "=m" (*(void **)(slot * sizeof(void *))) : "ri" (val));
+//#endif
+//#elif defined(__x86_64__)
+//	/* PIC is free and cannot be disabled, even with: gcc -mdynamic-no-pic ... */
+//	__asm__("movq %1,%%gs:%0" : "=m" (*(void **)(slot * sizeof(void *))) : "rn" (val));
+//#elif (defined(__arm__) && (defined(_ARM_ARCH_6) || defined(_ARM_ARCH_5)))
+//	void **__pthread_tsd;
+//#if defined(__arm__) && defined(_ARM_ARCH_6)
+//	uintptr_t __pthread_tpid;
+//	__asm__("mrc p15, 0, %0, c13, c0, 3" : "=r" (__pthread_tpid));
+//	__pthread_tsd = (void**)(__pthread_tpid & ~0x3ul);
+//#elif defined(__arm__) && defined(_ARM_ARCH_5)
+//	register uintptr_t __pthread_tpid asm ("r9");
+//	__pthread_tsd = (void**)__pthread_tpid;
+//#endif
+//	__pthread_tsd[slot] = val;
+//#else
+//#error no _pthread_setspecific_direct implementation for this arch
+//#endif
+//	return 0;
+//}
 
 #endif
 

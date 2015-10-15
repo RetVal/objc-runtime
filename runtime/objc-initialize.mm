@@ -120,7 +120,7 @@ typedef struct _objc_initializing_classes {
 * _fetchInitializingClassList
 * Return the list of classes being initialized by this thread.
 * If create == YES, create the list when no classes are being initialized by this thread.
-* If create == NO, return NULL when no classes are being initialized by this thread.
+* If create == NO, return nil when no classes are being initialized by this thread.
 **********************************************************************/
 static _objc_initializing_classes *_fetchInitializingClassList(BOOL create)
 {
@@ -129,12 +129,12 @@ static _objc_initializing_classes *_fetchInitializingClassList(BOOL create)
     Class *classes;
 
     data = _objc_fetch_pthread_data(create);
-    if (data == NULL) return NULL;
+    if (data == nil) return nil;
 
     list = data->initializingClasses;
-    if (list == NULL) {
+    if (list == nil) {
         if (!create) {
-            return NULL;
+            return nil;
         } else {
             list = (_objc_initializing_classes *)
                 _calloc_internal(1, sizeof(_objc_initializing_classes));
@@ -143,7 +143,7 @@ static _objc_initializing_classes *_fetchInitializingClassList(BOOL create)
     }
 
     classes = list->metaclasses;
-    if (classes == NULL) {
+    if (classes == nil) {
         // If _objc_initializing_classes exists, allocate metaclass array, 
         // even if create == NO.
         // Allow 4 simultaneous class inits on this thread before realloc.
@@ -159,14 +159,14 @@ static _objc_initializing_classes *_fetchInitializingClassList(BOOL create)
 /***********************************************************************
 * _destroyInitializingClassList
 * Deallocate memory used by the given initialization list. 
-* Any part of the list may be NULL.
+* Any part of the list may be nil.
 * Called from _objc_pthread_destroyspecific().
 **********************************************************************/
 
 void _destroyInitializingClassList(struct _objc_initializing_classes *list)
 {
-    if (list != NULL) {
-        if (list->metaclasses != NULL) {
+    if (list != nil) {
+        if (list->metaclasses != nil) {
             _free_internal(list->metaclasses);
         }
         _free_internal(list);
@@ -184,7 +184,7 @@ static BOOL _thisThreadIsInitializingClass(Class cls)
 
     _objc_initializing_classes *list = _fetchInitializingClassList(NO);
     if (list) {
-        cls = _class_getMeta(cls);
+        cls = cls->getMeta();
         for (i = 0; i < list->classesAllocated; i++) {
             if (cls == list->metaclasses[i]) return YES;
         }
@@ -205,7 +205,7 @@ static void _setThisThreadIsInitializingClass(Class cls)
 {
     int i;
     _objc_initializing_classes *list = _fetchInitializingClassList(YES);
-    cls = _class_getMeta(cls);
+    cls = cls->getMeta();
   
     // paranoia: explicitly disallow duplicates
     for (i = 0; i < list->classesAllocated; i++) {
@@ -216,7 +216,7 @@ static void _setThisThreadIsInitializingClass(Class cls)
     }
   
     for (i = 0; i < list->classesAllocated; i++) {
-        if (0   == list->metaclasses[i]) {
+        if (! list->metaclasses[i]) {
             list->metaclasses[i] = cls;
             return;
         }
@@ -230,7 +230,7 @@ static void _setThisThreadIsInitializingClass(Class cls)
     // zero out the new entries
     list->metaclasses[i++] = cls;
     for ( ; i < list->classesAllocated; i++) {
-        list->metaclasses[i] = NULL;
+        list->metaclasses[i] = nil;
     }
 }
 
@@ -245,10 +245,10 @@ static void _setThisThreadIsNotInitializingClass(Class cls)
 
     _objc_initializing_classes *list = _fetchInitializingClassList(NO);
     if (list) {
-        cls = _class_getMeta(cls);
+        cls = cls->getMeta();
         for (i = 0; i < list->classesAllocated; i++) {
             if (cls == list->metaclasses[i]) {
-                list->metaclasses[i] = NULL;
+                list->metaclasses[i] = nil;
                 return;
             }
         }
@@ -277,20 +277,20 @@ static void _finishInitializing(Class cls, Class supercls)
     PendingInitialize *pending;
 
     monitor_assert_locked(&classInitLock);
-    assert(!supercls  ||  _class_isInitialized(supercls));
+    assert(!supercls  ||  supercls->isInitialized());
 
     if (PrintInitializing) {
         _objc_inform("INITIALIZE: %s is fully +initialized",
-                     _class_getName(cls));
+                     cls->nameForLogging());
     }
 
     // propagate finalization affinity.
-    if (UseGC && supercls && _class_shouldFinalizeOnMainThread(supercls)) {
-        _class_setFinalizeOnMainThread(cls);
+    if (UseGC && supercls && supercls->shouldFinalizeOnMainThread()) {
+        cls->setShouldFinalizeOnMainThread();
     }
 
     // mark this class as fully +initialized
-    _class_setInitialized(cls);
+    cls->setInitialized();
     monitor_notifyAll(&classInitLock);
     _setThisThreadIsNotInitializingClass(cls);
     
@@ -304,7 +304,7 @@ static void _finishInitializing(Class cls, Class supercls)
     // Destroy the pending table if it's now empty, to save memory.
     if (NXCountMapTable(pendingInitializeMap) == 0) {
         NXFreeMapTable(pendingInitializeMap);
-        pendingInitializeMap = NULL;
+        pendingInitializeMap = nil;
     }
 
     while (pending) {
@@ -329,7 +329,7 @@ static void _finishInitializingAfter(Class cls, Class supercls)
 
     if (PrintInitializing) {
         _objc_inform("INITIALIZE: %s waiting for superclass +[%s initialize]",
-                     _class_getName(cls), _class_getName(supercls));
+                     cls->nameForLogging(), supercls->nameForLogging());
     }
 
     if (!pendingInitializeMap) {
@@ -355,22 +355,22 @@ static void _finishInitializingAfter(Class cls, Class supercls)
 **********************************************************************/
 void _class_initialize(Class cls)
 {
-    assert(!_class_isMetaClass(cls));
+    assert(!cls->isMetaClass());
 
     Class supercls;
     BOOL reallyInitialize = NO;
 
     // Make sure super is done initializing BEFORE beginning to initialize cls.
     // See note about deadlock above.
-    supercls = _class_getSuperclass(cls);
-    if (supercls  &&  !_class_isInitialized(supercls)) {
+    supercls = cls->superclass;
+    if (supercls  &&  !supercls->isInitialized()) {
         _class_initialize(supercls);
     }
     
     // Try to atomically set CLS_INITIALIZING.
     monitor_enter(&classInitLock);
-    if (!_class_isInitialized(cls) && !_class_isInitializing(cls)) {
-        _class_setInitializing(cls);
+    if (!cls->isInitialized() && !cls->isInitializing()) {
+        cls->setInitializing();
         reallyInitialize = YES;
     }
     monitor_exit(&classInitLock);
@@ -386,14 +386,14 @@ void _class_initialize(Class cls)
         // this class doesn't implement +initialize. 2157218
         if (PrintInitializing) {
             _objc_inform("INITIALIZE: calling +[%s initialize]",
-                         _class_getName(cls));
+                         cls->nameForLogging());
         }
 
         ((void(*)(Class, SEL))objc_msgSend)(cls, SEL_initialize);
 
         if (PrintInitializing) {
             _objc_inform("INITIALIZE: finished +[%s initialize]",
-                         _class_getName(cls));
+                         cls->nameForLogging());
         }        
         
         // Done initializing. 
@@ -403,7 +403,7 @@ void _class_initialize(Class cls)
         //   was itself triggered from inside a superclass +initialize.)
         
         monitor_enter(&classInitLock);
-        if (!supercls  ||  _class_isInitialized(supercls)) {
+        if (!supercls  ||  supercls->isInitialized()) {
             _finishInitializing(cls, supercls);
         } else {
             _finishInitializingAfter(cls, supercls);
@@ -412,7 +412,7 @@ void _class_initialize(Class cls)
         return;
     }
     
-    else if (_class_isInitializing(cls)) {
+    else if (cls->isInitializing()) {
         // We couldn't set INITIALIZING because INITIALIZING was already set.
         // If this thread set it earlier, continue normally.
         // If some other thread set it, block until initialize is done.
@@ -423,7 +423,7 @@ void _class_initialize(Class cls)
             return;
         } else {
             monitor_enter(&classInitLock);
-            while (!_class_isInitialized(cls)) {
+            while (!cls->isInitialized()) {
                 monitor_wait(&classInitLock);
             }
             monitor_exit(&classInitLock);
@@ -431,7 +431,7 @@ void _class_initialize(Class cls)
         }
     }
     
-    else if (_class_isInitialized(cls)) {
+    else if (cls->isInitialized()) {
         // Set CLS_INITIALIZING failed because someone else already 
         //   initialized the class. Continue normally.
         // NOTE this check must come AFTER the ISINITIALIZING case.

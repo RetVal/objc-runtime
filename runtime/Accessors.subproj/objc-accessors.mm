@@ -56,11 +56,11 @@ static spin_lock_t PropertyLocks[1 << GOODPOWER] = { 0 };
 
 #define MUTABLE_COPY 2
 
-id objc_getProperty_gc(id self, SEL _cmd, ptrdiff_t offset, BOOL atomic) {
-    return *(id*) ((char*)self + offset);
-}
-
 id objc_getProperty_non_gc(id self, SEL _cmd, ptrdiff_t offset, BOOL atomic) {
+    if (offset == 0) {
+        return object_getClass(self);
+    }
+
     // Retain release world
     id *slot = (id*) ((char*)self + offset);
     if (!atomic) return *slot;
@@ -75,29 +75,16 @@ id objc_getProperty_non_gc(id self, SEL _cmd, ptrdiff_t offset, BOOL atomic) {
     return objc_autoreleaseReturnValue(value);
 }
 
-id objc_getProperty(id self, SEL _cmd, ptrdiff_t offset, BOOL atomic) {
-    return 
-#if SUPPORT_GC
-        (UseGC ? objc_getProperty_gc : objc_getProperty_non_gc)
-#else
-        objc_getProperty_non_gc
-#endif
-            (self, _cmd, offset, atomic);
-}
-
-#if SUPPORT_GC
-void objc_setProperty_gc(id self, SEL _cmd, ptrdiff_t offset, id newValue, BOOL atomic, signed char shouldCopy) {
-    if (shouldCopy) {
-        newValue = (shouldCopy == MUTABLE_COPY ? [newValue mutableCopyWithZone:NULL] : [newValue copyWithZone:NULL]);
-    }
-    objc_assign_ivar_gc(newValue, self, offset);
-}
-#endif
 
 static inline void reallySetProperty(id self, SEL _cmd, id newValue, ptrdiff_t offset, bool atomic, bool copy, bool mutableCopy) __attribute__((always_inline));
 
 static inline void reallySetProperty(id self, SEL _cmd, id newValue, ptrdiff_t offset, bool atomic, bool copy, bool mutableCopy)
 {
+    if (offset == 0) {
+        object_setClass(self, newValue);
+        return;
+    }
+
     id oldValue;
     id *slot = (id*) ((char*)self + offset);
 
@@ -153,14 +140,37 @@ void objc_setProperty_nonatomic_copy(id self, SEL _cmd, id newValue, ptrdiff_t o
 }
 
 
-void objc_setProperty(id self, SEL _cmd, ptrdiff_t offset, id newValue, BOOL atomic, signed char shouldCopy) {
 #if SUPPORT_GC
-    (UseGC ? objc_setProperty_gc : objc_setProperty_non_gc)
-#else
-    objc_setProperty_non_gc
-#endif
-        (self, _cmd, offset, newValue, atomic, shouldCopy);
+
+id objc_getProperty_gc(id self, SEL _cmd, ptrdiff_t offset, BOOL atomic) {
+    return *(id*) ((char*)self + offset);
 }
+
+void objc_setProperty_gc(id self, SEL _cmd, ptrdiff_t offset, id newValue, BOOL atomic, signed char shouldCopy) {
+    if (shouldCopy) {
+        newValue = (shouldCopy == MUTABLE_COPY ? [newValue mutableCopyWithZone:NULL] : [newValue copyWithZone:NULL]);
+    }
+    objc_assign_ivar(newValue, self, offset);
+}
+
+// objc_getProperty and objc_setProperty are resolver functions in objc-auto.mm
+
+#else
+
+id 
+objc_getProperty(id self, SEL _cmd, ptrdiff_t offset, BOOL atomic) 
+{
+    return objc_getProperty_non_gc(self, _cmd, offset, atomic);
+}
+
+void 
+objc_setProperty(id self, SEL _cmd, ptrdiff_t offset, id newValue, 
+                 BOOL atomic, signed char shouldCopy) 
+{
+    objc_setProperty_non_gc(self, _cmd, offset, newValue, atomic, shouldCopy);
+}
+
+#endif
 
 
 // This entry point was designed wrong.  When used as a getter, src needs to be locked so that

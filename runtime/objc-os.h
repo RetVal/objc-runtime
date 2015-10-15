@@ -30,6 +30,24 @@
 #define _OBJC_OS_H
 
 #include <TargetConditionals.h>
+#include "objc-config.h"
+
+#ifdef __LP64__
+#   define WORD_SHIFT 3UL
+#   define WORD_MASK 7UL
+#   define WORD_BITS 64
+#else
+#   define WORD_SHIFT 2UL
+#   define WORD_MASK 3UL
+#   define WORD_BITS 32
+#endif
+
+static inline uint32_t word_align(uint32_t x) {
+    return (x + WORD_MASK) & ~WORD_MASK;
+}
+static inline size_t word_align(size_t x) {
+    return (x + WORD_MASK) & ~WORD_MASK;
+}
 
 #if TARGET_OS_MAC
 
@@ -54,69 +72,153 @@
 #   include <crt_externs.h>
 #   include <AssertMacros.h>
 #   undef check
-#   include <AvailabilityMacros.h>
+#   include <Availability.h>
 #   include <TargetConditionals.h>
 #   include <sys/mman.h>
 #   include <sys/time.h>
 #   include <sys/stat.h>
 #   include <sys/param.h>
 #   include <mach/mach.h>
+#   include <mach/vm_param.h>
 #   include <mach-o/dyld.h>
 #   include <mach-o/ldsyms.h>
 #   include <mach-o/loader.h>
 #   include <mach-o/getsect.h>
 #   include <mach-o/dyld_priv.h>
 #   include <malloc/malloc.h>
+//#   include <os/lock_private.h>
 #   include <libkern/OSAtomic.h>
 #   include <libkern/OSCacheControl.h>
 #   include <System/pthread_machdep.h>
 #   include "objc-probes.h"  // generated dtrace probe definitions.
 
+// Some libc functions call objc_msgSend() 
+// so we can't use them without deadlocks.
+void syslog(int, const char *, ...) UNAVAILABLE_ATTRIBUTE;
+void vsyslog(int, const char *, va_list) UNAVAILABLE_ATTRIBUTE;
 
-#if defined(__i386__) || defined(__x86_64__)
 
-// Inlined spinlock.
-// Not for arm on iOS because it hurts uniprocessor performance.
+#define ALWAYS_INLINE inline __attribute__((always_inline))
+#define NEVER_INLINE inline __attribute__((noinline))
 
-#define ARR_SPINLOCK_INIT 0
-// XXX -- Careful: OSSpinLock isn't volatile, but should be
-typedef volatile int ARRSpinLock;
-__attribute__((always_inline))
-static inline void ARRSpinLockLock(ARRSpinLock *l)
+
+
+static ALWAYS_INLINE uintptr_t 
+addc(uintptr_t lhs, uintptr_t rhs, uintptr_t carryin, uintptr_t *carryout)
 {
-    unsigned y;
-again:
-    if (__builtin_expect(__sync_lock_test_and_set(l, 1), 0) == 0) {
-        return;
-    }
-    for (y = 1000; y; y--) {
-#if defined(__i386__) || defined(__x86_64__)
-        asm("pause");
+    return __builtin_addcl(lhs, rhs, carryin, carryout);
+}
+
+static ALWAYS_INLINE uintptr_t 
+subc(uintptr_t lhs, uintptr_t rhs, uintptr_t carryin, uintptr_t *carryout)
+{
+    return __builtin_subcl(lhs, rhs, carryin, carryout);
+}
+
+
+#if __arm64__
+
+static ALWAYS_INLINE
+uintptr_t 
+LoadExclusive(uintptr_t *src)
+{
+    uintptr_t result;
+    asm("ldxr %x0, [%x1]" 
+        : "=r" (result) 
+        : "r" (src), "m" (*src));
+    return result;
+}
+
+static ALWAYS_INLINE
+bool 
+StoreExclusive(uintptr_t *dst, uintptr_t oldvalue __unused, uintptr_t value)
+{
+    uint32_t result;
+    asm("stxr %w0, %x2, [%x3]" 
+        : "=r" (result), "=m" (*dst) 
+        : "r" (value), "r" (dst));
+    return !result;
+}
+
+
+static ALWAYS_INLINE
+bool 
+StoreReleaseExclusive(uintptr_t *dst, uintptr_t oldvalue __unused, uintptr_t value)
+{
+    uint32_t result;
+    asm("stlxr %w0, %x2, [%x3]" 
+        : "=r" (result), "=m" (*dst) 
+        : "r" (value), "r" (dst));
+    return !result;
+}
+
+
+#elif __arm__  
+
+static ALWAYS_INLINE
+uintptr_t 
+LoadExclusive(uintptr_t *src)
+{
+    return *src;
+}
+
+static ALWAYS_INLINE
+bool 
+StoreExclusive(uintptr_t *dst, uintptr_t oldvalue, uintptr_t value)
+{
+    return OSAtomicCompareAndSwapPtr((void *)oldvalue, (void *)value, 
+                                     (void **)dst);
+}
+
+static ALWAYS_INLINE
+bool 
+StoreReleaseExclusive(uintptr_t *dst, uintptr_t oldvalue, uintptr_t value)
+{
+    return OSAtomicCompareAndSwapPtrBarrier((void *)oldvalue, (void *)value, 
+                                            (void **)dst);
+}
+
+
+#elif __x86_64__  ||  __i386__
+
+static ALWAYS_INLINE
+uintptr_t 
+LoadExclusive(uintptr_t *src)
+{
+    return *src;
+}
+
+static ALWAYS_INLINE
+bool 
+StoreExclusive(uintptr_t *dst, uintptr_t oldvalue, uintptr_t value)
+{
+    
+    return __sync_bool_compare_and_swap((void **)dst, (void *)oldvalue, (void *)value);
+}
+
+static ALWAYS_INLINE
+bool 
+StoreReleaseExclusive(uintptr_t *dst, uintptr_t oldvalue, uintptr_t value)
+{
+    return StoreExclusive(dst, oldvalue, value);
+}
+
+#else 
+#   error unknown architecture
 #endif
-        if (*l == 0) goto again;
-    }
-    thread_switch(THREAD_NULL, SWITCH_OPTION_DEPRESS, 1);
-    goto again;
-}
-__attribute__((always_inline))
-static inline void ARRSpinLockUnlock(ARRSpinLock *l)
-{
-    __sync_lock_release(l);
-}
-__attribute__((always_inline))
-static inline int ARRSpinLockTry(ARRSpinLock *l)
-{
-    return __sync_bool_compare_and_swap(l, 0, 1);
-}
 
-#define OSSpinLock ARRSpinLock
-#define OSSpinLockTry(l) ARRSpinLockTry(l)
-#define OSSpinLockLock(l) ARRSpinLockLock(l)
-#define OSSpinLockUnlock(l) ARRSpinLockUnlock(l)
-#undef OS_SPINLOCK_INIT
-#define OS_SPINLOCK_INIT ARR_SPINLOCK_INIT 
 
-#endif
+//#define spinlock_t os_lock_handoff_s
+//#define spinlock_trylock(l) os_lock_trylock(l)
+//#define spinlock_lock(l) os_lock_lock(l)
+//#define spinlock_unlock(l) os_lock_unlock(l)
+//#define SPINLOCK_INITIALIZER OS_LOCK_HANDOFF_INIT
+
+#define spinlock_t OSSpinLock
+#define spinlock_trylock(l) OSSpinLockTry(l)
+#define spinlock_lock(l) OSSpinLockLock(l)
+#define spinlock_unlock(l) OSSpinLockUnlock(l)
+#define SPINLOCK_INITIALIZER OS_SPINLOCK_INIT
 
 
 #if !TARGET_OS_IPHONE
@@ -127,16 +229,6 @@ static inline int ARRSpinLockTry(ARRSpinLock *l)
     extern const char *CRSetCrashLogMessage(const char *msg);
     extern const char *CRGetCrashLogMessage(void);
     extern const char *CRSetCrashLogMessage2(const char *msg);
-    __END_DECLS
-#endif
-
-#if TARGET_IPHONE_SIMULATOR
-    // getsectiondata() and getsegmentdata() are unavailable
-    __BEGIN_DECLS
-#   define getsectiondata(m, s, n, c) objc_getsectiondata(m, s, n, c)
-#   define getsegmentdata(m, s, c) objc_getsegmentdata(m, s, c)
-    extern uint8_t *objc_getsectiondata(const struct mach_header *mh, const char *segname, const char *sectname, unsigned long *outSize);
-    extern uint8_t * objc_getsegmentdata(const struct mach_header *mh, const char *segname, unsigned long *outSize);
     __END_DECLS
 #endif
 
@@ -156,8 +248,8 @@ static inline int ARRSpinLockTry(ARRSpinLock *l)
 /* Use this for functions that are intended to be breakpoint hooks.
    If you do not, the compiler may optimize them away.
    BREAKPOINT_FUNCTION( void stop_on_error(void) ); */
-#   define BREAKPOINT_FUNCTION(prototype)                            \
-    OBJC_EXTERN __attribute__((noinline, visibility("hidden")))      \
+#   define BREAKPOINT_FUNCTION(prototype)                             \
+    OBJC_EXTERN __attribute__((noinline, used, visibility("hidden"))) \
     prototype { asm(""); }
 
 #elif TARGET_OS_WIN32
@@ -177,7 +269,7 @@ static inline int ARRSpinLockTry(ARRSpinLock *l)
 #   include <string.h>
 #   include <assert.h>
 #   include <malloc.h>
-#   include <AvailabilityMacros.h>
+#   include <Availability.h>
 
 #   if __cplusplus
 #       include <vector>
@@ -245,15 +337,17 @@ extern void _objc_fatal(const char *fmt, ...) __attribute__((noreturn, format (p
 
 
 // Thread keys reserved by libc for our use.
-// Keys [0..4] are used by autozone.
-#if defined(__PTK_FRAMEWORK_OBJC_KEY5)
+#if defined(__PTK_FRAMEWORK_OBJC_KEY0)
 #   define SUPPORT_DIRECT_THREAD_KEYS 1
-#   define TLS_DIRECT_KEY        ((tls_key_t)__PTK_FRAMEWORK_OBJC_KEY5)
-#   define SYNC_DATA_DIRECT_KEY  ((tls_key_t)__PTK_FRAMEWORK_OBJC_KEY6)
-#   define SYNC_COUNT_DIRECT_KEY ((tls_key_t)__PTK_FRAMEWORK_OBJC_KEY7)
-#   define AUTORELEASE_POOL_KEY  ((tls_key_t)__PTK_FRAMEWORK_OBJC_KEY8)
+#   define TLS_DIRECT_KEY        ((tls_key_t)__PTK_FRAMEWORK_OBJC_KEY0)
+#   define SYNC_DATA_DIRECT_KEY  ((tls_key_t)__PTK_FRAMEWORK_OBJC_KEY1)
+#   define SYNC_COUNT_DIRECT_KEY ((tls_key_t)__PTK_FRAMEWORK_OBJC_KEY2)
+#   define AUTORELEASE_POOL_KEY  ((tls_key_t)__PTK_FRAMEWORK_OBJC_KEY3)
 # if SUPPORT_RETURN_AUTORELEASE
-#   define AUTORELEASE_POOL_RECLAIM_KEY ((tls_key_t)__PTK_FRAMEWORK_OBJC_KEY9)
+#   define AUTORELEASE_POOL_RECLAIM_KEY ((tls_key_t)__PTK_FRAMEWORK_OBJC_KEY4)
+# endif
+# if SUPPORT_QOS_HACK
+#   define QOS_KEY               ((tls_key_t)__PTK_FRAMEWORK_OBJC_KEY5)
 # endif
 #else
 #   define SUPPORT_DIRECT_THREAD_KEYS 0
@@ -382,10 +476,10 @@ static __inline int _mutex_unlock_nodebug(mutex_t *m) {
 }
 
 
-typedef mutex_t OSSpinLock;
-#define OSSpinLockLock(l) mutex_lock(l)
-#define OSSpinLockUnlock(l) mutex_unlock(l)
-#define OS_SPINLOCK_INIT MUTEX_INITIALIZER
+typedef mutex_t spinlock_t;
+#define spinlock_lock(l) mutex_lock(l)
+#define spinlock_unlock(l) mutex_unlock(l)
+#define SPINLOCK_INITIALIZER MUTEX_INITIALIZER
 
 
 typedef struct {
@@ -575,6 +669,9 @@ static bool is_valid_direct_key(tls_key_t k) {
 #   if SUPPORT_RETURN_AUTORELEASE
             || k == AUTORELEASE_POOL_RECLAIM_KEY
 #   endif
+#   if SUPPORT_QOS_HACK
+            || k == QOS_KEY
+#   endif
                );
 }
 #endif
@@ -584,8 +681,8 @@ static bool is_valid_direct_key(tls_key_t k) {
 // rdar://9162780  _pthread_get/setspecific_direct are inefficient
 // copied from libdispatch
 
-__attribute__((always_inline)) __attribute__((const))
-static inline void**
+__attribute__((const))
+static ALWAYS_INLINE void**
 tls_base(void)
 {
     uintptr_t p;
@@ -597,8 +694,8 @@ tls_base(void)
 #endif
 }
 
-__attribute__((always_inline))
-static inline void
+
+static ALWAYS_INLINE void
 tls_set_direct(void **tsdb, tls_key_t k, void *v)
 {
     assert(is_valid_direct_key(k));
@@ -608,8 +705,8 @@ tls_set_direct(void **tsdb, tls_key_t k, void *v)
 #define tls_set_direct(k, v)                    \
         tls_set_direct(tls_base(), (k), (v))
 
-__attribute__((always_inline))
-static inline void *
+
+static ALWAYS_INLINE void *
 tls_get_direct(void **tsdb, tls_key_t k)
 {
     assert(is_valid_direct_key(k));
@@ -650,37 +747,43 @@ static inline void tls_set_direct(tls_key_t k, void *value)
 // SUPPORT_DIRECT_THREAD_KEYS
 #endif
 
+typedef unsigned long pthread_priority_t;
+#include <pthread/tsd_private.h>
+
+static inline pthread_t pthread_self_direct()
+{
+    return (pthread_t)
+        _pthread_getspecific_direct(_PTHREAD_TSD_SLOT_PTHREAD_SELF);
+}
+
+static inline mach_port_t mach_thread_self_direct() 
+{
+    return (mach_port_t)(uintptr_t)
+        _pthread_getspecific_direct(_PTHREAD_TSD_SLOT_MACH_THREAD_SELF);
+}
+
+#if SUPPORT_QOS_HACK
+#include <pthread/qos_private.h>
+
+static inline pthread_priority_t pthread_self_priority_direct() 
+{
+    pthread_priority_t pri = (pthread_priority_t)
+        _pthread_getspecific_direct(_PTHREAD_TSD_SLOT_PTHREAD_QOS_CLASS);
+    return pri & ~_PTHREAD_PRIORITY_FLAGS_MASK;
+}
+#endif
+
 
 typedef pthread_mutex_t mutex_t;
 #define MUTEX_INITIALIZER PTHREAD_MUTEX_INITIALIZER;
 
-extern int DebuggerMode;
-extern void gdb_objc_debuggerModeFailure(void);
-extern BOOL isManagedDuringDebugger(void *lock);
-extern BOOL isLockedDuringDebugger(void *lock);
-
 static inline int _mutex_lock_nodebug(mutex_t *m) { 
-    if (DebuggerMode  &&  isManagedDuringDebugger(m)) {
-        if (! isLockedDuringDebugger(m)) {
-            gdb_objc_debuggerModeFailure();
-        }
-        return 0;
-    }
     return pthread_mutex_lock(m); 
 }
 static inline bool _mutex_try_lock_nodebug(mutex_t *m) { 
-    if (DebuggerMode  &&  isManagedDuringDebugger(m)) {
-        if (! isLockedDuringDebugger(m)) {
-            gdb_objc_debuggerModeFailure();
-        }
-        return true;
-    }
     return !pthread_mutex_trylock(m); 
 }
 static inline int _mutex_unlock_nodebug(mutex_t *m) { 
-    if (DebuggerMode  &&  isManagedDuringDebugger(m)) {
-        return 0;
-    }
     return pthread_mutex_unlock(m); 
 }
 
@@ -694,29 +797,14 @@ extern void recursive_mutex_init(recursive_mutex_t *m);
 
 static inline int _recursive_mutex_lock_nodebug(recursive_mutex_t *m) { 
     assert(m->mutex);
-    if (DebuggerMode  &&  isManagedDuringDebugger(m)) {
-        if (! isLockedDuringDebugger((mutex_t *)m)) {
-            gdb_objc_debuggerModeFailure();
-        }
-        return 0;
-    }
     return pthread_mutex_lock(m->mutex); 
 }
 static inline bool _recursive_mutex_try_lock_nodebug(recursive_mutex_t *m) { 
     assert(m->mutex);
-    if (DebuggerMode  &&  isManagedDuringDebugger(m)) {
-        if (! isLockedDuringDebugger((mutex_t *)m)) {
-            gdb_objc_debuggerModeFailure();
-        }
-        return true;
-    }
     return !pthread_mutex_trylock(m->mutex); 
 }
 static inline int _recursive_mutex_unlock_nodebug(recursive_mutex_t *m) { 
     assert(m->mutex);
-    if (DebuggerMode  &&  isManagedDuringDebugger(m)) {
-        return 0;
-    }
     return pthread_mutex_unlock(m->mutex); 
 }
 
@@ -739,7 +827,6 @@ static inline int monitor_init(monitor_t *c) {
     return 0;
 }
 static inline int _monitor_enter_nodebug(monitor_t *c) {
-    assert(!isManagedDuringDebugger(c));
     return pthread_mutex_lock(&c->mutex);
 }
 static inline int _monitor_exit_nodebug(monitor_t *c) {
@@ -767,6 +854,59 @@ static inline semaphore_t create_semaphore(void)
 }
 
 
+#if SUPPORT_QOS_HACK
+// Override QOS class to avoid priority inversion in rwlocks
+// <rdar://17697862> do a qos override before taking rw lock in objc
+
+#include <pthread/workqueue_private.h>
+extern pthread_priority_t BackgroundPriority;
+extern pthread_priority_t MainPriority;
+
+static inline void qosStartOverride()
+{
+    uintptr_t overrideRefCount = (uintptr_t)tls_get_direct(QOS_KEY);
+    if (overrideRefCount > 0) {
+        // If there is a qos override, increment the refcount and continue
+        tls_set_direct(QOS_KEY, (void *)(overrideRefCount + 1));
+    }
+    else {
+        pthread_priority_t currentPriority = pthread_self_priority_direct();
+        // Check if override is needed. Only override if we are background qos
+        if (currentPriority <= BackgroundPriority) {
+            int res __unused = _pthread_override_qos_class_start_direct(mach_thread_self_direct(), MainPriority);
+            assert(res == 0);
+            // Once we override, we set the reference count in the tsd 
+            // to know when to end the override
+            tls_set_direct(QOS_KEY, (void *)1);
+        }
+    }
+}
+
+static inline void qosEndOverride()
+{
+    uintptr_t overrideRefCount = (uintptr_t)tls_get_direct(QOS_KEY);
+    if (overrideRefCount == 0) return;
+
+    if (overrideRefCount == 1) {
+        // end the override
+        int res __unused = _pthread_override_qos_class_end_direct(mach_thread_self_direct());
+        assert(res == 0);
+    }
+
+    // decrement refcount
+    tls_set_direct(QOS_KEY, (void *)(overrideRefCount - 1));
+}
+
+// SUPPORT_QOS_HACK
+#else
+// not SUPPORT_QOS_HACK
+
+static inline void qosStartOverride() { }
+static inline void qosEndOverride() { }
+
+// not SUPPORT_QOS_HACK
+#endif
+
 /* Custom read-write lock
    - reader is atomic add/subtract 
    - writer is pthread mutex plus atomic add/subtract
@@ -782,9 +922,6 @@ typedef struct {
     pthread_rwlock_t rwl;
 } rwlock_t;
 
-extern BOOL isReadingDuringDebugger(rwlock_t *lock);
-extern BOOL isWritingDuringDebugger(rwlock_t *lock);
-
 static inline void rwlock_init(rwlock_t *l)
 {
     int err __unused = pthread_rwlock_init(&l->rwl, NULL);
@@ -793,72 +930,58 @@ static inline void rwlock_init(rwlock_t *l)
 
 static inline void _rwlock_read_nodebug(rwlock_t *l)
 {
-    if (DebuggerMode  &&  isManagedDuringDebugger(l)) {
-        if (! isReadingDuringDebugger(l)) {
-            gdb_objc_debuggerModeFailure();
-        }
-        return;
-    }
+    qosStartOverride();
     int err __unused = pthread_rwlock_rdlock(&l->rwl);
     assert(err == 0);
 }
 
 static inline void _rwlock_unlock_read_nodebug(rwlock_t *l)
 {
-    if (DebuggerMode  &&  isManagedDuringDebugger(l)) {
-        return;
-    }
     int err __unused = pthread_rwlock_unlock(&l->rwl);
     assert(err == 0);
+    qosEndOverride();
 }
 
 
 static inline bool _rwlock_try_read_nodebug(rwlock_t *l)
 {
-    if (DebuggerMode  &&  isManagedDuringDebugger(l)) {
-        if (! isReadingDuringDebugger(l)) {
-            gdb_objc_debuggerModeFailure();
-        }
-        return true;
-    }
+    qosStartOverride();
     int err = pthread_rwlock_tryrdlock(&l->rwl);
-    assert(err == 0  ||  err == EBUSY);
-    return (err == 0);
+    assert(err == 0  ||  err == EBUSY  ||  err == EAGAIN);
+    if (err == 0) {
+        return true;
+    } else {
+        qosEndOverride();
+        return false;
+    }
 }
 
 
 static inline void _rwlock_write_nodebug(rwlock_t *l)
 {
-    if (DebuggerMode  &&  isManagedDuringDebugger(l)) {
-        if (! isWritingDuringDebugger(l)) {
-            gdb_objc_debuggerModeFailure();
-        }
-        return;
-    }
+    qosStartOverride();
     int err __unused = pthread_rwlock_wrlock(&l->rwl);
     assert(err == 0);
 }
 
 static inline void _rwlock_unlock_write_nodebug(rwlock_t *l)
 {
-    if (DebuggerMode  &&  isManagedDuringDebugger(l)) {
-        return;
-    }
     int err __unused = pthread_rwlock_unlock(&l->rwl);
     assert(err == 0);
+    qosEndOverride();
 }
 
 static inline bool _rwlock_try_write_nodebug(rwlock_t *l)
 {
-    if (DebuggerMode  &&  isManagedDuringDebugger(l)) {
-        if (! isWritingDuringDebugger(l)) {
-            gdb_objc_debuggerModeFailure();
-        }
-        return true;
-    }
+    qosStartOverride();
     int err = pthread_rwlock_trywrlock(&l->rwl);
     assert(err == 0  ||  err == EBUSY);
-    return (err == 0);
+    if (err == 0) {
+        return true;
+    } else {
+        qosEndOverride();
+        return false;
+    }
 }
 
 

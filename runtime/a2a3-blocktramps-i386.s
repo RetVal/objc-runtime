@@ -23,17 +23,19 @@
 
 #ifdef __i386__
 
+#include <mach/vm_param.h>
+	
 .text
     .private_extern __a2a3_tramphead
     .private_extern __a2a3_firsttramp
     .private_extern __a2a3_nexttramp
     .private_extern __a2a3_trampend
 
-.align 12
+.align PAGE_SHIFT
 __a2a3_tramphead:
     popl %eax
     andl $0xFFFFFFF8, %eax
-    subl $0x1000, %eax
+    subl $ PAGE_SIZE, %eax
     movl 8(%esp), %ecx // self -> ecx
     movl %ecx, 12(%esp) // ecx -> _cmd
     movl (%eax), %ecx // blockPtr -> ecx

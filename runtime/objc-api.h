@@ -55,6 +55,36 @@
 #endif
 
 
+/*
+ * OBJC_NO_GC 1: GC is not supported
+ * OBJC_NO_GC undef: GC is supported
+ *
+ * OBJC_NO_GC_API undef: Libraries must export any symbols that
+ *                       dual-mode code may links to.
+ * OBJC_NO_GC_API 1: Libraries need not export GC-related symbols.
+ */
+#if TARGET_OS_EMBEDDED  ||  TARGET_OS_IPHONE  ||  TARGET_OS_WIN32
+/* GC is unsupported. GC API symbols are not exported. */
+#   define OBJC_NO_GC 1
+#   define OBJC_NO_GC_API 1
+#elif TARGET_OS_MAC && __x86_64h__
+/* GC is unsupported. GC API symbols are exported. */
+#   define OBJC_NO_GC 1
+#   undef  OBJC_NO_GC_API
+#else
+/* GC is supported. */
+#   undef  OBJC_NO_GC
+#   undef  OBJC_GC_API
+#endif
+
+
+/* NS_ENFORCE_NSOBJECT_DESIGNATED_INITIALIZER == 1
+ * marks -[NSObject init] as a designated initializer. */
+#if !defined(NS_ENFORCE_NSOBJECT_DESIGNATED_INITIALIZER)
+#   define NS_ENFORCE_NSOBJECT_DESIGNATED_INITIALIZER 1
+#endif
+
+
 /* OBJC_OLD_DISPATCH_PROTOTYPES == 0 enforces the rule that the dispatch
  * functions must be cast to an appropriate function pointer type. */
 #if !defined(OBJC_OLD_DISPATCH_PROTOTYPES)
@@ -96,7 +126,15 @@
 #   endif
 #endif
 
-#if !defined(OBJC_HIDE_64)
+/* OBJC_SWIFT_UNAVAILABLE: unavailable in Swift */
+#if !defined(OBJC_SWIFT_UNAVAILABLE)
+#   if __has_feature(attribute_availability_swift)
+#       define OBJC_SWIFT_UNAVAILABLE(_msg) __attribute__((availability(swift, unavailable, message=_msg)))
+#   else
+#       define OBJC_SWIFT_UNAVAILABLE(_msg)
+#   endif
+#endif
+
 /* OBJC_ARM64_UNAVAILABLE: unavailable on arm64 (i.e. stret dispatch) */
 #if !defined(OBJC_ARM64_UNAVAILABLE)
 #   if defined(__arm64__)
@@ -104,7 +142,6 @@
 #   else
 #       define OBJC_ARM64_UNAVAILABLE
 #   endif
-#endif
 #endif
 
 /* OBJC_GC_UNAVAILABLE: unavailable with -fobjc-gc or -fobjc-gc-only */
@@ -162,6 +199,19 @@
 
 #if !defined(OBJC_INLINE)
 #   define OBJC_INLINE __inline
+#endif
+
+// Declares an enum type or option bits type as appropriate for each language.
+#if (__cplusplus && __cplusplus >= 201103L && (__has_extension(cxx_strong_enums) || __has_feature(objc_fixed_enum))) || (!__cplusplus && __has_feature(objc_fixed_enum))
+#define OBJC_ENUM(_type, _name) enum _name : _type _name; enum _name : _type
+#if (__cplusplus)
+#define OBJC_OPTIONS(_type, _name) _type _name; enum : _type
+#else
+#define OBJC_OPTIONS(_type, _name) enum _name : _type _name; enum _name : _type
+#endif
+#else
+#define OBJC_ENUM(_type, _name) _type _name; enum
+#define OBJC_OPTIONS(_type, _name) _type _name; enum
 #endif
 
 #endif

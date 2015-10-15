@@ -41,65 +41,10 @@
 
 __BEGIN_DECLS
 
-/***********************************************************************
-* Trampoline descriptors for gdb.
-**********************************************************************/
-
-#if __OBJC2__  &&  defined(__x86_64__)
-
-typedef struct {
-    uint32_t offset;  // 0 = unused, else code = (uintptr_t)desc + desc->offset
-    uint32_t flags;
-} objc_trampoline_descriptor;
-#define OBJC_TRAMPOLINE_MESSAGE (1<<0)   // trampoline acts like objc_msgSend
-#define OBJC_TRAMPOLINE_STRET   (1<<1)   // trampoline is struct-returning
-#define OBJC_TRAMPOLINE_VTABLE  (1<<2)   // trampoline is vtable dispatcher
-
-typedef struct objc_trampoline_header {
-    uint16_t headerSize;  // sizeof(objc_trampoline_header)
-    uint16_t descSize;    // sizeof(objc_trampoline_descriptor)
-    uint32_t descCount;   // number of descriptors following this header
-    struct objc_trampoline_header *next;
-} objc_trampoline_header;
-
-OBJC_EXPORT objc_trampoline_header *gdb_objc_trampolines
-    __OSX_AVAILABLE_STARTING(__MAC_10_6, __IPHONE_NA);
-
-OBJC_EXPORT void gdb_objc_trampolines_changed(objc_trampoline_header *thdr)
-    __OSX_AVAILABLE_STARTING(__MAC_10_6, __IPHONE_NA);
-// Notify gdb that gdb_objc_trampolines has changed.
-// thdr itself includes the new descriptors; thdr->next is not new.
-
-#endif
-
 
 /***********************************************************************
-* Debugger mode.
+* Class pointer preflighting
 **********************************************************************/
-
-// Start debugger mode. 
-// Returns non-zero if debugger mode was successfully started.
-// In debugger mode, you can try to use the runtime without deadlocking 
-// on other threads. All other threads must be stopped during debugger mode. 
-// OBJC_DEBUGMODE_FULL requires more locks so later operations are less 
-// likely to fail.
-#define OBJC_DEBUGMODE_FULL (1<<0)
-OBJC_EXPORT int gdb_objc_startDebuggerMode(uint32_t flags)
-    __OSX_AVAILABLE_STARTING(__MAC_10_6, __IPHONE_3_1);
-
-// Stop debugger mode. Do not call if startDebuggerMode returned zero.
-OBJC_EXPORT void gdb_objc_endDebuggerMode(void)
-    __OSX_AVAILABLE_STARTING(__MAC_10_6, __IPHONE_3_1);
-
-// Failure hook when debugger mode tries something that would block.
-// Set a breakpoint here to handle it before the runtime causes a trap.
-// Debugger mode is still active; call endDebuggerMode to end it.
-OBJC_EXPORT void gdb_objc_debuggerModeFailure(void)
-    __OSX_AVAILABLE_STARTING(__MAC_10_6, __IPHONE_3_1);
-
-// Older debugger-mode mechanism. Too simplistic.
-OBJC_EXPORT BOOL gdb_objc_isRuntimeLocked(void)
-    __OSX_AVAILABLE_STARTING(__MAC_10_6, __IPHONE_3_1);
 
 // Return cls if it's a valid class, or crash.
 OBJC_EXPORT Class gdb_class_getClass(Class cls)
@@ -132,28 +77,88 @@ OBJC_EXPORT NXHashTable *_objc_debug_class_hash
 
 #endif
 
+
+/***********************************************************************
+* Non-pointer isa
+**********************************************************************/
+
+#if __OBJC2__
+
+// Extract isa pointer from an isa field.
+// (Class)(isa & mask) == class pointer
+OBJC_EXPORT const uintptr_t objc_debug_isa_class_mask
+    __OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_7_0);
+
+// Extract magic cookie from an isa field.
+// (isa & magic_mask) == magic_value
+OBJC_EXPORT const uintptr_t objc_debug_isa_magic_mask
+    __OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_7_0);
+OBJC_EXPORT const uintptr_t objc_debug_isa_magic_value
+    __OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_7_0);
+
+#endif
+
+
+/***********************************************************************
+* Tagged pointer decoding
+**********************************************************************/
 #if __OBJC2__
 
 // if (obj & mask) obj is a tagged pointer object
 OBJC_EXPORT uintptr_t objc_debug_taggedpointer_mask
-__OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_NA);
+    __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
 
 // tag_slot = (obj >> slot_shift) & slot_mask
 OBJC_EXPORT unsigned int objc_debug_taggedpointer_slot_shift
-__OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_NA);
+    __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
 OBJC_EXPORT uintptr_t objc_debug_taggedpointer_slot_mask
-__OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_NA);
+    __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
 
 // class = classes[tag_slot]
 OBJC_EXPORT Class objc_debug_taggedpointer_classes[]
-__OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_NA);
+    __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
 
 // payload = (obj << payload_lshift) >> payload_rshift
 // Payload signedness is determined by the signedness of the right-shift.
 OBJC_EXPORT unsigned int objc_debug_taggedpointer_payload_lshift
-__OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_NA);
+    __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
 OBJC_EXPORT unsigned int objc_debug_taggedpointer_payload_rshift
-__OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_NA);
+    __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
+
+#endif
+
+
+/***********************************************************************
+* Breakpoints in objc_msgSend for debugger stepping.
+* The array is a {0,0} terminated list of addresses. 
+* Each address is one of the following:
+* OBJC_MESSENGER_START:    Address is the start of a messenger function.
+* OBJC_MESSENGER_END_FAST: Address is a jump insn that calls an IMP.
+* OBJC_MESSENGER_END_SLOW: Address is some insn in the slow lookup path.
+* OBJC_MESSENGER_END_NIL:  Address is a return insn for messages to nil.
+* 
+* Every path from OBJC_MESSENGER_START should reach some OBJC_MESSENGER_END.
+* At all ENDs, the stack and parameter register state is the same as START.
+*
+* In some cases, the END_FAST case jumps to something other than the
+* method's implementation. In those cases the jump's destination will 
+* be another function that is marked OBJC_MESSENGER_START.
+**********************************************************************/
+#if __OBJC2__
+
+#define OBJC_MESSENGER_START    1
+#define OBJC_MESSENGER_END_FAST 2
+#define OBJC_MESSENGER_END_SLOW 3
+#define OBJC_MESSENGER_END_NIL  4
+
+struct objc_messenger_breakpoint {
+    uintptr_t address;
+    uintptr_t kind;
+};
+
+OBJC_EXPORT struct objc_messenger_breakpoint 
+gdb_objc_messenger_breakpoints[]
+    __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
 
 #endif
 

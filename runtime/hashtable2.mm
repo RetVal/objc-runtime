@@ -234,7 +234,7 @@ NXHashTable *NXCopyHashTable (NXHashTable *table) {
     NXHashTable		*newt;
     NXHashState		state = NXInitHashState (table);
     void		*data;
-    void 		*z = ZONE_FROM_PTR(table);
+    __unused void	*z = ZONE_FROM_PTR(table);
     
     newt = ALLOCTABLE(z);
     newt->prototype = table->prototype; newt->count = 0;
@@ -297,7 +297,7 @@ void _NXHashRehashToCapacity (NXHashTable *table, unsigned newCapacity) {
     NXHashTable	*old;
     NXHashState	state;
     void	*aux;
-    void 	*z = ZONE_FROM_PTR(table);
+    __unused void *z = ZONE_FROM_PTR(table);
     
     old = ALLOCTABLE(z);
     old->prototype = table->prototype; old->count = table->count; 
@@ -323,7 +323,7 @@ void *NXHashInsert (NXHashTable *table, const void *data) {
     unsigned	j = bucket->count;
     const void	**pairs;
     const void	**newt;
-    void 	*z = ZONE_FROM_PTR(table);
+    __unused void *z = ZONE_FROM_PTR(table);
     
     if (! j) {
 	bucket->count++; bucket->elements.one = data; 
@@ -370,7 +370,7 @@ void *NXHashInsertIfAbsent (NXHashTable *table, const void *data) {
     unsigned	j = bucket->count;
     const void	**pairs;
     const void	**newt;
-    void 	*z = ZONE_FROM_PTR(table);
+    __unused void *z = ZONE_FROM_PTR(table);
     
     if (! j) {
 	bucket->count++; bucket->elements.one = data; 
@@ -411,7 +411,7 @@ void *NXHashRemove (NXHashTable *table, const void *data) {
     unsigned	j = bucket->count;
     const void	**pairs;
     const void	**newt;
-    void 	*z = ZONE_FROM_PTR(table);
+    __unused void *z = ZONE_FROM_PTR(table);
     
     if (! j) return NULL;
     if (j == 1) {
@@ -485,8 +485,8 @@ uintptr_t NXPtrHash (const void *info, const void *data) {
     };
     
 uintptr_t NXStrHash (const void *info, const void *data) {
-    register uintptr_t	hash = 0;
-    register unsigned char	*s = (unsigned char *) data;
+    uintptr_t	hash = 0;
+    unsigned char	*s = (unsigned char *) data;
     /* unsigned to avoid a sign-extend */
     /* unroll the loop */
     if (s) for (; ; ) { 

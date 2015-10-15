@@ -48,6 +48,22 @@
 OBJC_EXPORT void _objcInit(void)
     __OSX_AVAILABLE_STARTING(__MAC_10_0, __IPHONE_2_0);
 
+/* Images */
+
+// Description of an Objective-C image.
+// __DATA,__objc_imageinfo stores one of these.
+typedef struct objc_image_info {
+    uint32_t version; // currently 0
+    uint32_t flags;
+} objc_image_info;
+
+// Values for objc_image_info.flags
+#define OBJC_IMAGE_IS_REPLACEMENT (1<<0)
+#define OBJC_IMAGE_SUPPORTS_GC (1<<1)
+#define OBJC_IMAGE_REQUIRES_GC (1<<2)
+#define OBJC_IMAGE_OPTIMIZED_BY_DYLD (1<<3)
+#define OBJC_IMAGE_SUPPORTS_COMPACTION (1<<4)  // might be re-assignable
+
 
 /* Properties */
 
@@ -96,7 +112,8 @@ OBJC_EXPORT struct objc_cache _objc_empty_cache
 OBJC_EXPORT id objc_msgSendSuper2(struct objc_super *super, SEL op, ...)
     __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0);
 OBJC_EXPORT void objc_msgSendSuper2_stret(struct objc_super *super, SEL op,...)
-    __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0);
+    __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0)
+    OBJC_ARM64_UNAVAILABLE;
 
 // objc_msgSend_noarg() may be faster for methods with no additional arguments.
 OBJC_EXPORT id objc_msgSend_noarg(id self, SEL _cmd)
@@ -113,9 +130,11 @@ OBJC_EXPORT id objc_msgSend_debug(id self, SEL op, ...)
 OBJC_EXPORT id objc_msgSendSuper2_debug(struct objc_super *super, SEL op, ...)
     __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
 OBJC_EXPORT void objc_msgSend_stret_debug(id self, SEL op, ...)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0)
+    OBJC_ARM64_UNAVAILABLE;
 OBJC_EXPORT void objc_msgSendSuper2_stret_debug(struct objc_super *super, SEL op,...)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0)
+    OBJC_ARM64_UNAVAILABLE;
 
 # if defined(__i386__)
 OBJC_EXPORT double objc_msgSend_fpret_debug(id self, SEL op, ...)
@@ -134,25 +153,20 @@ OBJC_EXPORT void objc_msgSend_fp2ret_debug(id self, SEL op, ...)
 
 #endif
 
-#if __OBJC2__  &&  defined(__x86_64__)
+#if defined(__x86_64__)  &&  TARGET_OS_MAC  &&  !TARGET_IPHONE_SIMULATOR
 // objc_msgSend_fixup() is used for vtable-dispatchable call sites.
-OBJC_EXPORT id objc_msgSend_fixup(id self, SEL op, ...)
-    __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_NA);
-OBJC_EXPORT void objc_msgSend_stret_fixup(id self, SEL op, ...)
-    __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_NA);
-OBJC_EXPORT id objc_msgSendSuper2_fixup(struct objc_super *super, SEL op, ...)
-    __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_NA);
-OBJC_EXPORT void objc_msgSendSuper2_stret_fixup(struct objc_super *super, SEL op,...)
-    __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_NA);
-OBJC_EXPORT long double objc_msgSend_fpret_fixup(id self, SEL op, ...)
-    __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_NA);
-# if __STDC_VERSION__ >= 199901L
-OBJC_EXPORT _Complex long double objc_msgSend_fp2ret_fixup(id self, SEL op, ...)
-    __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_NA);
-# else
-OBJC_EXPORT void objc_msgSend_fp2ret_fixup(id self, SEL op, ...)
-    __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_NA);
-# endif
+OBJC_EXPORT void objc_msgSend_fixup(void)
+     __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_5, __MAC_10_8, __IPHONE_NA, __IPHONE_NA);
+OBJC_EXPORT void objc_msgSend_stret_fixup(void)
+     __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_5, __MAC_10_8, __IPHONE_NA, __IPHONE_NA);
+OBJC_EXPORT void objc_msgSendSuper2_fixup(void)
+     __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_5, __MAC_10_8, __IPHONE_NA, __IPHONE_NA);
+OBJC_EXPORT void objc_msgSendSuper2_stret_fixup(void)
+     __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_5, __MAC_10_8, __IPHONE_NA, __IPHONE_NA);
+OBJC_EXPORT void objc_msgSend_fpret_fixup(void)
+     __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_5, __MAC_10_8, __IPHONE_NA, __IPHONE_NA);
+OBJC_EXPORT void objc_msgSend_fp2ret_fixup(void)
+     __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_5, __MAC_10_8, __IPHONE_NA, __IPHONE_NA);
 #endif
 
 /* C++-compatible exception handling. */

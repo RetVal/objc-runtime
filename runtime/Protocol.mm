@@ -25,6 +25,10 @@
 	Copyright 1991-1996 NeXT Software, Inc.
 */
 
+#include "objc-private.h"
+
+#undef id
+#undef Class
 
 #include <stdlib.h>
 #include <string.h>
@@ -32,8 +36,6 @@
 #include <mach-o/ldsyms.h>
 
 #include "Protocol.h"
-#include "objc-private.h"
-#include "objc-runtime-old.h"
 
 #if __OBJC2__
 @interface __IncompleteProtocol : NSObject @end
@@ -51,11 +53,6 @@
 #endif
 
 
-typedef struct {
-    uintptr_t count;
-    Protocol *list[0];
-} protocol_list_t;
-
 - (BOOL) conformsTo: (Protocol *)aProtocolObj
 {
     return protocol_conformsToProtocol(self, aProtocolObj);
@@ -68,8 +65,8 @@ typedef struct {
                                   YES/*required*/, YES/*instance*/, 
                                   YES/*recursive*/);
 #else
-    return method_getDescription(_protocol_getMethod(self, aSel, 
-                                                     YES, YES, YES));
+    return method_getDescription(protocol_getMethod((struct protocol_t *)self, 
+                                                     aSel, YES, YES, YES));
 #endif
 }
 
@@ -80,8 +77,8 @@ typedef struct {
                                   YES/*required*/, NO/*instance*/, 
                                   YES/*recursive*/);
 #else
-    return method_getDescription(_protocol_getMethod(self, aSel, 
-                                                     YES, NO, YES));
+    return method_getDescription(protocol_getMethod((struct protocol_t *)self, 
+                                                    aSel, YES, NO, YES));
 #endif
 }
 
@@ -96,7 +93,7 @@ typedef struct {
     // check isKindOf:
     Class cls;
     Class protoClass = objc_getClass("Protocol");
-    for (cls = object_getClass(other); cls; cls = class_getSuperclass(cls)) {
+    for (cls = object_getClass(other); cls; cls = cls->superclass) {
         if (cls == protoClass) break;
     }
     if (!cls) return NO;

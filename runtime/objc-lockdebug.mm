@@ -157,12 +157,10 @@ _mutex_lock_debug(mutex_t *lock, const char *name)
 {
     _objc_lock_list *locks = getLocks(YES);
     
-    if (! (DebuggerMode  &&  isManagedDuringDebugger(lock))) {
-        if (hasLock(locks, lock, MUTEX)) {
-            _objc_fatal("deadlock: relocking mutex %s\n", name+1);
-        }
-        setLock(locks, lock, MUTEX);
+    if (hasLock(locks, lock, MUTEX)) {
+        _objc_fatal("deadlock: relocking mutex %s\n", name+1);
     }
+    setLock(locks, lock, MUTEX);
     
     return _mutex_lock_nodebug(lock);
 }
@@ -175,11 +173,10 @@ _mutex_try_lock_debug(mutex_t *lock, const char *name)
     // attempting to relock in try_lock is OK
     int result = _mutex_try_lock_nodebug(lock);
 
-    if (! (DebuggerMode  &&  isManagedDuringDebugger(lock))) {
-        if (result) {
-            setLock(locks, lock, MUTEX);
-        }
+    if (result) {
+        setLock(locks, lock, MUTEX);
     }
+
     return result;
 }
 
@@ -188,12 +185,10 @@ _mutex_unlock_debug(mutex_t *lock, const char *name)
 {
     _objc_lock_list *locks = getLocks(NO);
 
-    if (! (DebuggerMode  &&  isManagedDuringDebugger(lock))) {
-        if (!hasLock(locks, lock, MUTEX)) {
-            _objc_fatal("unlocking unowned mutex %s\n", name+1);
-        }
-        clearLock(locks, lock, MUTEX);
+    if (!hasLock(locks, lock, MUTEX)) {
+        _objc_fatal("unlocking unowned mutex %s\n", name+1);
     }
+    clearLock(locks, lock, MUTEX);
 
     return _mutex_unlock_nodebug(lock);
 }
@@ -203,10 +198,8 @@ _mutex_assert_locked_debug(mutex_t *lock, const char *name)
 {
     _objc_lock_list *locks = getLocks(NO);
 
-    if (! (DebuggerMode  &&  isManagedDuringDebugger(lock))) {
-        if (!hasLock(locks, lock, MUTEX)) {
-            _objc_fatal("mutex %s incorrectly not held\n",name+1);
-        }
+    if (!hasLock(locks, lock, MUTEX)) {
+        _objc_fatal("mutex %s incorrectly not held\n",name+1);
     }
 }
 
@@ -216,10 +209,8 @@ _mutex_assert_unlocked_debug(mutex_t *lock, const char *name)
 {
     _objc_lock_list *locks = getLocks(NO);
 
-    if (! (DebuggerMode  &&  isManagedDuringDebugger(lock))) {
-        if (hasLock(locks, lock, MUTEX)) {
-            _objc_fatal("mutex %s incorrectly held\n", name+1);
-        }
+    if (hasLock(locks, lock, MUTEX)) {
+        _objc_fatal("mutex %s incorrectly held\n", name+1);
     }
 }
 
@@ -233,9 +224,7 @@ _recursive_mutex_lock_debug(recursive_mutex_t *lock, const char *name)
 {
     _objc_lock_list *locks = getLocks(YES);
     
-    if (! (DebuggerMode  &&  isManagedDuringDebugger(lock))) {
-        setLock(locks, lock, RECURSIVE);
-    }
+    setLock(locks, lock, RECURSIVE);
     
     return _recursive_mutex_lock_nodebug(lock);
 }
@@ -247,11 +236,10 @@ _recursive_mutex_try_lock_debug(recursive_mutex_t *lock, const char *name)
 
     int result = _recursive_mutex_try_lock_nodebug(lock);
 
-    if (! (DebuggerMode  &&  isManagedDuringDebugger(lock))) {
-        if (result) {
-            setLock(locks, lock, RECURSIVE);
-        }
+    if (result) {
+        setLock(locks, lock, RECURSIVE);
     }
+
     return result;
 }
 
@@ -260,12 +248,10 @@ _recursive_mutex_unlock_debug(recursive_mutex_t *lock, const char *name)
 {
     _objc_lock_list *locks = getLocks(NO);
 
-    if (! (DebuggerMode  &&  isManagedDuringDebugger(lock))) {
-        if (!hasLock(locks, lock, RECURSIVE)) {
-            _objc_fatal("unlocking unowned recursive mutex %s\n", name+1);
-        }
-        clearLock(locks, lock, RECURSIVE);
+    if (!hasLock(locks, lock, RECURSIVE)) {
+        _objc_fatal("unlocking unowned recursive mutex %s\n", name+1);
     }
+    clearLock(locks, lock, RECURSIVE);
 
     return _recursive_mutex_unlock_nodebug(lock);
 }
@@ -275,10 +261,8 @@ _recursive_mutex_assert_locked_debug(recursive_mutex_t *lock, const char *name)
 {
     _objc_lock_list *locks = getLocks(NO);
 
-    if (! (DebuggerMode  &&  isManagedDuringDebugger(lock))) {
-        if (!hasLock(locks, lock, RECURSIVE)) {
-            _objc_fatal("recursive mutex %s incorrectly not held\n",name+1);
-        }
+    if (!hasLock(locks, lock, RECURSIVE)) {
+        _objc_fatal("recursive mutex %s incorrectly not held\n",name+1);
     }
 }
 
@@ -288,10 +272,8 @@ _recursive_mutex_assert_unlocked_debug(recursive_mutex_t *lock, const char *name
 {
     _objc_lock_list *locks = getLocks(NO);
 
-    if (! (DebuggerMode  &&  isManagedDuringDebugger(lock))) {
-        if (hasLock(locks, lock, RECURSIVE)) {
-            _objc_fatal("recursive mutex %s incorrectly held\n", name+1);
-        }
+    if (hasLock(locks, lock, RECURSIVE)) {
+        _objc_fatal("recursive mutex %s incorrectly held\n", name+1);
     }
 }
 
@@ -305,12 +287,10 @@ _monitor_enter_debug(monitor_t *lock, const char *name)
 {
     _objc_lock_list *locks = getLocks(YES);
 
-    if (! (DebuggerMode  &&  isManagedDuringDebugger(lock))) {
-        if (hasLock(locks, lock, MONITOR)) {
-            _objc_fatal("deadlock: relocking monitor %s\n", name+1);
-        }
-        setLock(locks, lock, MONITOR);
+    if (hasLock(locks, lock, MONITOR)) {
+        _objc_fatal("deadlock: relocking monitor %s\n", name+1);
     }
+    setLock(locks, lock, MONITOR);
 
     return _monitor_enter_nodebug(lock);
 }
@@ -320,12 +300,10 @@ _monitor_exit_debug(monitor_t *lock, const char *name)
 {
     _objc_lock_list *locks = getLocks(NO);
 
-    if (! (DebuggerMode  &&  isManagedDuringDebugger(lock))) {
-        if (!hasLock(locks, lock, MONITOR)) {
-            _objc_fatal("unlocking unowned monitor%s\n", name+1);
-        }
-        clearLock(locks, lock, MONITOR);
+    if (!hasLock(locks, lock, MONITOR)) {
+        _objc_fatal("unlocking unowned monitor%s\n", name+1);
     }
+    clearLock(locks, lock, MONITOR);
 
     return _monitor_exit_nodebug(lock);
 }
@@ -335,10 +313,8 @@ _monitor_wait_debug(monitor_t *lock, const char *name)
 {
     _objc_lock_list *locks = getLocks(NO);
 
-    if (! (DebuggerMode  &&  isManagedDuringDebugger(lock))) {
-        if (!hasLock(locks, lock, MONITOR)) {
-            _objc_fatal("waiting in unowned monitor%s\n", name+1);
-        }
+    if (!hasLock(locks, lock, MONITOR)) {
+        _objc_fatal("waiting in unowned monitor%s\n", name+1);
     }
 
     return _monitor_wait_nodebug(lock);
@@ -349,10 +325,8 @@ _monitor_assert_locked_debug(monitor_t *lock, const char *name)
 {
     _objc_lock_list *locks = getLocks(NO);
 
-    if (! (DebuggerMode  &&  isManagedDuringDebugger(lock))) {
-        if (!hasLock(locks, lock, MONITOR)) {
-            _objc_fatal("monitor %s incorrectly not held\n",name+1);
-        }
+    if (!hasLock(locks, lock, MONITOR)) {
+        _objc_fatal("monitor %s incorrectly not held\n",name+1);
     }
 }
 
@@ -361,10 +335,8 @@ _monitor_assert_unlocked_debug(monitor_t *lock, const char *name)
 {
     _objc_lock_list *locks = getLocks(NO);
 
-    if (! (DebuggerMode  &&  isManagedDuringDebugger(lock))) {
-        if (hasLock(locks, lock, MONITOR)) {
-            _objc_fatal("monitor %s incorrectly held\n", name+1);
-        }
+    if (hasLock(locks, lock, MONITOR)) {
+        _objc_fatal("monitor %s incorrectly held\n", name+1);
     }
 }
 
@@ -378,16 +350,14 @@ _rwlock_read_debug(rwlock_t *lock, const char *name)
 {
     _objc_lock_list *locks = getLocks(YES);
 
-    if (! (DebuggerMode  &&  isManagedDuringDebugger(lock))) {
-        if (hasLock(locks, lock, RDLOCK)) {
-            // Recursive rwlock read is bad (may deadlock vs pending writer)
-            _objc_fatal("recursive rwlock read %s\n", name+1);
-        }
-        if (hasLock(locks, lock, WRLOCK)) {
-            _objc_fatal("deadlock: read after write for rwlock %s\n", name+1);
-        }
-        setLock(locks, lock, RDLOCK);
+    if (hasLock(locks, lock, RDLOCK)) {
+        // Recursive rwlock read is bad (may deadlock vs pending writer)
+        _objc_fatal("recursive rwlock read %s\n", name+1);
     }
+    if (hasLock(locks, lock, WRLOCK)) {
+        _objc_fatal("deadlock: read after write for rwlock %s\n", name+1);
+    }
+    setLock(locks, lock, RDLOCK);
 
     _rwlock_read_nodebug(lock);
 }
@@ -401,11 +371,10 @@ _rwlock_try_read_debug(rwlock_t *lock, const char *name)
     // try-read when already writing is OK (will fail)
     int result = _rwlock_try_read_nodebug(lock);
 
-    if (! (DebuggerMode  &&  isManagedDuringDebugger(lock))) {
-        if (result) {
-            setLock(locks, lock, RDLOCK);
-        }
+    if (result) {
+        setLock(locks, lock, RDLOCK);
     }
+
     return result;
 }
 
@@ -414,12 +383,10 @@ _rwlock_unlock_read_debug(rwlock_t *lock, const char *name)
 {
     _objc_lock_list *locks = getLocks(NO);
 
-    if (! (DebuggerMode  &&  isManagedDuringDebugger(lock))) {
-        if (!hasLock(locks, lock, RDLOCK)) {
-            _objc_fatal("un-reading unowned rwlock %s\n", name+1);
-        }
-        clearLock(locks, lock, RDLOCK);
+    if (!hasLock(locks, lock, RDLOCK)) {
+        _objc_fatal("un-reading unowned rwlock %s\n", name+1);
     }
+    clearLock(locks, lock, RDLOCK);
 
     _rwlock_unlock_read_nodebug(lock);
 }
@@ -429,16 +396,14 @@ _rwlock_write_debug(rwlock_t *lock, const char *name)
 {
     _objc_lock_list *locks = getLocks(YES);
 
-    if (! (DebuggerMode  &&  isManagedDuringDebugger(lock))) {
-        if (hasLock(locks, lock, RDLOCK)) {
-            // Lock promotion not allowed (may deadlock)
-            _objc_fatal("deadlock: write after read for rwlock %s\n", name+1);
-        }
-        if (hasLock(locks, lock, WRLOCK)) {
-            _objc_fatal("recursive rwlock write %s\n", name+1);
-        }
-        setLock(locks, lock, WRLOCK);
+    if (hasLock(locks, lock, RDLOCK)) {
+        // Lock promotion not allowed (may deadlock)
+        _objc_fatal("deadlock: write after read for rwlock %s\n", name+1);
     }
+    if (hasLock(locks, lock, WRLOCK)) {
+        _objc_fatal("recursive rwlock write %s\n", name+1);
+    }
+    setLock(locks, lock, WRLOCK);
 
     _rwlock_write_nodebug(lock);
 }
@@ -453,11 +418,10 @@ _rwlock_try_write_debug(rwlock_t *lock, const char *name)
     // try-write when already writing is OK (will fail)
     int result = _rwlock_try_write_nodebug(lock);
 
-    if (! (DebuggerMode  &&  isManagedDuringDebugger(lock))) {
-        if (result) {
-            setLock(locks, lock, WRLOCK);
-        }
+    if (result) {
+        setLock(locks, lock, WRLOCK);
     }
+
     return result;
 }
 
@@ -466,12 +430,10 @@ _rwlock_unlock_write_debug(rwlock_t *lock, const char *name)
 {
     _objc_lock_list *locks = getLocks(NO);
 
-    if (! (DebuggerMode  &&  isManagedDuringDebugger(lock))) {
-        if (!hasLock(locks, lock, WRLOCK)) {
-            _objc_fatal("un-writing unowned rwlock %s\n", name+1);
-        }
-        clearLock(locks, lock, WRLOCK);
+    if (!hasLock(locks, lock, WRLOCK)) {
+        _objc_fatal("un-writing unowned rwlock %s\n", name+1);
     }
+    clearLock(locks, lock, WRLOCK);
 
     _rwlock_unlock_write_nodebug(lock);
 }
@@ -482,10 +444,8 @@ _rwlock_assert_reading_debug(rwlock_t *lock, const char *name)
 {
     _objc_lock_list *locks = getLocks(NO);
 
-    if (! (DebuggerMode  &&  isManagedDuringDebugger(lock))) {
-        if (!hasLock(locks, lock, RDLOCK)) {
-            _objc_fatal("rwlock %s incorrectly not reading\n", name+1);
-        }
+    if (!hasLock(locks, lock, RDLOCK)) {
+        _objc_fatal("rwlock %s incorrectly not reading\n", name+1);
     }
 }
 
@@ -494,10 +454,8 @@ _rwlock_assert_writing_debug(rwlock_t *lock, const char *name)
 {
     _objc_lock_list *locks = getLocks(NO);
 
-    if (! (DebuggerMode  &&  isManagedDuringDebugger(lock))) {
-        if (!hasLock(locks, lock, WRLOCK)) {
-            _objc_fatal("rwlock %s incorrectly not writing\n", name+1);
-        }
+    if (!hasLock(locks, lock, WRLOCK)) {
+        _objc_fatal("rwlock %s incorrectly not writing\n", name+1);
     }
 }
 
@@ -506,11 +464,9 @@ _rwlock_assert_locked_debug(rwlock_t *lock, const char *name)
 {
     _objc_lock_list *locks = getLocks(NO);
 
-    if (! (DebuggerMode  &&  isManagedDuringDebugger(lock))) {
-        if (!hasLock(locks, lock, RDLOCK)  &&  !hasLock(locks, lock, WRLOCK)) {
-            _objc_fatal("rwlock %s incorrectly neither reading nor writing\n", 
-                        name+1);
-        }
+    if (!hasLock(locks, lock, RDLOCK)  &&  !hasLock(locks, lock, WRLOCK)) {
+        _objc_fatal("rwlock %s incorrectly neither reading nor writing\n", 
+                    name+1);
     }
 }
 
@@ -519,10 +475,8 @@ _rwlock_assert_unlocked_debug(rwlock_t *lock, const char *name)
 {
     _objc_lock_list *locks = getLocks(NO);
 
-    if (! (DebuggerMode  &&  isManagedDuringDebugger(lock))) {
-        if (hasLock(locks, lock, RDLOCK)  ||  hasLock(locks, lock, WRLOCK)) {
-            _objc_fatal("rwlock %s incorrectly not unlocked\n", name+1);
-        }
+    if (hasLock(locks, lock, RDLOCK)  ||  hasLock(locks, lock, WRLOCK)) {
+        _objc_fatal("rwlock %s incorrectly not unlocked\n", name+1);
     }
 }
 

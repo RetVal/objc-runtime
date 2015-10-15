@@ -70,6 +70,12 @@ typedef int (*objc_exception_matcher)(Class catch_type, id exception);
 typedef void (*objc_uncaught_exception_handler)(id exception);
 typedef void (*objc_exception_handler)(id unused, void *context);
 
+/** 
+ * Throw a runtime exception. This function is inserted by the compiler
+ * where \c @throw would otherwise be.
+ * 
+ * @param exception The exception to be thrown.
+ */
 OBJC_EXPORT void objc_exception_throw(id exception)
     __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0);
 OBJC_EXPORT void objc_exception_rethrow(void)

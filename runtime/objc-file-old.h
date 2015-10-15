@@ -24,6 +24,8 @@
 #ifndef _OBJC_FILE_OLD_H
 #define _OBJC_FILE_OLD_H
 
+#if !__OBJC2__
+
 #include "objc-os.h"
 
 struct objc_module;
@@ -34,11 +36,12 @@ __BEGIN_DECLS
 
 extern struct objc_module *_getObjcModules(const header_info *hi, size_t *nmodules);
 extern SEL *_getObjcSelectorRefs(const header_info *hi, size_t *nmess);
-extern BOOL _hasObjcContents(const header_info *hi);
 extern struct old_protocol **_getObjcProtocols(const header_info *hi, size_t *nprotos);
-extern struct old_class **_getObjcClassRefs(const header_info *hi, size_t *nclasses);
+extern Class *_getObjcClassRefs(const header_info *hi, size_t *nclasses);
 extern const char *_getObjcClassNames(const header_info *hi, size_t *size);
 
 __END_DECLS
+
+#endif
 
 #endif

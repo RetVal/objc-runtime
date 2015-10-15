@@ -26,7 +26,6 @@
 * OS portability layer.
 **********************************************************************/
 
-#include "objc-os.h"
 #include "objc-private.h"
 #include "objc-loadmethod.h"
 
@@ -193,9 +192,8 @@ bool crashlog_header_name(header_info *hi)
 // TARGET_OS_WIN32
 #elif TARGET_OS_MAC
 
-#if !__OBJC2__
 #include "objc-file-old.h"
-#endif
+#include "objc-file.h"
 
 void mutex_init(mutex_t *m)
 {
@@ -351,15 +349,9 @@ const char *_gcForHInfo2(const header_info *hinfo)
 const char *_gcForHInfo(const header_info *hinfo)
 {
     if (_objcHeaderRequiresGC(hinfo)) {
-        if (_objcHeaderSupportsCompaction(hinfo))
-            return "requires GC, supports compaction";
-        else
-            return "requires GC";
+        return "requires GC";
     } else if (_objcHeaderSupportsGC(hinfo)) {
-        if (_objcHeaderSupportsCompaction(hinfo))
-            return "supports GC, supports compaction";
-        else
-            return "supports GC";
+        return "supports GC";
     } else {
         return "does not support GC";
     }
@@ -367,17 +359,37 @@ const char *_gcForHInfo(const header_info *hinfo)
 const char *_gcForHInfo2(const header_info *hinfo)
 {
     if (_objcHeaderRequiresGC(hinfo)) {
-        if (_objcHeaderSupportsCompaction(hinfo))
-            return "(requires GC) (supports compaction)";
-        else
-            return "(requires GC)";
+        return "(requires GC)";
     } else if (_objcHeaderSupportsGC(hinfo)) {
-        if (_objcHeaderSupportsCompaction(hinfo))
-            return "(supports GC) (supports compaction)";
-        else
-            return "(supports GC)";
+        return "(supports GC)";
     }
     return "";
+}
+
+
+/***********************************************************************
+* linksToLibrary
+* Returns true if the image links directly to a dylib whose install name 
+* is exactly the given name.
+**********************************************************************/
+bool
+linksToLibrary(const header_info *hi, const char *name)
+{
+    const struct dylib_command *cmd;
+    unsigned long i;
+    
+    cmd = (const struct dylib_command *) (hi->mhdr + 1);
+    for (i = 0; i < hi->mhdr->ncmds; i++) {
+        if (cmd->cmd == LC_LOAD_DYLIB  ||  cmd->cmd == LC_LOAD_UPWARD_DYLIB  ||
+            cmd->cmd == LC_LOAD_WEAK_DYLIB  ||  cmd->cmd == LC_REEXPORT_DYLIB)
+        {
+            const char *dylib = cmd->dylib.name.offset + (const char *)cmd;
+            if (0 == strcmp(dylib, name)) return true;
+        }
+        cmd = (const struct dylib_command *)((char *)cmd + cmd->cmdsize);
+    }
+
+    return false;
 }
 
 
@@ -387,7 +399,7 @@ const char *_gcForHInfo2(const header_info *hinfo)
 * all already-loaded libraries support the executable's GC mode.
 * Returns TRUE if the executable wants GC on.
 **********************************************************************/
-static void check_wants_gc(BOOL *appWantsGC, BOOL *appSupportsCompaction)
+static void check_wants_gc(BOOL *appWantsGC)
 {
     const header_info *hi;
 
@@ -395,7 +407,6 @@ static void check_wants_gc(BOOL *appWantsGC, BOOL *appSupportsCompaction)
     if (DisableGC) {
         _objc_inform_on_crash("GC: forcing GC OFF because OBJC_DISABLE_GC is set");
         *appWantsGC = NO;
-        *appSupportsCompaction = NO;
     }
     else {
         // Find the executable and check its GC bits. 
@@ -403,14 +414,41 @@ static void check_wants_gc(BOOL *appWantsGC, BOOL *appSupportsCompaction)
         // (The executable will not be found if the executable contains 
         // no Objective-C code.)
         *appWantsGC = NO;
-        *appSupportsCompaction = NO;
         for (hi = FirstHeader; hi != NULL; hi = hi->next) {
             if (hi->mhdr->filetype == MH_EXECUTE) {
                 *appWantsGC = _objcHeaderSupportsGC(hi) ? YES : NO;
-                *appSupportsCompaction = (*appWantsGC && _objcHeaderSupportsCompaction(hi)) ? YES : NO;
+
                 if (PrintGC) {
                     _objc_inform("GC: executable '%s' %s",
                                  hi->fname, _gcForHInfo(hi));
+                }
+
+                if (*appWantsGC) {
+                    // Exception: AppleScriptObjC apps run without GC in 10.9+
+                    // 1. executable defines no classes
+                    // 2. executable references NSBundle only
+                    // 3. executable links to AppleScriptObjC.framework
+                    size_t classcount = 0;
+                    size_t refcount = 0;
+#if __OBJC2__
+                    _getObjc2ClassList(hi, &classcount);
+                    _getObjc2ClassRefs(hi, &refcount);
+#else
+                    if (hi->mod_count == 0  ||  (hi->mod_count == 1 && !hi->mod_ptr[0].symtab)) classcount = 0;
+                    else classcount = 1;
+                    _getObjcClassRefs(hi, &refcount);
+#endif
+                    if (classcount == 0  &&  refcount == 1  &&  
+                        linksToLibrary(hi, "/System/Library/Frameworks"
+                                       "/AppleScriptObjC.framework/Versions/A"
+                                       "/AppleScriptObjC"))
+                    {
+                        *appWantsGC = NO;
+                        if (PrintGC) {
+                            _objc_inform("GC: forcing GC OFF because this is "
+                                         "a trivial AppleScriptObjC app");
+                        }
+                    }
                 }
             }
         }
@@ -423,7 +461,7 @@ static void check_wants_gc(BOOL *appWantsGC, BOOL *appSupportsCompaction)
 * if we want gc, verify that every header describes files compiled
 * and presumably ready for gc.
 ************************************************************************/
-static void verify_gc_readiness(BOOL wantsGC, BOOL *wantsCompaction,
+static void verify_gc_readiness(BOOL wantsGC,
                                 header_info **hList, uint32_t hCount)
 {
     BOOL busted = NO;
@@ -456,18 +494,6 @@ static void verify_gc_readiness(BOOL wantsGC, BOOL *wantsCompaction,
             busted = YES;            
         }
         
-        if (*wantsCompaction && !_objcHeaderSupportsCompaction(hi)) {
-            // App supports compaction, but library doesn't.
-            _objc_inform_now_and_on_crash
-                ("'%s' was not linked with -Xlinker -objc_gc_compaction, "
-                 "but the application wants compaction.",
-                 hi->fname);
-            // Simply warn for now until radars are filed. Eventually,
-            // objc_disableCompaction() will block until any current compaction completes.
-            objc_disableCompaction();
-            *wantsCompaction = NO;
-        }
-
         if (PrintGC) {
             _objc_inform("GC: library '%s' %s", 
                          hi->fname, _gcForHInfo(hi));
@@ -577,6 +603,41 @@ static const char *gc_enforcer(enum dyld_image_states state,
 #endif
 
 
+
+/***********************************************************************
+* getSDKVersion
+* Look up the build-time SDK version for an image.
+* Version X.Y.Z is encoded as 0xXXXXYYZZ.
+* Images without the load command are assumed to be old (version 0.0.0).
+**********************************************************************/
+#if TARGET_OS_IPHONE
+    // Simulator binaries encode an iOS version
+#   define LC_VERSION_MIN LC_VERSION_MIN_IPHONEOS
+#elif TARGET_OS_MAC
+#   define LC_VERSION_MIN LC_VERSION_MIN_MACOSX
+#else
+#   error unknown OS
+#endif
+
+static uint32_t 
+getSDKVersion(const header_info *hi)
+{
+    const struct version_min_command *cmd;
+    unsigned long i;
+    
+    cmd = (const struct version_min_command *) (hi->mhdr + 1);
+    for (i = 0; i < hi->mhdr->ncmds; i++){
+        if (cmd->cmd == LC_VERSION_MIN  &&  cmd->cmdsize >= 16) {
+            return cmd->sdk;
+        }
+        cmd = (const struct version_min_command *)((char *)cmd + cmd->cmdsize);
+    }
+
+    // Lack of version load command is assumed to be old.
+    return 0;
+}
+
+
 /***********************************************************************
 * map_images_nolock
 * Process the given images which are being mapped in by dyld.
@@ -600,7 +661,6 @@ map_images_nolock(enum dyld_image_states state, uint32_t infoCount,
 {
     static BOOL firstTime = YES;
     static BOOL wantsGC = NO;
-    static BOOL wantsCompaction = NO;
     uint32_t i;
     header_info *hi;
     header_info *hList[infoCount];
@@ -636,6 +696,10 @@ map_images_nolock(enum dyld_image_states state, uint32_t infoCount,
             continue;
         }
         if (mhdr->filetype == MH_EXECUTE) {
+            // Record main executable's build SDK version
+            AppSDKVersion = getSDKVersion(hi);
+
+            // Size some data structures based on main executable's size
 #if __OBJC2__
             size_t count;
             _getObjc2SelectorRefs(hi, &count);
@@ -669,13 +733,13 @@ map_images_nolock(enum dyld_image_states state, uint32_t infoCount,
     // will do the right thing.)
 #if SUPPORT_GC
     if (firstTime) {
-        check_wants_gc(&wantsGC, &wantsCompaction);
+        check_wants_gc(&wantsGC);
 
-        verify_gc_readiness(wantsGC, &wantsCompaction, hList, hCount);
+        verify_gc_readiness(wantsGC, hList, hCount);
         
-        gc_init(wantsGC, wantsCompaction);  // needs executable for GC decision
+        gc_init(wantsGC);  // needs executable for GC decision
     } else {
-        verify_gc_readiness(wantsGC, &wantsCompaction, hList, hCount);
+        verify_gc_readiness(wantsGC, hList, hCount);
     }
 
     if (wantsGC) {
@@ -694,18 +758,10 @@ map_images_nolock(enum dyld_image_states state, uint32_t infoCount,
             // used as associated reference values (rdar://6953570)
         }
     }
-
-    // Need to fixup barriers in all libraries that call into libobjc, whether GC is on or not.
-    for (i = 0; i < infoCount; ++i) {
-        gc_fixup_barrier_stubs(&infoList[i]);
-    }
 #endif
 
     if (firstTime) {
-        extern SEL FwdSel;  // in objc-msg-*.s
         sel_init(wantsGC, selrefCount);
-        FwdSel = sel_registerName("forward::");
-
         arr_init();
     }
 
@@ -970,7 +1026,7 @@ malloc_zone_t *_objc_internal_zone(void)
     if (z == (malloc_zone_t *)-1) {
         if (UseInternalZone) {
             z = malloc_create_zone(vm_page_size, 0);
-            malloc_set_zone_name(z, "ObjC");
+            malloc_set_zone_name(z, "ObjC_Internal");
         } else {
             z = malloc_default_zone();
         }
