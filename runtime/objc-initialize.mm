@@ -99,7 +99,7 @@
 /* classInitLock protects CLS_INITIALIZED and CLS_INITIALIZING, and 
  * is signalled when any class is done initializing. 
  * Threads that are waiting for a class to finish initializing wait on this. */
-static monitor_t classInitLock = MONITOR_INITIALIZER;
+static monitor_t classInitLock;
 
 
 /***********************************************************************
@@ -137,7 +137,7 @@ static _objc_initializing_classes *_fetchInitializingClassList(BOOL create)
             return nil;
         } else {
             list = (_objc_initializing_classes *)
-                _calloc_internal(1, sizeof(_objc_initializing_classes));
+                calloc(1, sizeof(_objc_initializing_classes));
             data->initializingClasses = list;
         }
     }
@@ -149,7 +149,7 @@ static _objc_initializing_classes *_fetchInitializingClassList(BOOL create)
         // Allow 4 simultaneous class inits on this thread before realloc.
         list->classesAllocated = 4;
         classes = (Class *)
-            _calloc_internal(list->classesAllocated, sizeof(Class));
+            calloc(list->classesAllocated, sizeof(Class));
         list->metaclasses = classes;
     }
     return list;
@@ -167,9 +167,9 @@ void _destroyInitializingClassList(struct _objc_initializing_classes *list)
 {
     if (list != nil) {
         if (list->metaclasses != nil) {
-            _free_internal(list->metaclasses);
+            free(list->metaclasses);
         }
-        _free_internal(list);
+        free(list);
     }
 }
 
@@ -225,7 +225,7 @@ static void _setThisThreadIsInitializingClass(Class cls)
     // class list is full - reallocate
     list->classesAllocated = list->classesAllocated * 2 + 1;
     list->metaclasses = (Class *) 
-        _realloc_internal(list->metaclasses,
+        realloc(list->metaclasses,
                           list->classesAllocated * sizeof(Class));
     // zero out the new entries
     list->metaclasses[i++] = cls;
@@ -276,7 +276,7 @@ static void _finishInitializing(Class cls, Class supercls)
 {
     PendingInitialize *pending;
 
-    monitor_assert_locked(&classInitLock);
+    classInitLock.assertLocked();
     assert(!supercls  ||  supercls->isInitialized());
 
     if (PrintInitializing) {
@@ -291,7 +291,7 @@ static void _finishInitializing(Class cls, Class supercls)
 
     // mark this class as fully +initialized
     cls->setInitialized();
-    monitor_notifyAll(&classInitLock);
+    classInitLock.notifyAll();
     _setThisThreadIsNotInitializingClass(cls);
     
     // mark any subclasses that were merely waiting for this class
@@ -310,7 +310,7 @@ static void _finishInitializing(Class cls, Class supercls)
     while (pending) {
         PendingInitialize *next = pending->next;
         if (pending->subclass) _finishInitializing(pending->subclass, cls);
-        _free_internal(pending);
+        free(pending);
         pending = next;
     }
 }
@@ -325,7 +325,7 @@ static void _finishInitializingAfter(Class cls, Class supercls)
 {
     PendingInitialize *pending;
 
-    monitor_assert_locked(&classInitLock);
+    classInitLock.assertLocked();
 
     if (PrintInitializing) {
         _objc_inform("INITIALIZE: %s waiting for superclass +[%s initialize]",
@@ -334,12 +334,11 @@ static void _finishInitializingAfter(Class cls, Class supercls)
 
     if (!pendingInitializeMap) {
         pendingInitializeMap = 
-            NXCreateMapTableFromZone(NXPtrValueMapPrototype,
-                                     10, _objc_internal_zone());
+            NXCreateMapTable(NXPtrValueMapPrototype, 10);
         // fixme pre-size this table for CF/NSObject +initialize
     }
 
-    pending = (PendingInitialize *)_malloc_internal(sizeof(*pending));
+    pending = (PendingInitialize *)malloc(sizeof(*pending));
     pending->subclass = cls;
     pending->next = (PendingInitialize *)
         NXMapGet(pendingInitializeMap, supercls);
@@ -350,8 +349,6 @@ static void _finishInitializingAfter(Class cls, Class supercls)
 /***********************************************************************
 * class_initialize.  Send the '+initialize' message on demand to any
 * uninitialized class. Force initialization of superclasses first.
-*
-* Called only from _class_lookupMethodAndLoadCache (or itself).
 **********************************************************************/
 void _class_initialize(Class cls)
 {
@@ -368,12 +365,13 @@ void _class_initialize(Class cls)
     }
     
     // Try to atomically set CLS_INITIALIZING.
-    monitor_enter(&classInitLock);
-    if (!cls->isInitialized() && !cls->isInitializing()) {
-        cls->setInitializing();
-        reallyInitialize = YES;
+    {
+        monitor_locker_t lock(classInitLock);
+        if (!cls->isInitialized() && !cls->isInitializing()) {
+            cls->setInitializing();
+            reallyInitialize = YES;
+        }
     }
-    monitor_exit(&classInitLock);
     
     if (reallyInitialize) {
         // We successfully set the CLS_INITIALIZING bit. Initialize the class.
@@ -401,14 +399,12 @@ void _class_initialize(Class cls)
         //   the info bits and notify waiting threads.
         // If not, update them later. (This can happen if this +initialize 
         //   was itself triggered from inside a superclass +initialize.)
-        
-        monitor_enter(&classInitLock);
+        monitor_locker_t lock(classInitLock);
         if (!supercls  ||  supercls->isInitialized()) {
             _finishInitializing(cls, supercls);
         } else {
             _finishInitializingAfter(cls, supercls);
         }
-        monitor_exit(&classInitLock);
         return;
     }
     
@@ -422,11 +418,10 @@ void _class_initialize(Class cls)
         if (_thisThreadIsInitializingClass(cls)) {
             return;
         } else {
-            monitor_enter(&classInitLock);
+            monitor_locker_t lock(classInitLock);
             while (!cls->isInitialized()) {
-                monitor_wait(&classInitLock);
+                classInitLock.wait();
             }
-            monitor_exit(&classInitLock);
             return;
         }
     }

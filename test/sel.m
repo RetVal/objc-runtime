@@ -20,14 +20,12 @@ int main()
 
 #else
 
-    // sel_getName recognizes GC-ignored SELs
 # if defined(__i386__)
+    // sel_getName recognizes GC-ignored SELs
     if (objc_collectingEnabled()) {
         testassert(0 == strcmp("<ignored selector>", 
                                sel_getName(@selector(retain))));
-    } else 
-# endif
-    {
+    } else {
         testassert(0 == strcmp("retain", 
                                sel_getName(@selector(retain))));
     }
@@ -39,6 +37,7 @@ int main()
     } u;
     u.sel = @selector(retain);
     testassert(@selector(retain) == sel_registerName(u.ptr));
+# endif
 
 #endif
 

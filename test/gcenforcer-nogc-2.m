@@ -1,7 +1,7 @@
 // gc-on app loading gc-off dylib: should crash
 
 /*
-TEST_CONFIG MEM=gc SDK=macos
+TEST_CONFIG MEM=gc OS=macosx
 TEST_CRASHES
 
 TEST_RUN_OUTPUT

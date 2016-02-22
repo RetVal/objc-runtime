@@ -3,17 +3,6 @@
  */
 
 // TEST_CFLAGS -Wno-deprecated-declarations
-
-/* 
-TEST_RUN_OUTPUT
-objc\[\d+\]: \+\[Sub resolveClassMethod:lyingClassMethod\] returned YES, but no new implementation of \+\[Sub lyingClassMethod\] was found
-objc\[\d+\]: \+\[Sub resolveInstanceMethod:lyingInstanceMethod\] returned YES, but no new implementation of -\[Sub lyingInstanceMethod\] was found
-OK: resolve\.m
-OR
-confused by Foundation
-OK: resolve\.m
-END
-*/
   
 #include "test.h"
 #include "testroot.i"
@@ -26,7 +15,6 @@ END
 int main()
 {
     testwarn("rdar://11368528 confused by Foundation");
-    fprintf(stderr, "confused by Foundation\n");
     succeed(__FILE__);
 }
 
@@ -45,40 +33,44 @@ static int state = 0;
         state = 2;
     }
 }
-+(id)forward:(SEL)sel :(marg_list)__unused args
-{
-    if (sel == @selector(missingClassMethod)) {
-        testassert(state == 21  ||  state == 25  ||  state == 80);
-        if (state == 21) state = 22;
-        if (state == 25) state = 26;
-        if (state == 80) state = 81;;
-        return nil;
-    } else if (sel == @selector(lyingClassMethod)) {
-        testassert(state == 31  ||  state == 35);
-        if (state == 31) state = 32;
-        if (state == 35) state = 36;
-        return nil;
-    }
-    fail("+forward:: shouldn't be called with sel %s", sel_getName(sel));
-    return nil;
-}
--(id)forward:(SEL)sel :(marg_list)__unused args
-{
-    if (sel == @selector(missingInstanceMethod)) {
-        testassert(state == 61  ||  state == 65);
-        if (state == 61) state = 62;
-        if (state == 65) state = 66;
-        return nil;
-    } else if (sel == @selector(lyingInstanceMethod)) {
-        testassert(state == 71  ||  state == 75);
-        if (state == 71) state = 72;
-        if (state == 75) state = 76;
-        return nil;
-    }
-    fail("-forward:: shouldn't be called with sel %s", sel_getName(sel));
-    return nil;
-}
 @end
+
+static id forward_handler(id self, SEL sel)
+{
+    if (class_isMetaClass(object_getClass(self))) {
+        // self is a class object
+        if (sel == @selector(missingClassMethod)) {
+            testassert(state == 21  ||  state == 25  ||  state == 80);
+            if (state == 21) state = 22;
+            if (state == 25) state = 26;
+            if (state == 80) state = 81;;
+            return nil;
+        } else if (sel == @selector(lyingClassMethod)) {
+            testassert(state == 31  ||  state == 35);
+            if (state == 31) state = 32;
+            if (state == 35) state = 36;
+            return nil;
+        }
+        fail("+forward:: shouldn't be called with sel %s", sel_getName(sel));
+        return nil;
+    }
+    else {
+        // self is not a class object
+        if (sel == @selector(missingInstanceMethod)) {
+            testassert(state == 61  ||  state == 65);
+            if (state == 61) state = 62;
+            if (state == 65) state = 66;
+            return nil;
+        } else if (sel == @selector(lyingInstanceMethod)) {
+            testassert(state == 71  ||  state == 75);
+            if (state == 71) state = 72;
+            if (state == 75) state = 76;
+            return nil;
+        }
+        fail("-forward:: shouldn't be called with sel %s", sel_getName(sel));
+        return nil;
+    }
+}
 
 
 static id classMethod_c(id __unused self, SEL __unused sel)
@@ -176,6 +168,8 @@ int main()
 {
     Sub *s;
     id ret;
+
+    objc_setForwardHandler((void*)&forward_handler, NULL);
 
     // Be ready for ARC to retain the class object and call +initialize early
     state = 1;

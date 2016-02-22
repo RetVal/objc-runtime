@@ -1,5 +1,6 @@
 #include "test.h"
 
+OBJC_ROOT_CLASS
 @interface Main @end
 @implementation Main @end
 

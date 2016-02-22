@@ -3,6 +3,8 @@
 #include "test.h"
 #include <Foundation/NSObject.h>
 #include <objc/runtime.h>
+
+#undef SUPPORT_NONPOINTER_ISA  // remove test.h's definition
 #include "../runtime/objc-config.h"
 
 int main() {

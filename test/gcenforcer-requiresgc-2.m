@@ -2,7 +2,7 @@
 // linker sees librequiresgc.fake.dylib, runtime uses librequiresgc.dylib
 
 /*
-TEST_CONFIG MEM=gc SDK=macos
+TEST_CONFIG MEM=gc OS=macosx
 
 TEST_BUILD
     $C{COMPILE_C} $DIR/gc.c -dynamiclib -o libnoobjc.dylib

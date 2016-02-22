@@ -95,12 +95,13 @@ struct weak_table_t {
 };
 
 /// Adds an (object, weak pointer) pair to the weak table.
-id weak_register_no_lock(weak_table_t *weak_table, id referent, id *referrer);
+id weak_register_no_lock(weak_table_t *weak_table, id referent, 
+                         id *referrer, bool crashIfDeallocating);
 
 /// Removes an (object, weak pointer) pair from the weak table.
 void weak_unregister_no_lock(weak_table_t *weak_table, id referent, id *referrer);
 
-#if !NDEBUG
+#if DEBUG
 /// Returns true if an object is weakly referenced somewhere.
 bool weak_is_registered_no_lock(weak_table_t *weak_table, id referent);
 #endif

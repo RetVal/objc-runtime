@@ -23,7 +23,7 @@ static int state;
     do {                                                                \
         Method m1, m2;                                                  \
                                                                         \
-        /* Check unexchanged version */                                 \
+        testprintf("Check unexchanged version\n");                      \
         state = 0;                                                      \
         [Super s1];                                                     \
         testassert(state == v1);                                        \
@@ -31,14 +31,14 @@ static int state;
         [Super s2];                                                     \
         testassert(state == v2);                                        \
                                                                         \
-        /* Exchange */                                                  \
+        testprintf("Exchange\n");                                       \
         m1 = class_getClassMethod([Super class], @selector(s1));        \
         m2 = class_getClassMethod([Super class], @selector(s2));        \
         testassert(m1);                                                 \
         testassert(m2);                                                 \
         method_exchangeImplementations(m1, m2);                         \
                                                                         \
-        /* Check exchanged version */                                   \
+        testprintf("Check exchanged version\n");                        \
         state = 0;                                                      \
         [Super s1];                                                     \
         testassert(state == v2);                                        \
@@ -46,12 +46,12 @@ static int state;
         [Super s2];                                                     \
         testassert(state == v1);                                        \
                                                                         \
-        /* NULL should do nothing */                                    \
+        testprintf("NULL should do nothing\n");                         \
         method_exchangeImplementations(m1, NULL);                       \
         method_exchangeImplementations(NULL, m2);                       \
         method_exchangeImplementations(NULL, NULL);                     \
                                                                         \
-        /* Make sure NULL did nothing */                                \
+        testprintf("Make sure NULL did nothing\n");                     \
         state = 0;                                                      \
         [Super s1];                                                     \
         testassert(state == v2);                                        \
@@ -59,10 +59,10 @@ static int state;
         [Super s2];                                                     \
         testassert(state == v1);                                        \
                                                                         \
-        /* Put them back */                                             \
+        testprintf("Put them back\n");                                  \
         method_exchangeImplementations(m1, m2);                         \
                                                                         \
-        /* Check restored version */                                    \
+        testprintf("Check restored version\n");                         \
         state = 0;                                                      \
         [Super s1];                                                     \
         testassert(state == v1);                                        \

@@ -34,6 +34,39 @@
 #   error requires armv7
 #endif
 
+// Set FP=1 on architectures that pass parameters in floating-point registers
+#if __ARM_ARCH_7K__
+#   define FP 1
+#else
+#   define FP 0
+#endif
+
+#if FP
+
+#   if !__ARM_NEON__
+#       error sorry
+#   endif
+
+#   define FP_RETURN_ZERO \
+	vmov.i32  q0, #0  ; \
+	vmov.i32  q1, #0  ; \
+	vmov.i32  q2, #0  ; \
+	vmov.i32  q3, #0
+
+#   define FP_SAVE \
+	vpush	{q0-q3}
+
+#   define FP_RESTORE \
+	vpop	{q0-q3}
+
+#else
+
+#   define FP_RETURN_ZERO
+#   define FP_SAVE
+#   define FP_RESTORE
+
+#endif
+
 .syntax unified	
 	
 #define MI_EXTERN(var) \
@@ -63,11 +96,14 @@ MI_EXTERN(__class_lookupMethodAndLoadCache3)
 MI_EXTERN(___objc_error)
 
 
+.data
+
 // _objc_entryPoints and _objc_exitPoints are used by method dispatch
 // caching code to figure out whether any threads are actively 
 // in the cache for dispatching.  The labels surround the asm code
 // that do cache lookups.  The tables are zero-terminated.
-.data
+
+.align 2
 .private_extern _objc_entryPoints
 _objc_entryPoints:
 	.long   _cache_getImp
@@ -79,7 +115,6 @@ _objc_entryPoints:
 	.long   _objc_msgSendSuper2_stret
 	.long   0
 
-.data
 .private_extern _objc_exitPoints
 _objc_exitPoints:
 	.long   LGetImpExit
@@ -389,9 +424,13 @@ LCacheMiss:
 	b	__objc_msgSend_uncached
 
 LNilReceiver:
-	mov     r1, #0
+	// r0 is already zero
+	mov	r1, #0
+	mov	r2, #0
+	mov	r3, #0
+	FP_RETURN_ZERO
 	MESSENGER_END_NIL
-	bx      lr	
+	bx	lr	
 
 LMsgSendExit:
 	END_ENTRY objc_msgSend
@@ -593,7 +632,8 @@ LMsgSendSuper2StretExit:
 
 	stmfd	sp!, {r0-r3,r7,lr}
 	add     r7, sp, #16
-
+	sub     sp, #8			// align stack
+	FP_SAVE
 					// receiver already in r0
 					// selector already in r1
 	mov	r2, r9			// class to search
@@ -602,6 +642,8 @@ LMsgSendSuper2StretExit:
 	mov     r12, r0			// r12 = IMP
 
 	movs	r9, #0			// r9=0, Z=1 for nonstret forwarding
+	FP_RESTORE
+	add     sp, #8			// align stack
 	ldmfd	sp!, {r0-r3,r7,lr}
 	bx	r12
 
@@ -615,6 +657,8 @@ LMsgSendSuper2StretExit:
 	
 	stmfd	sp!, {r0-r3,r7,lr}
 	add     r7, sp, #16
+	sub     sp, #8			// align stack
+	FP_SAVE
 
 	mov 	r0, r1			// receiver
 	mov 	r1, r2			// selector
@@ -624,6 +668,8 @@ LMsgSendSuper2StretExit:
 	mov     r12, r0			// r12 = IMP
 
 	movs	r9, #1			// r9=1, Z=0 for stret forwarding
+	FP_RESTORE
+	add     sp, #8			// align stack
 	ldmfd	sp!, {r0-r3,r7,lr}
 	bx	r12
 	

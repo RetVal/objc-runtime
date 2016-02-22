@@ -3,6 +3,7 @@
 // OPTION(var, env, help)
 
 OPTION( PrintImages,              OBJC_PRINT_IMAGES,               "log image and library names as they are loaded")
+OPTION( PrintImageTimes,          OBJC_PRINT_IMAGE_TIMES,          "measure duration of image loading steps")
 OPTION( PrintLoading,             OBJC_PRINT_LOAD_METHODS,         "log calls to class and category +load methods")
 OPTION( PrintInitializing,        OBJC_PRINT_INITIALIZE_METHODS,   "log calls to class +initialize methods")
 OPTION( PrintResolving,           OBJC_PRINT_RESOLVED_METHODS,     "log methods created by +resolveClassMethod: and +resolveInstanceMethod:")
@@ -33,9 +34,8 @@ OPTION( DebugNilSync,             OBJC_DEBUG_NIL_SYNC,             "warn about @
 OPTION( DebugNonFragileIvars,     OBJC_DEBUG_NONFRAGILE_IVARS,     "capriciously rearrange non-fragile ivars")
 OPTION( DebugAltHandlers,         OBJC_DEBUG_ALT_HANDLERS,         "record more info about bad alt handler use")
 OPTION( DebugMissingPools,        OBJC_DEBUG_MISSING_POOLS,        "warn about autorelease with no pool in place, which may be a leak")
+OPTION( DebugPoolAllocation,      OBJC_DEBUG_POOL_ALLOCATION,      "halt when autorelease pools are popped out of order, and allow heap debuggers to track autorelease pools")
 OPTION( DebugDuplicateClasses,    OBJC_DEBUG_DUPLICATE_CLASSES,    "halt when multiple classes with the same name are present")
-
-OPTION( UseInternalZone,          OBJC_USE_INTERNAL_ZONE,          "allocate runtime data in a dedicated malloc zone")
 
 OPTION( DisableGC,                OBJC_DISABLE_GC,                 "force GC OFF, even if the executable wants it on")
 OPTION( DisableVtables,           OBJC_DISABLE_VTABLES,            "disable vtable dispatch")

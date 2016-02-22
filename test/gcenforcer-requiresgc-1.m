@@ -2,7 +2,7 @@
 // linker sees librequiresgc.fake.dylib, runtime uses librequiresgc.dylib
 
 /*
-TEST_CONFIG MEM=mrc,arc SDK=macos
+TEST_CONFIG MEM=mrc,arc OS=macosx
 TEST_CRASHES
 
 TEST_RUN_OUTPUT

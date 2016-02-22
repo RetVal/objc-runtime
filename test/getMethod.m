@@ -41,6 +41,7 @@ int main()
     testassert(sel == method_getName(m));
     imp = method_getImplementation(m);
     testassert(imp == class_getMethodImplementation(object_getClass(Super_cls), sel));
+    testassert(imp == object_getMethodImplementation(Super_cls, sel));
     state = 0;
     (*(imp_t)imp)(Super_cls, sel);
     testassert(state == 1);
@@ -51,6 +52,7 @@ int main()
     testassert(sel == method_getName(m));
     imp = method_getImplementation(m);
     testassert(imp == class_getMethodImplementation(object_getClass(Sub_cls), sel));
+    testassert(imp == object_getMethodImplementation(Sub_cls, sel));
     state = 0;
     (*(imp_t)imp)(Sub_cls, sel);
     testassert(state == 2);
@@ -61,6 +63,7 @@ int main()
     testassert(sel == method_getName(m));
     imp = method_getImplementation(m);
     testassert(imp == class_getMethodImplementation(object_getClass(Sub_cls), sel));
+    testassert(imp == object_getMethodImplementation(Sub_cls, sel));
     state = 0;
     (*(imp_t)imp)(Sub_cls, sel);
     testassert(state == 3);
@@ -71,8 +74,9 @@ int main()
     testassert(sel == method_getName(m));
     imp = method_getImplementation(m);
     testassert(imp == class_getMethodImplementation(Super_cls, sel));
-    state = 0;
     buf[0] = Super_cls;
+    testassert(imp == object_getMethodImplementation(objc_unretainedObject(buf), sel));
+    state = 0;
     (*(imp_t)imp)(objc_unretainedObject(buf), sel);
     testassert(state == 4);
 
@@ -82,8 +86,9 @@ int main()
     testassert(sel == method_getName(m));
     imp = method_getImplementation(m);
     testassert(imp == class_getMethodImplementation(Sub_cls, sel));
-    state = 0;
     buf[0] = Sub_cls;
+    testassert(imp == object_getMethodImplementation(objc_unretainedObject(buf), sel));
+    state = 0;
     (*(imp_t)imp)(objc_unretainedObject(buf), sel);
     testassert(state == 5);
 
@@ -93,8 +98,9 @@ int main()
     testassert(sel == method_getName(m));
     imp = method_getImplementation(m);
     testassert(imp == class_getMethodImplementation(Sub_cls, sel));
-    state = 0;
     buf[0] = Sub_cls;
+    testassert(imp == object_getMethodImplementation(objc_unretainedObject(buf), sel));
+    state = 0;
     (*(imp_t)imp)(objc_unretainedObject(buf), sel);
     testassert(state == 6);
 
@@ -106,7 +112,12 @@ int main()
     testassert(! class_getInstanceMethod(Sub_cls, sel));
     testassert(! class_getClassMethod(Sub_cls, sel));
     testassert(class_getMethodImplementation(Sub_cls, sel) == (IMP)&_objc_msgForward);
+    buf[0] = Sub_cls;
+    testassert(object_getMethodImplementation(objc_unretainedObject(buf), sel) == (IMP)&_objc_msgForward);
+#if !__arm64__
     testassert(class_getMethodImplementation_stret(Sub_cls, sel) == (IMP)&_objc_msgForward_stret);
+    testassert(object_getMethodImplementation_stret(objc_unretainedObject(buf), sel) == (IMP)&_objc_msgForward_stret);
+#endif
 
     testassert(! class_getInstanceMethod(NULL, NULL));
     testassert(! class_getInstanceMethod(NULL, sel));

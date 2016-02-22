@@ -77,45 +77,44 @@ const char *sel_getName(SEL sel) {
 
 BOOL sel_isMapped(SEL name) 
 {
-    SEL result;
+    SEL sel;
     
     if (!name) return NO;
 #if SUPPORT_IGNORED_SELECTOR_CONSTANT
     if ((uintptr_t)name == kIgnore) return YES;
 #endif
 
-    result = _objc_search_builtins((const char *)name);
-    if (result) return YES;
+    sel = _objc_search_builtins((const char *)name);
+    if (sel) return YES;
 
-    rwlock_read(&selLock);
+    rwlock_reader_t lock(selLock);
     if (_objc_selectors) {
-        result = __objc_sel_set_get(_objc_selectors, name);
+        sel = __objc_sel_set_get(_objc_selectors, name);
     }
-    rwlock_unlock_read(&selLock);
-    return result ? YES : NO;
+    return bool(sel);
 }
 
 static SEL __sel_registerName(const char *name, int lock, int copy) 
 {
     SEL result = 0;
 
-    if (lock) rwlock_assert_unlocked(&selLock);
-    else rwlock_assert_writing(&selLock);
+    if (lock) selLock.assertUnlocked();
+    else selLock.assertWriting();
 
     if (!name) return (SEL)0;
     result = _objc_search_builtins(name);
     if (result) return result;
     
-    if (lock) rwlock_read(&selLock);
+    if (lock) selLock.read();
     if (_objc_selectors) {
         result = __objc_sel_set_get(_objc_selectors, (SEL)name);
     }
-    if (lock) rwlock_unlock_read(&selLock);
+    if (lock) selLock.unlockRead();
     if (result) return result;
 
     // No match. Insert.
 
-    if (lock) rwlock_write(&selLock);
+    if (lock) selLock.write();
 
     if (!_objc_selectors) {
         _objc_selectors = __objc_sel_set_create(SelrefCount);
@@ -125,14 +124,14 @@ static SEL __sel_registerName(const char *name, int lock, int copy)
         result = __objc_sel_set_get(_objc_selectors, (SEL)name);
     }
     if (!result) {
-        result = (SEL)(copy ? _strdup_internal(name) : name);
+        result = (SEL)(copy ? strdup(name) : name);
         __objc_sel_set_add(_objc_selectors, result);
 #if defined(DUMP_UNKNOWN_SELECTORS)
         printf("\t\"%s\",\n", name);
 #endif
     }
 
-    if (lock) rwlock_unlock_write(&selLock);
+    if (lock) selLock.unlockWrite();
     return result;
 }
 
@@ -141,18 +140,18 @@ SEL sel_registerName(const char *name) {
     return __sel_registerName(name, 1, 1);     // YES lock, YES copy
 }
 
-SEL sel_registerNameNoLock(const char *name, BOOL copy) {
+SEL sel_registerNameNoLock(const char *name, bool copy) {
     return __sel_registerName(name, 0, copy);  // NO lock, maybe copy
 }
 
 void sel_lock(void)
 {
-    rwlock_write(&selLock);
+    selLock.write();
 }
 
 void sel_unlock(void)
 {
-    rwlock_unlock_write(&selLock);
+    selLock.unlockWrite();
 }
 
 
@@ -167,37 +166,7 @@ SEL sel_getUid(const char *name) {
 
 BOOL sel_isEqual(SEL lhs, SEL rhs)
 {
-    return (lhs == rhs) ? YES : NO;
-}
-
-
-/***********************************************************************
-* sel_preoptimizationValid
-* Return YES if this image's selector fixups are valid courtesy 
-* of the dyld shared cache.
-**********************************************************************/
-BOOL sel_preoptimizationValid(const header_info *hi)
-{
-#if !SUPPORT_PREOPT
-
-    return NO;
-
-#else
-
-# if SUPPORT_IGNORED_SELECTOR_CONSTANT
-    // shared cache can't fix constant ignored selectors
-    if (UseGC) return NO;
-# endif
-
-    // preoptimization disabled for some reason
-    if (!isPreoptimized()) return NO;
-
-    // image not from shared cache, or not fixed inside shared cache
-    if (!_objcHeaderOptimizedByDyld(hi)) return NO;
-
-    return YES;
-
-#endif
+    return bool(lhs == rhs);
 }
 
 
@@ -205,7 +174,7 @@ BOOL sel_preoptimizationValid(const header_info *hi)
 * sel_init
 * Initialize selector tables and register selectors used internally.
 **********************************************************************/
-void sel_init(BOOL wantsGC, size_t selrefCount)
+void sel_init(bool wantsGC, size_t selrefCount)
 {
     // save this value for later
     SelrefCount = selrefCount;

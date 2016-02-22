@@ -97,9 +97,11 @@ OBJC_EXPORT void _objc_init(void)
     __OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_6_0);
 #endif
 
+#ifndef OBJC_NO_GC
 // GC startup callback from Foundation
 OBJC_EXPORT malloc_zone_t *objc_collect_init(int (*callback)(void))
     __OSX_AVAILABLE_STARTING(__MAC_10_4, __IPHONE_NA);
+#endif
 
 // Plainly-implemented GC barriers. Rosetta used to use these.
 OBJC_EXPORT id objc_assign_strongCast_generic(id value, id *dest)
@@ -450,23 +452,29 @@ OBJC_EXPORT id objc_autorelease(id obj)
     __asm__("_objc_autorelease")
     __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
 
-// wraps objc_autorelease(obj) in a useful way when used with return values
+// Prepare a value at +1 for return through a +0 autoreleasing convention.
 OBJC_EXPORT
 id
 objc_autoreleaseReturnValue(id obj)
     __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
 
-// wraps objc_autorelease(objc_retain(obj)) in a useful way when used with return values
+// Prepare a value at +0 for return through a +0 autoreleasing convention.
 OBJC_EXPORT
 id
 objc_retainAutoreleaseReturnValue(id obj)
     __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
 
-// called ONLY by ARR by callers to undo the autorelease (if possible), otherwise objc_retain
+// Accept a value returned through a +0 autoreleasing convention for use at +1.
 OBJC_EXPORT
 id
 objc_retainAutoreleasedReturnValue(id obj)
     __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+
+// Accept a value returned through a +0 autoreleasing convention for use at +0.
+OBJC_EXPORT
+id
+objc_unsafeClaimAutoreleasedReturnValue(id obj)
+    __OSX_AVAILABLE_STARTING(__MAC_10_11, __IPHONE_9_0);
 
 OBJC_EXPORT
 void
@@ -489,12 +497,28 @@ objc_loadWeakRetained(id *location)
 
 OBJC_EXPORT
 id 
-objc_initWeak(id *addr, id val) 
+objc_initWeak(id *location, id val) 
     __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+
+// Like objc_storeWeak, but stores nil if the new object is deallocating 
+// or the new object's class does not support weak references.
+// Returns the value stored (either the new object or nil).
+OBJC_EXPORT
+id
+objc_storeWeakOrNil(id *location, id obj)
+    __OSX_AVAILABLE_STARTING(__MAC_10_11, __IPHONE_9_0);
+
+// Like objc_initWeak, but stores nil if the new object is deallocating 
+// or the new object's class does not support weak references.
+// Returns the value stored (either the new object or nil).
+OBJC_EXPORT
+id 
+objc_initWeakOrNil(id *location, id val) 
+    __OSX_AVAILABLE_STARTING(__MAC_10_11, __IPHONE_9_0);
 
 OBJC_EXPORT
 void 
-objc_destroyWeak(id *addr) 
+objc_destroyWeak(id *location) 
     __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
 
 OBJC_EXPORT

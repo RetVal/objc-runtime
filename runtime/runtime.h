@@ -771,15 +771,6 @@ OBJC_EXPORT Class objc_getFutureClass(const char *name)
      __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0)
      OBJC_ARC_UNAVAILABLE;
 
-/** 
- * Used by CoreFoundation's toll-free bridging.
- * 
- * @warning Do not call this function yourself.
- */
-OBJC_EXPORT void objc_setFutureClass(Class cls, const char *name) 
-     __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0)
-     OBJC_ARC_UNAVAILABLE;
-
 
 /* Instantiating Classes */
 
@@ -1490,9 +1481,6 @@ OBJC_EXPORT id objc_loadWeak(id *location)
 OBJC_EXPORT id objc_storeWeak(id *location, id obj) 
     __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
 
-OBJC_EXPORT id objc_storeWeakOrNil(id *location, id obj)
-__OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
-
 
 /* Associative References */
 
@@ -1500,7 +1488,7 @@ __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
  * Policies related to associative references.
  * These are options to objc_setAssociatedObject()
  */
-enum {
+typedef OBJC_ENUM(uintptr_t, objc_AssociationPolicy) {
     OBJC_ASSOCIATION_ASSIGN = 0,           /**< Specifies a weak reference to the associated object. */
     OBJC_ASSOCIATION_RETAIN_NONATOMIC = 1, /**< Specifies a strong reference to the associated object. 
                                             *   The association is not made atomically. */
@@ -1511,9 +1499,6 @@ enum {
     OBJC_ASSOCIATION_COPY = 01403          /**< Specifies that the associated object is copied.
                                             *   The association is made atomically. */
 };
-
-/// Type to specify the behavior of an association.
-typedef uintptr_t objc_AssociationPolicy;
 
 /** 
  * Sets an associated value for a given object using a given key and association policy.

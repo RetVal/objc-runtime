@@ -57,7 +57,7 @@ typedef struct {
 } pointer_set_t;
 
 static pointer_set_t *new_pointer_set() {
-    pointer_set_t *result = (pointer_set_t *)malloc_zone_malloc(_objc_internal_zone(), sizeof(pointer_set_t));
+    pointer_set_t *result = (pointer_set_t *)malloc(sizeof(pointer_set_t));
     result->items = (long *)calloc(64, sizeof(long));
     result->count = 0;
     result->capacity = 63;  // last valid ptr, also mask
@@ -87,7 +87,7 @@ static void pointer_set_grow(pointer_set_t *set) {
     long i;
     set->count = 0;
     set->capacity = 2*(oldCapacity+1)-1;
-    set->items = (long *)malloc_zone_calloc(_objc_internal_zone(), 2*(oldCapacity+1), sizeof(long));
+    set->items = (long *)calloc(2*(oldCapacity+1), sizeof(long));
     for (i = 0; i < oldCapacity; ++i)
         if (oldItems[i]) pointer_set_add(set, oldItems[i]);
     free(oldItems);
@@ -107,7 +107,7 @@ static void pointer_set_dispose(pointer_set_t *set) {
 /*
    Quickly dump heap to a named file in a pretty raw format.
  */
-BOOL _objc_dumpHeap(auto_zone_t *zone, const char *filename) {
+bool _objc_dumpHeap(auto_zone_t *zone, const char *filename) {
     // just write interesting info to disk
     int fd = secure_open(filename, O_WRONLY|O_CREAT, geteuid());
     if (fd < 0) return NO;

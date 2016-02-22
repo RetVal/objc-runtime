@@ -49,8 +49,8 @@ static void *threadfn(void *arg)
     }
 
     // Verify lack of objc pthread data (should have used sync fast cache)
-#ifdef __PTK_FRAMEWORK_OBJC_KEY5
-    testassert(! pthread_getspecific(__PTK_FRAMEWORK_OBJC_KEY5));
+#ifdef __PTK_FRAMEWORK_OBJC_KEY0
+    testassert(! pthread_getspecific(__PTK_FRAMEWORK_OBJC_KEY0));
 #endif
 
     return NULL;
@@ -66,8 +66,8 @@ int main()
 
     // Verify objc pthread data on this thread (from +initialize)
     // Worker threads shouldn't have any because of sync fast cache.
-#ifdef __PTK_FRAMEWORK_OBJC_KEY5
-    testassert(pthread_getspecific(__PTK_FRAMEWORK_OBJC_KEY5));
+#ifdef __PTK_FRAMEWORK_OBJC_KEY0
+    testassert(pthread_getspecific(__PTK_FRAMEWORK_OBJC_KEY0));
 #endif
 
     // Start the threads

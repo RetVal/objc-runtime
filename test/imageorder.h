@@ -1,6 +1,7 @@
 extern int state;
 extern int cstate;
 
+OBJC_ROOT_CLASS
 @interface Super { id isa; } 
 +(void) method;
 +(void) method0;

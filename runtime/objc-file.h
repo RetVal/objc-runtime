@@ -28,9 +28,6 @@
 
 #include "objc-runtime-new.h"
 
-
-__BEGIN_DECLS
-
 // classref_t is not fixed up at launch; use remapClass() to convert
 
 extern SEL *_getObjc2SelectorRefs(const header_info *hi, size_t *count);
@@ -43,8 +40,12 @@ extern category_t **_getObjc2CategoryList(const header_info *hi, size_t *count);
 extern category_t **_getObjc2NonlazyCategoryList(const header_info *hi, size_t *count);
 extern protocol_t **_getObjc2ProtocolList(const header_info *hi, size_t *count);
 extern protocol_t **_getObjc2ProtocolRefs(const header_info *hi, size_t *count);
+using Initializer = void(*)(void);
+extern Initializer* getLibobjcInitializers(const header_info *hi, size_t *count);
 
-__END_DECLS
+extern classref_t *_getObjc2NonlazyClassList(const headerType *mhdr, size_t *count);
+extern category_t **_getObjc2NonlazyCategoryList(const headerType *mhdr, size_t *count);
+extern Initializer* getLibobjcInitializers(const headerType *mhdr, size_t *count);
 
 #endif
 

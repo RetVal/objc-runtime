@@ -354,15 +354,22 @@ static void cycle(void)
 
 int main()
 {
-    cycle();
-    cycle();
-
     int count = 1000;
+
+    testonthread(^{ cycle(); });
+    testonthread(^{ cycle(); });
+    testonthread(^{ cycle(); });
+
     leak_mark();
     while (count--) {
         testonthread(^{ cycle(); });
     }
-    leak_check(256);  // fixme should be 0
+#if __OBJC_GC__
+    testwarn("rdar://19042235 possible leaks suppressed under GC");
+    leak_check(16000);
+#else
+    leak_check(0);
+#endif
 
     succeed(__FILE__);
 }

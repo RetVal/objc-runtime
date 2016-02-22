@@ -239,7 +239,6 @@ void _destroyAltHandlerList(struct alt_handler_list *list)
 
 #include "objc-private.h"
 #include <objc/objc-exception.h>
-#include <objc/objc-api.h>
 #include <objc/NSObject.h>
 #include <execinfo.h>
 
@@ -251,21 +250,25 @@ struct _Unwind_Exception;
 struct _Unwind_Context;
 
 typedef int _Unwind_Action;
-static const _Unwind_Action _UA_SEARCH_PHASE = 1;
-static const _Unwind_Action _UA_CLEANUP_PHASE = 2;
-static const _Unwind_Action _UA_HANDLER_FRAME = 4;
-static const _Unwind_Action _UA_FORCE_UNWIND = 8;
+enum : _Unwind_Action {
+    _UA_SEARCH_PHASE = 1, 
+    _UA_CLEANUP_PHASE = 2, 
+    _UA_HANDLER_FRAME = 4, 
+    _UA_FORCE_UNWIND = 8
+};
 
 typedef int _Unwind_Reason_Code;
-static const _Unwind_Reason_Code _URC_NO_REASON = 0;
-static const _Unwind_Reason_Code _URC_FOREIGN_EXCEPTION_CAUGHT = 1;
-static const _Unwind_Reason_Code _URC_FATAL_PHASE2_ERROR = 2;
-static const _Unwind_Reason_Code _URC_FATAL_PHASE1_ERROR = 3;
-static const _Unwind_Reason_Code _URC_NORMAL_STOP = 4;
-static const _Unwind_Reason_Code _URC_END_OF_STACK = 5;
-static const _Unwind_Reason_Code _URC_HANDLER_FOUND = 6;
-static const _Unwind_Reason_Code _URC_INSTALL_CONTEXT = 7;
-static const _Unwind_Reason_Code _URC_CONTINUE_UNWIND = 8;
+enum : _Unwind_Reason_Code {
+    _URC_NO_REASON = 0,
+    _URC_FOREIGN_EXCEPTION_CAUGHT = 1,
+    _URC_FATAL_PHASE2_ERROR = 2,
+    _URC_FATAL_PHASE1_ERROR = 3,
+    _URC_NORMAL_STOP = 4,
+    _URC_END_OF_STACK = 5,
+    _URC_HANDLER_FOUND = 6,
+    _URC_INSTALL_CONTEXT = 7,
+    _URC_CONTINUE_UNWIND = 8
+};
 
 struct dwarf_eh_bases
 {
@@ -468,7 +471,7 @@ __objc_personality_v0(int version,
                       struct _Unwind_Exception *exceptionObject,
                       struct _Unwind_Context *context)
 {
-    BOOL unwinding = ((actions & _UA_CLEANUP_PHASE)  ||  
+    bool unwinding = ((actions & _UA_CLEANUP_PHASE)  ||  
                       (actions & _UA_FORCE_UNWIND));
 
     if (PrintExceptions) {
@@ -984,7 +987,7 @@ static bool isObjCExceptionCatcher(uintptr_t lsda, uintptr_t ip,
     else {
         // Record all ranges with the same landing pad as our match.
         frame->ips = (frame_ips *)
-            _malloc_internal((range_count + 1) * sizeof(frame->ips[0]));
+            malloc((range_count + 1) * sizeof(frame->ips[0]));
         unsigned int r = 0;
         p = call_site_table;
         while (p < call_site_table_end) {
@@ -1077,14 +1080,14 @@ struct alt_handler_list {
     struct alt_handler_list *next_DEBUGONLY;
 };
 
-static pthread_mutex_t DebugLock = PTHREAD_MUTEX_INITIALIZER;
+static mutex_t DebugLock;
 static struct alt_handler_list *DebugLists;
 static uintptr_t DebugCounter;
 
 void alt_handler_error(uintptr_t token) __attribute__((noinline));
 
 static struct alt_handler_list *
-fetch_handler_list(BOOL create)
+fetch_handler_list(bool create)
 {
     _objc_pthread_data *data = _objc_fetch_pthread_data(create);
     if (!data) return nil;
@@ -1092,15 +1095,14 @@ fetch_handler_list(BOOL create)
     struct alt_handler_list *list = data->handlerList;
     if (!list) {
         if (!create) return nil;
-        list = (struct alt_handler_list *)_calloc_internal(1, sizeof(*list));
+        list = (struct alt_handler_list *)calloc(1, sizeof(*list));
         data->handlerList = list;
 
         if (DebugAltHandlers) {
             // Save this list so the debug code can find it from other threads
-            pthread_mutex_lock(&DebugLock);
+            mutex_locker_t lock(DebugLock);
             list->next_DEBUGONLY = DebugLists;
             DebugLists = list;
-            pthread_mutex_unlock(&DebugLock);
         }
     }
 
@@ -1113,22 +1115,21 @@ void _destroyAltHandlerList(struct alt_handler_list *list)
     if (list) {
         if (DebugAltHandlers) {
             // Detach from the list-of-lists.
-            pthread_mutex_lock(&DebugLock);
+            mutex_locker_t lock(DebugLock);
             struct alt_handler_list **listp = &DebugLists;
             while (*listp && *listp != list) listp = &(*listp)->next_DEBUGONLY;
             if (*listp) *listp = (*listp)->next_DEBUGONLY;
-            pthread_mutex_unlock(&DebugLock);
         }
 
         if (list->handlers) {
             for (unsigned int i = 0; i < list->allocated; i++) {
                 if (list->handlers[i].frame.ips) {
-                    _free_internal(list->handlers[i].frame.ips);
+                    free(list->handlers[i].frame.ips);
                 }
             }
-            _free_internal(list->handlers);
+            free(list->handlers);
         }
-        _free_internal(list);
+        free(list);
     }
 }
 
@@ -1149,7 +1150,7 @@ uintptr_t objc_addExceptionHandler(objc_exception_handler fn, void *context)
     if (list->used == list->allocated) {
         list->allocated = list->allocated*2 ?: 4;
         list->handlers = (struct alt_handler_data *)
-            _realloc_internal(list->handlers, 
+            realloc(list->handlers, 
                               list->allocated * sizeof(list->handlers[0]));
         bzero(&list->handlers[list->used], (list->allocated - list->used) * sizeof(list->handlers[0]));
         i = list->used;
@@ -1179,14 +1180,14 @@ uintptr_t objc_addExceptionHandler(objc_exception_handler fn, void *context)
 
     if (DebugAltHandlers) {
         // Record backtrace in case this handler is misused later.
-        pthread_mutex_lock(&DebugLock);
+        mutex_locker_t lock(DebugLock);
 
         token = DebugCounter++;
         if (token == 0) token = DebugCounter++;
 
         if (!data->debug) {
             data->debug = (struct alt_handler_debug *)
-                _calloc_internal(sizeof(*data->debug), 1);
+                calloc(sizeof(*data->debug), 1);
         } else {
             bzero(data->debug, sizeof(*data->debug));
         }
@@ -1198,8 +1199,6 @@ uintptr_t objc_addExceptionHandler(objc_exception_handler fn, void *context)
         data->debug->backtraceSize = 
             backtrace(data->debug->backtrace, BACKTRACE_COUNT);
         data->debug->token = token;
-
-        pthread_mutex_unlock(&DebugLock);
     }
 
     if (PrintAltHandlers) {
@@ -1278,8 +1277,8 @@ void objc_removeExceptionHandler(uintptr_t token)
                      (void *)data->frame.ip_end, (void *)data->frame.cfa);
     }
 
-    if (data->debug) _free_internal(data->debug);
-    if (data->frame.ips) _free_internal(data->frame.ips);
+    if (data->debug) free(data->debug);
+    if (data->frame.ips) free(data->frame.ips);
     bzero(data, sizeof(*data));
     list->used--;
 }
@@ -1297,7 +1296,7 @@ void alt_handler_error(uintptr_t token)
         objc_alt_handler_error();
     }
 
-    pthread_mutex_lock(&DebugLock);
+    DebugLock.lock();
 
     // Search other threads' alt handler lists for this handler.
     struct alt_handler_list *list;
@@ -1318,7 +1317,7 @@ void alt_handler_error(uintptr_t token)
                 for (i = 0; i < data->debug->backtraceSize; i++){
                     len += 4 + strlen(symbols[i]) + 1;
                 }
-                symbolString = (char *)_calloc_internal(len, 1);
+                symbolString = (char *)calloc(len, 1);
                 for (i = 0; i < data->debug->backtraceSize; i++){
                     strcat(symbolString, "    ");
                     strcat(symbolString, symbols[i]);
@@ -1335,15 +1334,15 @@ void alt_handler_error(uintptr_t token)
                      "Thread '%s': Dispatch queue: '%s': \n%s", 
                      data->debug->thread, data->debug->queue, symbolString);
 
-                pthread_mutex_unlock(&DebugLock);
-                _free_internal(symbolString);
+                DebugLock.unlock();
+                free(symbolString);
                 
                 objc_alt_handler_error();
             }
         }
     }
 
-    pthread_mutex_lock(&DebugLock);
+    DebugLock.unlock();
 
     // not found
     _objc_inform_now_and_on_crash
@@ -1404,7 +1403,7 @@ static void call_alt_handlers(struct _Unwind_Context *ctx)
                              (void *)copy.frame.cfa);
             }
             if (copy.fn) (*copy.fn)(nil, copy.context);
-            if (copy.frame.ips) _free_internal(copy.frame.ips);
+            if (copy.frame.ips) free(copy.frame.ips);
         }
     }
 }

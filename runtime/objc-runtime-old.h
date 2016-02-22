@@ -187,6 +187,8 @@ struct objc_class : objc_object {
 
     IMP getLoadMethod();
 
+    bool isFuture();
+
     bool isConnected();
 
     const char *mangledName() { return name; }
@@ -327,17 +329,17 @@ extern IMP lookupNamedMethodInMethodList(struct old_method_list *mlist, const ch
 extern void _objc_insertMethods(Class cls, struct old_method_list *mlist, struct old_category *cat);
 extern void _objc_removeMethods(Class cls, struct old_method_list *mlist);
 extern void _objc_flush_caches (Class cls);
-extern BOOL _class_addProperties(Class cls, struct old_property_list *additions);
-extern BOOL _class_hasLoadMethod(Class cls);
-extern void change_class_references(Class imposter, Class original, Class copy, BOOL changeSuperRefs);
+extern bool _class_addProperties(Class cls, struct old_property_list *additions);
+extern bool _class_hasLoadMethod(Class cls);
+extern void change_class_references(Class imposter, Class original, Class copy, bool changeSuperRefs);
 extern void flush_marked_caches(void);
-extern void set_superclass(Class cls, Class supercls, BOOL cls_is_new);
+extern void set_superclass(Class cls, Class supercls, bool cls_is_new);
 extern void try_free(const void *p);
 
 extern struct old_property *property_list_nth(const struct old_property_list *plist, uint32_t i);
 extern struct old_property **copyPropertyList(struct old_property_list *plist, unsigned int *outCount);
 
-extern struct objc_method_description * lookup_protocol_method(struct old_protocol *proto, SEL aSel, BOOL isRequiredMethod, BOOL isInstanceMethod, BOOL recursive);
+extern struct objc_method_description * lookup_protocol_method(struct old_protocol *proto, SEL aSel, bool isRequiredMethod, bool isInstanceMethod, bool recursive);
 
 // used by flush_caches outside objc-cache.m
 extern void _cache_flush(Class cls);

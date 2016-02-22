@@ -1,15 +1,15 @@
 /*
  * Copyright (c) 1999-2006 Apple Inc.  All Rights Reserved.
- *
+ * 
  * @APPLE_LICENSE_HEADER_START@
- *
+ * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
  * compliance with the License. Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this
  * file.
- *
+ * 
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -17,7 +17,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
+ * 
  * @APPLE_LICENSE_HEADER_END@
  */
 // Copyright 1988-1996 NeXT Software, Inc.
@@ -59,40 +59,40 @@
  * OBJC_NO_GC 1: GC is not supported
  * OBJC_NO_GC undef: GC is supported
  *
- * OBJC_NO_GC_API undef: Libraries must export any symbols that
+ * OBJC_NO_GC_API undef: Libraries must export any symbols that 
  *                       dual-mode code may links to.
  * OBJC_NO_GC_API 1: Libraries need not export GC-related symbols.
  */
 #if TARGET_OS_EMBEDDED  ||  TARGET_OS_IPHONE  ||  TARGET_OS_WIN32
-/* GC is unsupported. GC API symbols are not exported. */
+    /* GC is unsupported. GC API symbols are not exported. */
 #   define OBJC_NO_GC 1
 #   define OBJC_NO_GC_API 1
 #elif TARGET_OS_MAC && __x86_64h__
-/* GC is unsupported. GC API symbols are exported. */
+    /* GC is unsupported. GC API symbols are exported. */
 #   define OBJC_NO_GC 1
 #   undef  OBJC_NO_GC_API
 #else
-/* GC is supported. */
+    /* GC is supported. */
 #   undef  OBJC_NO_GC
 #   undef  OBJC_GC_API
 #endif
 
 
-/* NS_ENFORCE_NSOBJECT_DESIGNATED_INITIALIZER == 1
+/* NS_ENFORCE_NSOBJECT_DESIGNATED_INITIALIZER == 1 
  * marks -[NSObject init] as a designated initializer. */
 #if !defined(NS_ENFORCE_NSOBJECT_DESIGNATED_INITIALIZER)
 #   define NS_ENFORCE_NSOBJECT_DESIGNATED_INITIALIZER 1
 #endif
 
 
-/* OBJC_OLD_DISPATCH_PROTOTYPES == 0 enforces the rule that the dispatch
+/* OBJC_OLD_DISPATCH_PROTOTYPES == 0 enforces the rule that the dispatch 
  * functions must be cast to an appropriate function pointer type. */
 #if !defined(OBJC_OLD_DISPATCH_PROTOTYPES)
 #   define OBJC_OLD_DISPATCH_PROTOTYPES 1
 #endif
 
 
-/* OBJC_ISA_AVAILABILITY: `isa` will be deprecated or unavailable
+/* OBJC_ISA_AVAILABILITY: `isa` will be deprecated or unavailable 
  * in the future */
 #if !defined(OBJC_ISA_AVAILABILITY)
 #   if __OBJC2__
@@ -108,7 +108,7 @@
 #   if __OBJC2__
 #       define OBJC2_UNAVAILABLE UNAVAILABLE_ATTRIBUTE
 #   else
-/* plain C code also falls here, but this is close enough */
+        /* plain C code also falls here, but this is close enough */
 #       define OBJC2_UNAVAILABLE __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_5,__MAC_10_5, __IPHONE_2_0,__IPHONE_2_0)
 #   endif
 #endif
@@ -140,7 +140,7 @@
 #   if defined(__arm64__)
 #       define OBJC_ARM64_UNAVAILABLE __attribute__((unavailable("not available in arm64")))
 #   else
-#       define OBJC_ARM64_UNAVAILABLE
+#       define OBJC_ARM64_UNAVAILABLE 
 #   endif
 #endif
 
@@ -159,7 +159,7 @@
 
 #if !defined(OBJC_EXTERN)
 #   if defined(__cplusplus)
-#       define OBJC_EXTERN extern "C"
+#       define OBJC_EXTERN extern "C" 
 #   else
 #       define OBJC_EXTERN extern
 #   endif

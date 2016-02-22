@@ -5,6 +5,7 @@
 #include <malloc/malloc.h>
 #include <objc/objc-runtime.h>
 
+OBJC_ROOT_CLASS
 @interface SuperProps { id isa; int prop1; int prop2; } 
 @property int prop1;
 @property int prop2;
@@ -23,7 +24,7 @@
 @synthesize prop4;
 @end
 
-
+OBJC_ROOT_CLASS
 @interface FourProps { int prop1; int prop2; int prop3; int prop4; }
 @property int prop1;
 @property int prop2;
@@ -37,6 +38,7 @@
 @synthesize prop4;
 @end
 
+OBJC_ROOT_CLASS
 @interface NoProps @end
 @implementation NoProps @end
 

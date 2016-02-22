@@ -110,9 +110,9 @@ OBJC_EXPORT struct objc_cache _objc_empty_cache
 #if __OBJC2__
 // objc_msgSendSuper2() takes the current search class, not its superclass.
 OBJC_EXPORT id objc_msgSendSuper2(struct objc_super *super, SEL op, ...)
-    __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0);
+    __OSX_AVAILABLE_STARTING(__MAC_10_6, __IPHONE_2_0);
 OBJC_EXPORT void objc_msgSendSuper2_stret(struct objc_super *super, SEL op,...)
-    __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0)
+    __OSX_AVAILABLE_STARTING(__MAC_10_6, __IPHONE_2_0)
     OBJC_ARM64_UNAVAILABLE;
 
 // objc_msgSend_noarg() may be faster for methods with no additional arguments.

@@ -18,7 +18,7 @@
 @property (readonly) NSUInteger hash;
 
 @property (readonly) Class superclass;
-- (Class)class;
+- (Class)class OBJC_SWIFT_UNAVAILABLE("use 'anObject.dynamicType' instead");
 - (instancetype)self;
 
 - (id)performSelector:(SEL)aSelector;
@@ -57,12 +57,16 @@ OBJC_EXPORT
 + (void)load;
 
 + (void)initialize;
-- (instancetype)init;
+- (instancetype)init
+#if NS_ENFORCE_NSOBJECT_DESIGNATED_INITIALIZER
+    NS_DESIGNATED_INITIALIZER
+#endif
+    ;
 
-+ (instancetype)new;
-+ (instancetype)allocWithZone:(struct _NSZone *)zone;
-+ (instancetype)alloc;
-- (void)dealloc;
++ (instancetype)new OBJC_SWIFT_UNAVAILABLE("use object initializers instead");
++ (instancetype)allocWithZone:(struct _NSZone *)zone OBJC_SWIFT_UNAVAILABLE("use object initializers instead");
++ (instancetype)alloc OBJC_SWIFT_UNAVAILABLE("use object initializers instead");
+- (void)dealloc OBJC_SWIFT_UNAVAILABLE("use 'deinit' to define a de-initializer");
 
 - (void)finalize;
 
@@ -79,10 +83,10 @@ OBJC_EXPORT
 - (void)doesNotRecognizeSelector:(SEL)aSelector;
 
 - (id)forwardingTargetForSelector:(SEL)aSelector __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0);
-- (void)forwardInvocation:(NSInvocation *)anInvocation;
-- (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector;
+- (void)forwardInvocation:(NSInvocation *)anInvocation OBJC_SWIFT_UNAVAILABLE("");
+- (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector OBJC_SWIFT_UNAVAILABLE("");
 
-+ (NSMethodSignature *)instanceMethodSignatureForSelector:(SEL)aSelector;
++ (NSMethodSignature *)instanceMethodSignatureForSelector:(SEL)aSelector OBJC_SWIFT_UNAVAILABLE("");
 
 - (BOOL)allowsWeakReference UNAVAILABLE_ATTRIBUTE;
 - (BOOL)retainWeakReference UNAVAILABLE_ATTRIBUTE;
@@ -94,7 +98,7 @@ OBJC_EXPORT
 
 + (NSUInteger)hash;
 + (Class)superclass;
-+ (Class)class;
++ (Class)class OBJC_SWIFT_UNAVAILABLE("use 'aClass.self' instead");
 + (NSString *)description;
 + (NSString *)debugDescription;
 

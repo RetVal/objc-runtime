@@ -47,6 +47,7 @@
 // to get the critical regions for which method caches 
 // cannot be garbage collected.
 
+.align 2
 .private_extern _objc_entryPoints
 _objc_entryPoints:
 	.long	__cache_getImp
@@ -495,12 +496,26 @@ LMsgSendHitInstrumentDone_$0_$1_$2:
 
 .macro MethodTableLookup
 	MESSENGER_END_SLOW
-	// stack is already aligned
-	pushl	%eax			// class
-	pushl	%ecx			// selector
-	pushl	%edx			// receiver
+
+	// stack has return address and nothing else
+	subl	$$(12+5*16), %esp
+
+	movdqa  %xmm3, 4*16(%esp)
+	movdqa  %xmm2, 3*16(%esp)
+	movdqa  %xmm1, 2*16(%esp)
+	movdqa  %xmm0, 1*16(%esp)
+	
+	movl	%eax, 8(%esp)		// class
+	movl	%ecx, 4(%esp)		// selector
+	movl	%edx, 0(%esp)		// receiver
 	call	__class_lookupMethodAndLoadCache3
-	addl    $$12, %esp		// pop parameters
+
+	movdqa  4*16(%esp), %xmm3
+	movdqa  3*16(%esp), %xmm2
+	movdqa  2*16(%esp), %xmm1
+	movdqa  1*16(%esp), %xmm0
+
+	addl    $$(12+5*16), %esp	// pop parameters
 .endmacro
 
 
@@ -614,6 +629,7 @@ LMsgSendCacheMiss:
 LMsgSendNilSelf:
 	// %eax is already zero
 	movl	$0,%edx
+	xorps	%xmm0, %xmm0
 LMsgSendDone:
 	MESSENGER_END_NIL
 	ret

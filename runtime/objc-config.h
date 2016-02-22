@@ -26,9 +26,16 @@
 
 #include <TargetConditionals.h>
 
+// Avoid the !NDEBUG double negative.
+#if !NDEBUG
+#   define DEBUG 1
+#else
+#   define DEBUG 0
+#endif
+
 // Define SUPPORT_GC=1 to enable garbage collection.
-// Be sure to edit OBJC_NO_GC in objc-auto.h as well.
-#if TARGET_OS_EMBEDDED  ||  TARGET_OS_IPHONE  ||  TARGET_OS_WIN32
+// Be sure to edit OBJC_NO_GC and OBJC_NO_GC_API in objc-api.h as well.
+#if TARGET_OS_EMBEDDED  ||  TARGET_OS_IPHONE  ||  TARGET_OS_WIN32  ||  (TARGET_OS_MAC && __x86_64h__)
 #   define SUPPORT_GC 0
 #else
 #   define SUPPORT_GC 1
@@ -73,7 +80,7 @@
 #endif
 
 // Define SUPPORT_NONPOINTER_ISA=1 to enable extra data in the isa field.
-#if !__LP64__  ||  TARGET_OS_WIN32  ||  TARGET_IPHONE_SIMULATOR  ||  __x86_64__
+#if !__LP64__  ||  TARGET_OS_WIN32  ||  TARGET_IPHONE_SIMULATOR
 #   define SUPPORT_NONPOINTER_ISA 0
 #else
 #   define SUPPORT_NONPOINTER_ISA 1
@@ -106,7 +113,7 @@
 
 // Define SUPPORT_ZEROCOST_EXCEPTIONS to use "zero-cost" exceptions for OBJC2.
 // Be sure to edit objc-exception.h as well (objc_add/removeExceptionHandler)
-#if !__OBJC2__  ||  defined(__arm__)
+#if !__OBJC2__  ||  (defined(__arm__)  &&  __USING_SJLJ_EXCEPTIONS__)
 #   define SUPPORT_ZEROCOST_EXCEPTIONS 0
 #else
 #   define SUPPORT_ZEROCOST_EXCEPTIONS 1

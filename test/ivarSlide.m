@@ -262,7 +262,6 @@ int main(int argc __attribute__((unused)), char **argv)
     */
 
     Sub2 *sub2 = [Sub2 new];
-    sub2->isa = [Sub2 class];
     sub2->subIvar = (void *)10;
     testassert(((uintptr_t *)objc_unretainedPointer(sub2))[11] == 10);
 

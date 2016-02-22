@@ -31,7 +31,6 @@
 @property int i;
 @end
 
-
 // Force some of Proto5's selectors out of address order rdar://10582325
 SEL fn(int x) { if (x) return @selector(m12:); else return @selector(m22:); }
 
@@ -60,6 +59,17 @@ SEL fn(int x) { if (x) return @selector(m12:); else return @selector(m22:); }
 
 @protocol ProtoEmpty
 @end
+
+#if __OBJC2__
+#define TEST_SWIFT 1
+#define SwiftV1MangledName "_TtP6Module15SwiftV1Protocol_"
+#endif
+
+#if TEST_SWIFT
+__attribute__((objc_runtime_name(SwiftV1MangledName)))
+@protocol SwiftV1Protocol
+@end
+#endif
 
 @interface Super : TestRoot <Proto1> @end
 @implementation Super
@@ -280,12 +290,7 @@ int main()
                sel_registerName("m42:") < sel_registerName("m41:")  );
 
     if (!_protocol_getMethodTypeEncoding(@protocol(Proto5), @selector(m11:), true, true)) {
-#if __clang__
-        testwarn("rdar://10492418 extended type encodings not present (is compiler old?)");
-#else
-        // extended type encodings quietly not supported
-        testwarn("rdar://10492418 extended type encodings not present (compiler is not clang?)");
-#endif
+        fail("rdar://10492418 extended type encodings not present (is compiler old?)");
     } else {
         testassert(0 == strcmp(_protocol_getMethodTypeEncoding(@protocol(Proto5), @selector(m11:), true, true),   types11));
         testassert(0 == strcmp(_protocol_getMethodTypeEncoding(@protocol(Proto5), @selector(m12:), true, true),   types12));
@@ -303,6 +308,13 @@ int main()
         testassert(0 == strcmp(_protocol_getMethodTypeEncoding(@protocol(Proto6), @selector(n41:), false, false), types41));
         testassert(0 == strcmp(_protocol_getMethodTypeEncoding(@protocol(Proto6), @selector(m41:), false, false), types41));
     }
+
+#if TEST_SWIFT
+    testassert(@protocol(SwiftV1Protocol) == objc_getProtocol("Module.SwiftV1Protocol"));
+    testassert(@protocol(SwiftV1Protocol) == objc_getProtocol(SwiftV1MangledName));
+    testassert(0 == strcmp(protocol_getName(@protocol(SwiftV1Protocol)), "Module.SwiftV1Protocol"));
+    testassert(!objc_getProtocol("SwiftV1Protocol"));
+#endif
 
     succeed(__FILE__);
 }

@@ -9,14 +9,17 @@ int state = 0;
 static void *noop_fn(void *self, SEL _cmd __unused) {
     return self;
 }
-static id __unsafe_unretained retain_fn(id __unsafe_unretained self, SEL _cmd __unused) { 
-    return _objc_rootRetain(self); 
+static void *retain_fn(void *self, SEL _cmd __unused) { 
+    void * (*fn)(void *) = (typeof(fn))_objc_rootRetain;
+    return fn(self); 
 }
-static void release_fn(id __unsafe_unretained self, SEL _cmd __unused) { 
-    _objc_rootRelease(self); 
+static void release_fn(void *self, SEL _cmd __unused) { 
+    void (*fn)(void *) = (typeof(fn))_objc_rootRelease;
+    fn(self); 
 }
-static void autorelease_fn(id __unsafe_unretained self, SEL _cmd __unused) { 
-    _objc_rootAutorelease(self); 
+static void *autorelease_fn(void *self, SEL _cmd __unused) { 
+    void * (*fn)(void *) = (typeof(fn))_objc_rootAutorelease;
+    return fn(self); 
 }
 
 #if !defined(EMPTY)

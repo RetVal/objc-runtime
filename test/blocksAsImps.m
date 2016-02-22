@@ -13,8 +13,15 @@
 #if !__clang__
     // gcc and llvm-gcc will never support struct-return marking
 #   define STRET_OK 0
-#else
+#   define STRET_SPECIAL 0
+#elif __arm64__
+    // stret supported, but is identical to non-stret
 #   define STRET_OK 1
+#   define STRET_SPECIAL 0
+#else
+    // stret supported and distinct from non-stret
+#   define STRET_OK 1
+#   define STRET_SPECIAL 1
 #endif
 
 typedef struct BigStruct {
@@ -71,15 +78,21 @@ void dealloc_imp(Deallocator *self, SEL _cmd) {
 /* Code copied from objc-block-trampolines.m to test Block innards */
 typedef enum {
     ReturnValueInRegisterArgumentMode,
+#if STRET_SPECIAL
     ReturnValueOnStackArgumentMode,
+#endif
     
     ArgumentModeMax
 } ArgumentMode;
 
 static ArgumentMode _argumentModeForBlock(id block) {
     ArgumentMode aMode = ReturnValueInRegisterArgumentMode;
+#if STRET_SPECIAL
     if ( _Block_use_stret((__bridge void *)block) )
         aMode = ReturnValueOnStackArgumentMode;
+#else
+    testassert(!_Block_use_stret((__bridge void *)block));
+#endif
     
     return aMode;
 }
@@ -96,9 +109,13 @@ int main () {
 #if STRET_OK
     BigStruct (^stackReturn)() = ^() { BigStruct k; return k; };
     aMode = _argumentModeForBlock(stackReturn);
+# if STRET_SPECIAL
     testassert(aMode == ReturnValueOnStackArgumentMode);
+# else
+    testassert(aMode == ReturnValueInRegisterArgumentMode);
+# endif
 #endif
-        
+
 #define TEST_QUANTITY 100000
     static FuncPtr funcArray[TEST_QUANTITY];
 

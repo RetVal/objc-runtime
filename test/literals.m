@@ -19,6 +19,33 @@ int main() {
         NSDictionary *numbers = @{ @"π" : @M_PI, @"e" : @M_E };
         testassert([[numbers objectForKey:@"π"] doubleValue] == M_PI);
         testassert([[numbers objectForKey:@"e"] doubleValue] == M_E);
+
+        BOOL yesBool = YES;
+        BOOL noBool = NO;
+        array = @[
+            @(true),
+            @(YES),
+            [NSNumber numberWithBool:YES],
+            @YES,
+            @(yesBool),
+            @((BOOL)YES),
+        
+            @(false),
+            @(NO),
+            [NSNumber numberWithBool:NO],
+            @NO,
+            @(noBool),
+            @((BOOL)NO),
+        ];
+        NSData * jsonData = [NSJSONSerialization dataWithJSONObject:array options:0 error:nil];
+        NSString * string = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
+#if __cplusplus
+        testassert([string isEqualToString:@"[true,true,true,true,true,true,false,false,false,false,false,false]"]);
+#else
+        // C99 @(true) and @(false) evaluate to @(1) and @(0).
+        testassert([string isEqualToString:@"[1,true,true,true,true,true,0,false,false,false,false,false]"]);
+#endif
+
 #endif
         
     } POP_POOL;

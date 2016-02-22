@@ -175,18 +175,18 @@ static int _objc_defaultClassHandler(const char *clsName);
 static inline NXMapTable *pendingClassRefsMapTable(void);
 static inline NXMapTable *pendingSubclassesMapTable(void);
 static void pendClassInstallation(Class cls, const char *superName);
-static void pendClassReference(Class *ref, const char *className, BOOL isMeta);
+static void pendClassReference(Class *ref, const char *className, bool isMeta);
 static void resolve_references_to_class(Class cls);
 static void resolve_subclasses_of_class(Class cls);
 static void really_connect_class(Class cls, Class supercls);
-static BOOL connect_class(Class cls);
-static void  map_method_descs (struct objc_method_description_list * methods, BOOL copy);
+static bool connect_class(Class cls);
+static void  map_method_descs (struct objc_method_description_list * methods, bool copy);
 static void _objcTweakMethodListPointerForClass(Class cls);
 static inline void _objc_add_category(Class cls, old_category *category, int version);
-static BOOL _objc_add_category_flush_caches(Class cls, old_category *category, int version);
+static bool _objc_add_category_flush_caches(Class cls, old_category *category, int version);
 static _objc_unresolved_category *reverse_cat(_objc_unresolved_category *cat);
 static void resolve_categories_for_class(Class cls);
-static BOOL _objc_register_category(old_category *cat, int version);
+static bool _objc_register_category(old_category *cat, int version);
 
 
 // Function called when a class is loaded from an image
@@ -264,10 +264,7 @@ void _objc_init_class_hash(void)
     // about 520 classes.  Larger apps (like IB or WOB) have more like
     // 800 classes.  Some customers have massive quantities of classes.
     // Foundation-only programs aren't likely to notice the ~6K loss.
-    class_hash = NXCreateHashTableFromZone (classHashPrototype,
-                                            16,
-                                            nil,
-                                            _objc_internal_zone ());
+    class_hash = NXCreateHashTable(classHashPrototype, 16, nil);
     _objc_debug_class_hash = class_hash;
 }
 
@@ -281,16 +278,12 @@ int objc_getClassList(Class *buffer, int bufferLen)
     Class cls;
     int cnt, num;
 
-    mutex_lock(&classLock);
-    if (!class_hash) {
-        mutex_unlock(&classLock);
-        return 0;
-    }
+    mutex_locker_t lock(classLock);
+    if (!class_hash) return 0;
+
     num = NXCountHashTable(class_hash);
-    if (nil == buffer) {
-        mutex_unlock(&classLock);
-        return num;
-    }
+    if (nil == buffer) return num;
+
     cnt = 0;
     state = NXInitHashState(class_hash);
     while (cnt < bufferLen  &&  
@@ -298,7 +291,7 @@ int objc_getClassList(Class *buffer, int bufferLen)
     {
         buffer[cnt++] = cls;
     }
-    mutex_unlock(&classLock);
+
     return num;
 }
 
@@ -319,7 +312,7 @@ objc_copyClassList(unsigned int *outCount)
     Class *result;
     unsigned int count;
 
-    mutex_lock(&classLock);
+    mutex_locker_t lock(classLock);
     result = nil;
     count = class_hash ? NXCountHashTable(class_hash) : 0;
 
@@ -333,7 +326,6 @@ objc_copyClassList(unsigned int *outCount)
         }
         result[count] = nil;
     }
-    mutex_unlock(&classLock);
         
     if (outCount) *outCount = count;
     return result;
@@ -354,11 +346,10 @@ objc_copyProtocolList(unsigned int *outCount)
     NXMapState state;
     Protocol **result;
 
-    mutex_lock(&classLock);
+    mutex_locker_t lock(classLock);
 
     count = NXCountMapTable(protocol_map);
     if (count == 0) {
-        mutex_unlock(&classLock);
         if (outCount) *outCount = 0;
         return nil;
     }
@@ -375,8 +366,6 @@ objc_copyProtocolList(unsigned int *outCount)
     
     result[i++] = nil;
     assert(i == count+1);
-
-    mutex_unlock(&classLock);
 
     if (outCount) *outCount = count;
     return result;
@@ -443,11 +432,9 @@ static void setOriginalClassForFutureClass(Class futureClass,
 {
     if (!future_class_to_original_class_map) {
         future_class_to_original_class_map =
-            NXCreateMapTableFromZone (NXPtrValueMapPrototype, FUTURE_COUNT, 
-                                      _objc_internal_zone ());
+            NXCreateMapTable(NXPtrValueMapPrototype, FUTURE_COUNT);
         original_class_to_future_class_map =
-            NXCreateMapTableFromZone (NXPtrValueMapPrototype, FUTURE_COUNT, 
-                                      _objc_internal_zone ());
+            NXCreateMapTable(NXPtrValueMapPrototype, FUTURE_COUNT);
     }
 
     NXMapInsert (future_class_to_original_class_map,
@@ -493,11 +480,10 @@ static void makeFutureClass(Class cls, const char *name)
     // CF requests about 20 future classes, plus HIToolbox has one.
     if (!future_class_hash) {
         future_class_hash = 
-            NXCreateHashTableFromZone(classHashPrototype, FUTURE_COUNT, 
-                                      nil, _objc_internal_zone());
+            NXCreateHashTable(classHashPrototype, FUTURE_COUNT, nil);
     }
 
-    cls->name = _strdup_internal(name);
+    cls->name = strdup(name);
     NXHashInsert(future_class_hash, cls);
 
     if (PrintFuture) {
@@ -561,39 +547,14 @@ Class objc_getFutureClass(const char *name)
 }
 
 
-/***********************************************************************
-* objc_setFutureClass.  
-* Like objc_getFutureClass, but uses the provided memory block. 
-* If the class already exists, a posing-like substitution is performed.
-* Not thread safe.
-**********************************************************************/
-void objc_setFutureClass(Class cls, const char *name)
-{
-    Class oldcls;
-    Class newcls = cls;  // Not a real class!
-
-    if ((oldcls = look_up_class(name, NO/*unconnected*/, NO/*classhandler*/))) {
-        setOriginalClassForFutureClass(newcls, oldcls);
-        // fixme hack
-        memcpy(newcls, oldcls, sizeof(struct objc_class));
-        newcls->info &= ~CLS_EXT;
-
-        mutex_lock(&classLock);
-        NXHashRemove(class_hash, oldcls);
-        objc_removeRegisteredClass(oldcls);
-        change_class_references(newcls, oldcls, nil, YES);
-        NXHashInsert(class_hash, newcls);
-        objc_addRegisteredClass(newcls);
-        mutex_unlock(&classLock);
-    } else {
-        makeFutureClass(newcls, name);
-    }
-}
-
-
 BOOL _class_isFutureClass(Class cls)
 {
-    return cls  &&  future_class_hash  &&  NXHashGet(future_class_hash, cls);
+    return cls  &&  cls->isFuture();
+}
+
+bool objc_class::isFuture() 
+{
+    return future_class_hash  &&  NXHashGet(future_class_hash, this);
 }
 
 
@@ -640,12 +601,9 @@ void _objc_setClassLoader(BOOL (*newClassLoader)(const char *))
 **********************************************************************/
 Protocol *objc_getProtocol(const char *name)
 {
-    Protocol *result;
+    mutex_locker_t lock(classLock);
     if (!protocol_map) return nil;
-    mutex_lock(&classLock);
-    result = (Protocol *)NXMapGet(protocol_map, name);
-    mutex_unlock(&classLock);
-    return result;
+    return (Protocol *)NXMapGet(protocol_map, name);
 }
 
 
@@ -660,9 +618,10 @@ Protocol *objc_getProtocol(const char *name)
 * 3. classLoader callback
 * 4. classHandler callback (optional)
 **********************************************************************/
-Class look_up_class(const char *aClassName, BOOL includeUnconnected, BOOL includeClassHandler)
+Class look_up_class(const char *aClassName, bool includeUnconnected, 
+                    bool includeClassHandler)
 {
-    BOOL includeClassLoader = YES; // class loader cannot be skipped
+    bool includeClassLoader = YES; // class loader cannot be skipped
     Class result = nil;
     struct objc_class query;
 
@@ -672,16 +631,14 @@ Class look_up_class(const char *aClassName, BOOL includeUnconnected, BOOL includ
 
     if (!result  &&  class_hash) {
         // Check ordinary classes
-        mutex_lock (&classLock);
+        mutex_locker_t lock(classLock);
         result = (Class)NXHashGet(class_hash, &query);
-        mutex_unlock (&classLock);
     }
 
     if (!result  &&  includeUnconnected  &&  unconnected_class_hash) {
         // Check not-yet-connected classes
-        mutex_lock(&classLock);
+        mutex_locker_t lock(classLock);
         result = (Class)NXHashGet(unconnected_class_hash, &query);
-        mutex_unlock(&classLock);
     }
 
     if (!result  &&  includeClassLoader  &&  _objc_classLoader) {
@@ -715,11 +672,8 @@ Class look_up_class(const char *aClassName, BOOL includeUnconnected, BOOL includ
 **********************************************************************/
 bool objc_class::isConnected()
 {
-    bool result;
-    mutex_lock(&classLock);
-    result = NXHashMember(class_hash, this);
-    mutex_unlock(&classLock);
-    return result;
+    mutex_locker_t lock(classLock);
+    return NXHashMember(class_hash, this);
 }
 
 
@@ -731,9 +685,7 @@ static inline NXMapTable *pendingClassRefsMapTable(void)
 {
     // Allocate table if needed
     if (!pendingClassRefsMap) {
-        pendingClassRefsMap = 
-            NXCreateMapTableFromZone(NXStrValueMapPrototype, 
-                                     10, _objc_internal_zone ());
+        pendingClassRefsMap = NXCreateMapTable(NXStrValueMapPrototype, 10);
     }
     
     // Return table pointer
@@ -749,9 +701,7 @@ static inline NXMapTable *pendingSubclassesMapTable(void)
 {
     // Allocate table if needed
     if (!pendingSubclassesMap) {
-        pendingSubclassesMap = 
-            NXCreateMapTableFromZone(NXStrValueMapPrototype, 
-                                     10, _objc_internal_zone ());
+        pendingSubclassesMap = NXCreateMapTable(NXStrValueMapPrototype, 10);
     }
     
     // Return table pointer
@@ -781,7 +731,7 @@ static void pendClassInstallation(Class cls, const char *superName)
     }
     
     // Create entry referring to this class
-    pending = (PendingSubclass *)_malloc_internal(sizeof(PendingSubclass));
+    pending = (PendingSubclass *)malloc(sizeof(PendingSubclass));
     pending->subclass = cls;
     
     // Link new entry into head of list of entries for this class
@@ -796,7 +746,7 @@ static void pendClassInstallation(Class cls, const char *superName)
 * pendClassReference
 * Fix up a class ref when the class with the given name becomes connected.
 **********************************************************************/
-static void pendClassReference(Class *ref, const char *className, BOOL isMeta)
+static void pendClassReference(Class *ref, const char *className, bool isMeta)
 {
     NXMapTable *table;
     PendingClassRef *pending;
@@ -805,7 +755,7 @@ static void pendClassReference(Class *ref, const char *className, BOOL isMeta)
     table = pendingClassRefsMapTable ();
     
     // Create entry containing the class reference
-    pending = (PendingClassRef *)_malloc_internal(sizeof(PendingClassRef));
+    pending = (PendingClassRef *)malloc(sizeof(PendingClassRef));
     pending->ref = ref;
     if (isMeta) {
         pending->ref = (Class *)((uintptr_t)pending->ref | 1);
@@ -846,12 +796,12 @@ static void resolve_references_to_class(Class cls)
     while (pending) {
         PendingClassRef *next = pending->next;
         if (pending->ref) {
-            BOOL isMeta = ((uintptr_t)pending->ref & 1) ? YES : NO;
+            bool isMeta = (uintptr_t)pending->ref & 1;
             Class *ref = 
                 (Class *)((uintptr_t)pending->ref & ~(uintptr_t)1);
             *ref = isMeta ? cls->ISA() : cls;
         }
-        _free_internal(pending);
+        free(pending);
         pending = next;
     }
 
@@ -890,7 +840,7 @@ static void resolve_subclasses_of_class(Class cls)
     while (pending) {
         PendingSubclass *next = pending->next;
         if (pending->subclass) connect_class(pending->subclass);
-        _free_internal(pending);
+        free(pending);
         pending = next;
     }
 }
@@ -917,7 +867,7 @@ static void really_connect_class(Class cls,
     if (UseGC  &&  supercls  &&  
         (cls->info & CLS_EXT)  &&  (supercls->info & CLS_EXT)) 
     {
-        BOOL layoutChanged;
+        bool layoutChanged;
         layout_bitmap ivarBitmap = 
             layout_bitmap_create(cls->ivar_layout, 
                                  cls->instance_size, 
@@ -934,7 +884,7 @@ static void really_connect_class(Class cls,
         
         if (layoutChanged) {
             layout_bitmap weakBitmap = {};
-            BOOL weakLayoutChanged = NO;
+            bool weakLayoutChanged = NO;
 
             if (cls->ext  &&  cls->ext->weak_ivar_layout) {
                 // weak -> strong: strong bits should be cleared in weak layout
@@ -975,24 +925,24 @@ static void really_connect_class(Class cls,
     // Done!
     cls->info |= CLS_CONNECTED;
 
-    mutex_lock(&classLock);
-
-    // Update hash tables. 
-    NXHashRemove(unconnected_class_hash, cls);
-    oldCls = (Class)NXHashInsert(class_hash, cls);
-    objc_addRegisteredClass(cls);
-
-    // Delete unconnected_class_hash if it is now empty.
-    if (NXCountHashTable(unconnected_class_hash) == 0) {
-        NXFreeHashTable(unconnected_class_hash);
-        unconnected_class_hash = nil;
-    }
-
-    // No duplicate classes allowed. 
-    // Duplicates should have been rejected by _objc_read_classes_from_image.
-    assert(!oldCls);
-
-    mutex_unlock(&classLock);
+    {
+        mutex_locker_t lock(classLock);
+        
+        // Update hash tables. 
+        NXHashRemove(unconnected_class_hash, cls);
+        oldCls = (Class)NXHashInsert(class_hash, cls);
+        objc_addRegisteredClass(cls);
+        
+        // Delete unconnected_class_hash if it is now empty.
+        if (NXCountHashTable(unconnected_class_hash) == 0) {
+            NXFreeHashTable(unconnected_class_hash);
+            unconnected_class_hash = nil;
+        }
+        
+        // No duplicate classes allowed. 
+        // Duplicates should have been rejected by _objc_read_classes_from_image
+        assert(!oldCls);
+    }        
  
     // Fix up pended class refs to this class, if any
     resolve_references_to_class(cls);
@@ -1052,7 +1002,7 @@ static void really_connect_class(Class cls,
 * Returns FALSE if cls could not be connected for some reason 
 *   (missing superclass or still-unconnected superclass)
 **********************************************************************/
-static BOOL connect_class(Class cls)
+static bool connect_class(Class cls)
 {
     if (cls->isConnected()) {
         // This class is already connected to its superclass.
@@ -1124,11 +1074,11 @@ static BOOL connect_class(Class cls)
 *   installation. 
 * Returns YES if some method caches now need to be flushed.
 **********************************************************************/
-static BOOL _objc_read_categories_from_image (header_info *  hi)
+static bool _objc_read_categories_from_image (header_info *  hi)
 {
     Module		mods;
     size_t	midx;
-    BOOL needFlush = NO;
+    bool needFlush = NO;
 
     if (_objcHeaderIsReplacement(hi)) {
         // Ignore any categories in this image
@@ -1192,11 +1142,12 @@ static void _objc_read_classes_from_image(header_info *hi)
     // If other Objective-C libraries are found, immediately resize 
     // class_hash, assuming that Foundation and AppKit are about 
     // to add lots of classes.
-    mutex_lock(&classLock);
-    if (hi->mhdr != libobjc_header && _NXHashCapacity(class_hash) < 1024) {
-        _NXHashRehashToCapacity(class_hash, 1024);
+    {
+        mutex_locker_t lock(classLock);
+        if (hi->mhdr != libobjc_header && _NXHashCapacity(class_hash) < 1024) {
+            _NXHashRehashToCapacity(class_hash, 1024);
+        }
     }
-    mutex_unlock(&classLock);
 
     // Major loop - process all modules in the image
     mods = hi->mod_ptr;
@@ -1210,7 +1161,7 @@ static void _objc_read_classes_from_image(header_info *hi)
         for (index = 0; index < mods[midx].symtab->cls_def_cnt; index += 1)
         {
             Class newCls, oldCls;
-            BOOL rejected;
+            bool rejected;
 
             // Locate the class description pointer
             newCls = (Class)mods[midx].symtab->defs[index];
@@ -1247,47 +1198,46 @@ static void _objc_read_classes_from_image(header_info *hi)
             if (_class_hasLoadMethod(newCls)) {
                 newCls->ISA()->info |= CLS_HAS_LOAD_METHOD;
             }
-            
+
             // Install into unconnected_class_hash.
-            mutex_lock(&classLock);
+            {
+                mutex_locker_t lock(classLock);
 
-            if (future_class_hash) {
-                Class futureCls = (Class)
-                    NXHashRemove(future_class_hash, newCls);
-                if (futureCls) {
-                    // Another class structure for this class was already 
-                    // prepared by objc_getFutureClass(). Use it instead.
-                    _free_internal((char *)futureCls->name);
-                    memcpy(futureCls, newCls, sizeof(objc_class));
-                    setOriginalClassForFutureClass(futureCls, newCls);
-                    newCls = futureCls;
-
-                    if (NXCountHashTable(future_class_hash) == 0) {
-                        NXFreeHashTable(future_class_hash);
-                        future_class_hash = nil;
+                if (future_class_hash) {
+                    Class futureCls = (Class)
+                        NXHashRemove(future_class_hash, newCls);
+                    if (futureCls) {
+                        // Another class structure for this class was already 
+                        // prepared by objc_getFutureClass(). Use it instead.
+                        free((char *)futureCls->name);
+                        memcpy(futureCls, newCls, sizeof(objc_class));
+                        setOriginalClassForFutureClass(futureCls, newCls);
+                        newCls = futureCls;
+                        
+                        if (NXCountHashTable(future_class_hash) == 0) {
+                            NXFreeHashTable(future_class_hash);
+                            future_class_hash = nil;
+                        }
                     }
                 }
+                
+                if (!unconnected_class_hash) {
+                    unconnected_class_hash = 
+                        NXCreateHashTable(classHashPrototype, 128, nil);
+                }
+                
+                if ((oldCls = (Class)NXHashGet(class_hash, newCls))  ||  
+                    (oldCls = (Class)NXHashGet(unconnected_class_hash, newCls)))
+                {
+                    // Another class with this name exists. Complain and reject.
+                    inform_duplicate(newCls->name, oldCls, newCls);
+                    rejected = YES;
+                }
+                else {
+                    NXHashInsert(unconnected_class_hash, newCls); 
+                    rejected = NO;
+                }
             }
-
-            if (!unconnected_class_hash) {
-                unconnected_class_hash = 
-                    NXCreateHashTableFromZone(classHashPrototype, 128, 
-                                              nil, _objc_internal_zone());
-            }
-
-            if ((oldCls = (Class)NXHashGet(class_hash, newCls))  ||  
-                (oldCls = (Class)NXHashGet(unconnected_class_hash, newCls)))
-            {
-                // Another class with this name exists. Complain and reject.
-                inform_duplicate(newCls->name, oldCls, newCls);
-                rejected = YES;
-            }
-            else {
-                NXHashInsert(unconnected_class_hash, newCls); 
-                rejected = NO;
-            }
-
-            mutex_unlock(&classLock);
 
             if (!rejected) {
                 // Attach pended categories for this class, if any
@@ -1308,7 +1258,7 @@ static void _objc_connect_classes_from_image(header_info *hi)
     unsigned int index;
     unsigned int midx;
     Module mods;
-    BOOL replacement = _objcHeaderIsReplacement(hi);
+    bool replacement = _objcHeaderIsReplacement(hi);
 
     // Major loop - process all modules in the image
     mods = hi->mod_ptr;
@@ -1323,7 +1273,7 @@ static void _objc_connect_classes_from_image(header_info *hi)
         {
             Class cls = (Class)mods[midx].symtab->defs[index];
             if (! replacement) {
-                BOOL connected;
+                bool connected;
                 Class futureCls = getFutureClassForOriginalClass(cls);
                 if (futureCls) {
                     // objc_getFutureClass() requested a different class 
@@ -1364,7 +1314,7 @@ static void _objc_connect_classes_from_image(header_info *hi)
 * not yet exist, the reference is added to a list of pending references
 * to be fixed up at a later date.
 **********************************************************************/
-static void fix_class_ref(Class *ref, const char *name, BOOL isMeta)
+static void fix_class_ref(Class *ref, const char *name, bool isMeta)
 {
     Class cls;
 
@@ -1454,7 +1404,7 @@ static void _objc_remove_pending_class_refs_in_image(header_info *hi)
 * can still be used after the bundle's data segment is unmapped.
 * Returns YES if dst was written to, NO if it was unchanged.
 **********************************************************************/
-static inline void map_selrefs(SEL *sels, size_t count, BOOL copy)
+static inline void map_selrefs(SEL *sels, size_t count, bool copy)
 {
     size_t index;
 
@@ -1488,7 +1438,7 @@ static inline void map_selrefs(SEL *sels, size_t count, BOOL copy)
 * for registering selectors from unloadable bundles, so the selector 
 * can still be used after the bundle's data segment is unmapped.
 **********************************************************************/
-static void  map_method_descs (struct objc_method_description_list * methods, BOOL copy)
+static void  map_method_descs (struct objc_method_description_list * methods, bool copy)
 {
     int index;
 
@@ -1557,8 +1507,8 @@ lookup_method(struct objc_method_description_list *mlist, SEL aSel)
 **********************************************************************/
 struct objc_method_description *
 lookup_protocol_method(old_protocol *proto, SEL aSel, 
-                       BOOL isRequiredMethod, BOOL isInstanceMethod, 
-                       BOOL recursive)
+                       bool isRequiredMethod, bool isInstanceMethod, 
+                       bool recursive)
 {
     struct objc_method_description *m = nil;
     old_protocol_ext *ext;
@@ -1892,27 +1842,22 @@ objc_allocateProtocol(const char *name)
 {
     Class cls = objc_getClass("__IncompleteProtocol");
 
-    mutex_lock(&classLock);
+    mutex_locker_t lock(classLock);
 
-    if (NXMapGet(protocol_map, name)) {
-        mutex_unlock(&classLock);
-        return nil;
-    }
+    if (NXMapGet(protocol_map, name)) return nil;
 
     old_protocol *result = (old_protocol *)
-        _calloc_internal(1, sizeof(old_protocol) 
+        calloc(1, sizeof(old_protocol) 
                          + sizeof(old_protocol_ext));
     old_protocol_ext *ext = (old_protocol_ext *)(result+1);
     
     result->isa = cls;
-    result->protocol_name = _strdup_internal(name);
+    result->protocol_name = strdup(name);
     ext->size = sizeof(old_protocol_ext);
 
     // fixme reserve name without installing
 
     NXMapInsert(protocol_ext_map, result, result+1);
-
-    mutex_unlock(&classLock);
 
     return (Protocol *)result;
 }
@@ -1931,26 +1876,22 @@ void objc_registerProtocol(Protocol *proto_gen)
     Class oldcls = objc_getClass("__IncompleteProtocol");
     Class cls = objc_getClass("Protocol");
 
-    mutex_lock(&classLock);
+    mutex_locker_t lock(classLock);
 
     if (proto->isa == cls) {
         _objc_inform("objc_registerProtocol: protocol '%s' was already "
                      "registered!", proto->protocol_name);
-        mutex_unlock(&classLock);
         return;
     }
     if (proto->isa != oldcls) {
         _objc_inform("objc_registerProtocol: protocol '%s' was not allocated "
                      "with objc_allocateProtocol!", proto->protocol_name);
-        mutex_unlock(&classLock);
         return;
     }
 
     proto->isa = cls;
 
     NXMapKeyCopyingInsert(protocol_map, proto->protocol_name, proto);
-
-    mutex_unlock(&classLock);
 }
 
 
@@ -1972,18 +1913,16 @@ protocol_addProtocol(Protocol *proto_gen, Protocol *addition_gen)
     if (!proto_gen) return;
     if (!addition_gen) return;
 
-    mutex_lock(&classLock);
+    mutex_locker_t lock(classLock);
 
     if (proto->isa != cls) {
         _objc_inform("protocol_addProtocol: modified protocol '%s' is not "
                      "under construction!", proto->protocol_name);
-        mutex_unlock(&classLock);
         return;
     }
     if (addition->isa == cls) {
         _objc_inform("protocol_addProtocol: added protocol '%s' is still "
                      "under construction!", addition->protocol_name);
-        mutex_unlock(&classLock);
         return;        
     }
     
@@ -1992,16 +1931,14 @@ protocol_addProtocol(Protocol *proto_gen, Protocol *addition_gen)
         size_t size = sizeof(old_protocol_list) 
             + protolist->count * sizeof(protolist->list[0]);
         protolist = (old_protocol_list *)
-            _realloc_internal(protolist, size);
+            realloc(protolist, size);
     } else {
         protolist = (old_protocol_list *)
-            _calloc_internal(1, sizeof(old_protocol_list));
+            calloc(1, sizeof(old_protocol_list));
     }
 
     protolist->list[protolist->count++] = addition;
     proto->protocol_list = protolist;
-
-    mutex_unlock(&classLock);
 }
 
 
@@ -2015,17 +1952,17 @@ _protocol_addMethod(struct objc_method_description_list **list, SEL name, const 
 {
     if (!*list) {
         *list = (struct objc_method_description_list *)
-            _calloc_internal(sizeof(struct objc_method_description_list), 1);
+            calloc(sizeof(struct objc_method_description_list), 1);
     } else {
         size_t size = sizeof(struct objc_method_description_list) 
             + (*list)->count * sizeof(struct objc_method_description);
         *list = (struct objc_method_description_list *)
-            _realloc_internal(*list, size);
+            realloc(*list, size);
     }
 
     struct objc_method_description *desc = &(*list)->list[(*list)->count++];
     desc->name = name;
-    desc->types = _strdup_internal(types ?: "");
+    desc->types = strdup(types ?: "");
 }
 
 void 
@@ -2038,12 +1975,11 @@ protocol_addMethodDescription(Protocol *proto_gen, SEL name, const char *types,
 
     if (!proto_gen) return;
 
-    mutex_lock(&classLock);
+    mutex_locker_t lock(classLock);
 
     if (proto->isa != cls) {
         _objc_inform("protocol_addMethodDescription: protocol '%s' is not "
                      "under construction!", proto->protocol_name);
-        mutex_unlock(&classLock);
         return;
     }
 
@@ -2058,8 +1994,6 @@ protocol_addMethodDescription(Protocol *proto_gen, SEL name, const char *types,
         old_protocol_ext *ext = (old_protocol_ext *)(proto+1);
         _protocol_addMethod(&ext->optional_class_methods, name, types);
     }
-
-    mutex_unlock(&classLock);
 }
 
 
@@ -2075,16 +2009,16 @@ _protocol_addProperty(old_property_list **plist, const char *name,
 {
     if (!*plist) {
         *plist = (old_property_list *)
-            _calloc_internal(sizeof(old_property_list), 1);
+            calloc(sizeof(old_property_list), 1);
         (*plist)->entsize = sizeof(old_property);
     } else {
         *plist = (old_property_list *)
-            _realloc_internal(*plist, sizeof(old_property_list) 
+            realloc(*plist, sizeof(old_property_list) 
                               + (*plist)->count * (*plist)->entsize);
     }
 
     old_property *prop = property_list_nth(*plist, (*plist)->count++);
-    prop->name = _strdup_internal(name);
+    prop->name = strdup(name);
     prop->attributes = copyPropertyAttributeString(attrs, count);
 }
 
@@ -2101,12 +2035,11 @@ protocol_addProperty(Protocol *proto_gen, const char *name,
     if (!proto) return;
     if (!name) return;
 
-    mutex_lock(&classLock);
+    mutex_locker_t lock(classLock);
     
     if (proto->isa != cls) {
         _objc_inform("protocol_addProperty: protocol '%s' is not "
                      "under construction!", proto->protocol_name);
-        mutex_unlock(&classLock);
         return;
     }
 
@@ -2122,8 +2055,6 @@ protocol_addProperty(Protocol *proto_gen, const char *name,
     //} else /*  !isRequiredProperty  &&  !isInstanceProperty) */ {
     //    _protocol_addProperty(&ext->optional_class_properties, name, attrs, count);
     //}
-
-    mutex_unlock(&classLock);
 }
 
 
@@ -2132,7 +2063,7 @@ protocol_addProperty(Protocol *proto_gen, const char *name,
 * specified image, selectorize the method names and add to the protocol hash.
 **********************************************************************/
 
-static BOOL versionIsExt(uintptr_t version, const char *names, size_t size)
+static bool versionIsExt(uintptr_t version, const char *names, size_t size)
 {
     // CodeWarrior used isa field for string "Protocol" 
     //   from section __OBJC,__class_names.  rdar://4951638
@@ -2152,7 +2083,7 @@ static BOOL versionIsExt(uintptr_t version, const char *names, size_t size)
 }
 
 static void fix_protocol(old_protocol *proto, Class protocolClass, 
-                         BOOL isBundle, const char *names, size_t names_size)
+                         bool isBundle, const char *names, size_t names_size)
 {
     uintptr_t version;
     if (!proto) return;
@@ -2202,18 +2133,16 @@ static void _objc_fixup_protocol_objects_for_image (header_info * hi)
     const char *names;
     size_t names_size;
 
-    mutex_lock(&classLock);
+    mutex_locker_t lock(classLock);
 
     // Allocate the protocol registry if necessary.
     if (!protocol_map) {
         protocol_map = 
-            NXCreateMapTableFromZone(NXStrValueMapPrototype, 32, 
-                                     _objc_internal_zone());
+            NXCreateMapTable(NXStrValueMapPrototype, 32);
     }
     if (!protocol_ext_map) {
         protocol_ext_map = 
-            NXCreateMapTableFromZone(NXPtrValueMapPrototype, 32, 
-                                     _objc_internal_zone());        
+            NXCreateMapTable(NXPtrValueMapPrototype, 32);
     }
 
     protos = _getObjcProtocols(hi, &count);
@@ -2221,8 +2150,6 @@ static void _objc_fixup_protocol_objects_for_image (header_info * hi)
     for (i = 0; i < count; i++) {
         fix_protocol(protos[i], protocolClass, isBundle, names, names_size);
     }
-
-    mutex_unlock(&classLock);
 }
 
 
@@ -2235,8 +2162,14 @@ static void _objc_fixup_selector_refs   (const header_info *hi)
     size_t count;
     SEL *sels;
 
+    bool preoptimized = hi->isPreoptimized();
+# if SUPPORT_IGNORED_SELECTOR_CONSTANT
+    // shared cache can't fix constant ignored selectors
+    if (UseGC) preoptimized = NO;
+# endif
+
     if (PrintPreopt) {
-        if (sel_preoptimizationValid(hi)) {
+        if (preoptimized) {
             _objc_inform("PREOPTIMIZATION: honoring preoptimized selectors in %s", 
                          hi->fname);
         }
@@ -2246,14 +2179,14 @@ static void _objc_fixup_selector_refs   (const header_info *hi)
         }
     }
 
-    if (sel_preoptimizationValid(hi)) return;
+    if (preoptimized) return;
     
     sels = _getObjcSelectorRefs (hi, &count);
 
     map_selrefs(sels, count, headerIsBundle(hi));
 }
 
-static inline BOOL _is_threaded() {
+static inline bool _is_threaded() {
 #if TARGET_OS_WIN32
     return YES;
 #else
@@ -2271,9 +2204,8 @@ static inline BOOL _is_threaded() {
 void 
 unmap_image(const struct mach_header *mh, intptr_t vmaddr_slide)
 {
-    recursive_mutex_lock(&loadMethodLock);
+    recursive_mutex_locker_t lock(loadMethodLock);
     unmap_image_nolock(mh);
-    recursive_mutex_unlock(&loadMethodLock);
 }
 
 
@@ -2283,16 +2215,11 @@ unmap_image(const struct mach_header *mh, intptr_t vmaddr_slide)
 * Calls ABI-agnostic code after taking ABI-specific locks.
 **********************************************************************/
 const char *
-map_images(enum dyld_image_states state, uint32_t infoCount,
-           const struct dyld_image_info infoList[])
+map_2_images(enum dyld_image_states state, uint32_t infoCount,
+             const struct dyld_image_info infoList[])
 {
-    const char *err;
-
-    recursive_mutex_lock(&loadMethodLock);
-    err = map_images_nolock(state, infoCount, infoList);
-    recursive_mutex_unlock(&loadMethodLock);
-
-    return err;
+    recursive_mutex_locker_t lock(loadMethodLock);
+    return map_images_nolock(state, infoCount, infoList);
 }
 
 
@@ -2307,9 +2234,9 @@ const char *
 load_images(enum dyld_image_states state, uint32_t infoCount,
            const struct dyld_image_info infoList[])
 {
-    BOOL found;
+    bool found;
 
-    recursive_mutex_lock(&loadMethodLock);
+    recursive_mutex_locker_t lock(loadMethodLock);
 
     // Discover +load methods
     found = load_images_nolock(state, infoCount, infoList);
@@ -2318,8 +2245,6 @@ load_images(enum dyld_image_states state, uint32_t infoCount,
     if (found) {
         call_load_methods();
     }
-
-    recursive_mutex_unlock(&loadMethodLock);
 
     return nil;
 }
@@ -2333,7 +2258,7 @@ load_images(enum dyld_image_states state, uint32_t infoCount,
 void _read_images(header_info **hList, uint32_t hCount)
 {
     uint32_t i;
-    BOOL categoriesLoaded = NO;
+    bool categoriesLoaded = NO;
 
     if (!class_hash) _objc_init_class_hash();
 
@@ -2348,7 +2273,7 @@ void _read_images(header_info **hList, uint32_t hCount)
     // But not if any other threads are running - they might
     // call a category method before the fixups below are complete.
      if (!_is_threaded()) {
-        BOOL needFlush = NO;
+        bool needFlush = NO;
         for (i = 0; i < hCount; i++) {
             needFlush |= _objc_read_categories_from_image(hList[i]);
         }
@@ -2372,7 +2297,7 @@ void _read_images(header_info **hList, uint32_t hCount)
     // But not if this is the only thread - it's more 
     // efficient to attach categories earlier if safe.
     if (!categoriesLoaded) {
-        BOOL needFlush = NO;
+        bool needFlush = NO;
         for (i = 0; i < hCount; i++) {
             needFlush |= _objc_read_categories_from_image(hList[i]);
         }
@@ -2398,11 +2323,21 @@ static void schedule_class_load(Class cls)
     cls->info |= CLS_LOADED;
 }
 
-void prepare_load_methods(header_info *hi)
+bool hasLoadMethods(const headerType *mhdr)
+{
+    return true;
+}
+
+void prepare_load_methods(const headerType *mhdr)
 {
     Module mods;
     unsigned int midx;
-    
+
+    header_info *hi;
+    for (hi = FirstHeader; hi; hi = hi->next) {
+        if (mhdr == hi->mhdr) break;
+    }
+    if (!hi) return;
 
     if (_objcHeaderIsReplacement(hi)) {
         // Ignore any classes in this image
@@ -2492,8 +2427,8 @@ static void rependClassReferences(Class *refs, size_t count,
     // Process each class ref
     for (i = 0; i < count; i++) {
         if ((uintptr_t)(refs[i]) >= start  &&  (uintptr_t)(refs[i]) < end) {
-            pendClassReference(&refs[i], refs[i]->name, 
-                               (refs[i]->info & CLS_META) ? YES : NO);
+            pendClassReference(&refs[i], refs[i]->name,
+                               refs[i]->info & CLS_META);
             refs[i] = nil;
         }
     }
@@ -2625,7 +2560,7 @@ static void _objc_remove_classes_in_image(header_info *hi)
     unsigned int       midx;
     Module             mods;
 
-    mutex_lock(&classLock);
+    mutex_locker_t lock(classLock);
     
     // Major loop - process all modules in the image
     mods = hi->mod_ptr;
@@ -2692,8 +2627,6 @@ static void _objc_remove_classes_in_image(header_info *hi)
         other_refs = _getObjcClassRefs(other_hi, &count);
         rependClassReferences(other_refs, count, seg, seg+seg_size);
     }
-
-    mutex_unlock(&classLock);
 }
 
 
@@ -2763,7 +2696,7 @@ static void unload_paranoia(header_info *hi)
     _objc_inform("UNLOAD DEBUG: unloading image '%s' [%p..%p]", 
                  hi->fname, (void *)seg, (void*)(seg+seg_size));
 
-    mutex_lock(&classLock);
+    mutex_locker_t lock(classLock);
 
     // Make sure the image contains no categories on surviving classes.
     {
@@ -2820,8 +2753,6 @@ static void unload_paranoia(header_info *hi)
             }
         }
     }
-
-    mutex_unlock(&classLock);
 }
 
 
@@ -2832,7 +2763,7 @@ static void unload_paranoia(header_info *hi)
 **********************************************************************/
 void _unload_image(header_info *hi)
 {
-    recursive_mutex_assert_locked(&loadMethodLock);
+    loadMethodLock.assertLocked();
 
     // Cleanup:
     // Remove image's classes from the class list and free auxiliary data.
@@ -2858,7 +2789,7 @@ void		objc_addClass		(Class cls)
     OBJC_WARN_DEPRECATED;
 
     // Synchronize access to hash table
-    mutex_lock (&classLock);
+    mutex_locker_t lock(classLock);
 
     // Make sure both the class and the metaclass have caches!
     // Clear all bits of the info fields except CLS_CLASS and CLS_META.
@@ -2890,9 +2821,6 @@ void		objc_addClass		(Class cls)
         cls->superclass->clearInfo(CLS_LEAF);
         cls->superclass->ISA()->clearInfo(CLS_LEAF);
     }
-
-    // Desynchronize
-    mutex_unlock (&classLock);
 }
 
 /***********************************************************************
@@ -2916,7 +2844,7 @@ static void _objcTweakMethodListPointerForClass(Class cls)
 
     // Allocate and zero a method list array
     mallocSize   = sizeof(old_method_list *) * initialEntries;
-    ptr	     = (old_method_list **) _calloc_internal(1, mallocSize);
+    ptr	     = (old_method_list **) calloc(1, mallocSize);
 
     // Insert the existing list into the array
     ptr[initialEntries - 1] = END_OF_METHODS_LIST;
@@ -2986,7 +2914,6 @@ void _objc_insertMethods(Class cls, old_method_list *mlist, old_category *cat)
         newSize  = oldSize + sizeof(old_method_list *); // only increase by 1
 
         // Grow the method list array by one.
-        // This block may be from user code; don't use _realloc_internal
         *list = (old_method_list **)realloc(*list, newSize);
 
         // Zero out addition part of new array
@@ -3105,14 +3032,15 @@ static inline void _objc_add_category(Class cls, old_category *category, int ver
 * methods into the class it augments, and flush the class' method cache.
 * Return YES if some method caches now need to be flushed.
 **********************************************************************/
-static BOOL _objc_add_category_flush_caches(Class cls, old_category *category, int version)
+static bool _objc_add_category_flush_caches(Class cls, old_category *category, int version)
 {
-    BOOL needFlush = NO;
+    bool needFlush = NO;
 
     // Install the category's methods into its intended class
-    mutex_lock(&methodListLock);
-    _objc_add_category (cls, category, version);
-    mutex_unlock(&methodListLock);
+    {
+        mutex_locker_t lock(methodListLock);
+        _objc_add_category (cls, category, version);
+    }
 
     // Queue for cache flushing so category's methods can get called
     if (category->instance_methods) {
@@ -3191,7 +3119,7 @@ static void resolve_categories_for_class(Class cls)
 
         // Delink and reclaim this registration
         next = pending->next;
-        _free_internal(pending);
+        free(pending);
         pending = next;
     }
 }
@@ -3233,7 +3161,7 @@ void _objc_resolve_categories_for_class(Class cls)
 *   they were discovered.
 * Returns YES if some method caches now need to be flushed.
 **********************************************************************/
-static BOOL _objc_register_category(old_category *cat, int version)
+static bool _objc_register_category(old_category *cat, int version)
 {
     _objc_unresolved_category *	new_cat;
     _objc_unresolved_category *	old;
@@ -3263,9 +3191,7 @@ static BOOL _objc_register_category(old_category *cat, int version)
 
     // Create category lookup table if needed
     if (!category_hash)
-        category_hash = NXCreateMapTableFromZone (NXStrValueMapPrototype,
-                                                  128,
-                                                  _objc_internal_zone ());
+        category_hash = NXCreateMapTable(NXStrValueMapPrototype, 128);
 
     // Locate an existing list of categories, if any, for the class.
     old = (_objc_unresolved_category *)
@@ -3275,7 +3201,7 @@ static BOOL _objc_register_category(old_category *cat, int version)
     // The category list is built backwards, and is reversed again 
     // by resolve_categories_for_class().
     new_cat = (_objc_unresolved_category *)
-        _malloc_internal(sizeof(_objc_unresolved_category));
+        malloc(sizeof(_objc_unresolved_category));
     new_cat->next    = old;
     new_cat->cat     = cat;
     new_cat->version = version;
@@ -3351,16 +3277,14 @@ Class gdb_object_getClass(id obj)
 /***********************************************************************
 * Lock management
 **********************************************************************/
-rwlock_t selLock = {};
-mutex_t classLock = MUTEX_INITIALIZER;
-mutex_t methodListLock = MUTEX_INITIALIZER;
-mutex_t cacheUpdateLock = MUTEX_INITIALIZER;
-recursive_mutex_t loadMethodLock = RECURSIVE_MUTEX_INITIALIZER;
+rwlock_t selLock;
+mutex_t classLock;
+mutex_t methodListLock;
+mutex_t cacheUpdateLock;
+recursive_mutex_t loadMethodLock;
 
 void lock_init(void)
 {
-    rwlock_init(&selLock);
-    recursive_mutex_init(&loadMethodLock);
 }
 
 

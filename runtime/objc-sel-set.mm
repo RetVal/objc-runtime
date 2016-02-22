@@ -115,7 +115,7 @@ struct __objc_sel_set *__objc_sel_set_create(size_t selrefs) {
     uint32_t idx;
 
     struct __objc_sel_set *sset = (struct __objc_sel_set *)
-        _malloc_internal(sizeof(struct __objc_sel_set));
+        malloc(sizeof(struct __objc_sel_set));
     if (!sset) _objc_fatal("objc_sel_set failure");
     sset->_count = 0;
 
@@ -132,7 +132,7 @@ struct __objc_sel_set *__objc_sel_set_create(size_t selrefs) {
     if (SIZE <= idx) _objc_fatal("objc_sel_set failure");
     sset->_capacity = __objc_sel_set_capacities[idx];
     sset->_bucketsNum = __objc_sel_set_buckets[idx];
-    sset->_buckets = (SEL *)_calloc_internal(sset->_bucketsNum, sizeof(SEL));
+    sset->_buckets = (SEL *)calloc(sset->_bucketsNum, sizeof(SEL));
     if (!sset->_buckets) _objc_fatal("objc_sel_set failure");
     return sset;
 }
@@ -153,7 +153,7 @@ void __objc_sel_set_add(struct __objc_sel_set *sset, SEL value) {
         sset->_capacity = __objc_sel_set_capacities[idx];
         sset->_bucketsNum = __objc_sel_set_buckets[idx];
         sset->_buckets = (SEL *)
-            _calloc_internal(sset->_bucketsNum, sizeof(SEL));
+            calloc(sset->_bucketsNum, sizeof(SEL));
         if (!sset->_buckets) _objc_fatal("objc_sel_set failure");
         for (idx = 0; idx < oldnbuckets; idx++) {
             SEL currentSel = oldbuckets[idx];
@@ -162,7 +162,7 @@ void __objc_sel_set_add(struct __objc_sel_set *sset, SEL value) {
                 sset->_buckets[nomatch] = currentSel;
             }
         }
-        _free_internal(oldbuckets);
+        free(oldbuckets);
     }
     {
         uint32_t nomatch = __objc_sel_set_findBuckets(sset, value).nomatch;

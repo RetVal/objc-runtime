@@ -18,7 +18,7 @@
 
 extern int state;
 
-WEAK_IMPORT
+WEAK_IMPORT OBJC_ROOT_CLASS
 @interface MissingRoot {
     id isa;
 }
@@ -42,7 +42,7 @@ WEAK_IMPORT
 }
 @end
 
-
+OBJC_ROOT_CLASS
 @interface NotMissingRoot {
     id isa;
 }

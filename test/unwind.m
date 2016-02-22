@@ -56,10 +56,6 @@ static void handler(id unused __unused, void *ctx __unused)
 
 int main()
 {
-#if TARGET_IPHONE_SIMULATOR
-    testwarn("<rdar://problem/7965763> Simulator: cannot throw exceptions across objc_msgSend");
-    succeed(__FILE__);
-#else
     int i;
 
     // unwind exception and alt handler through objc_msgSend()
@@ -92,7 +88,6 @@ int main()
     } POP_POOL;
 
     succeed(__FILE__);
-#endif
 }
 
 #endif

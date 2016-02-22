@@ -40,7 +40,7 @@ asm(
     ".long 1 \n"
     PTR "L_load \n"
     PTR "L_load \n"
-    PTR str2(SHARED_REGION_BASE+SHARED_REGION_SIZE-0x1000) " \n"
+    PTR str2(SHARED_REGION_BASE+SHARED_REGION_SIZE-PAGE_MAX_SIZE) " \n"
 
     "L_good_methods: \n"
     ".long 24 \n"

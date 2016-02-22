@@ -11,6 +11,7 @@ END
 int state1 = 0;
 int *state2_p;
 
+OBJC_ROOT_CLASS
 @interface One @end
 @implementation One
 +(void)load 

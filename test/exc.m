@@ -1,4 +1,8 @@
-/* 
+/*
+need exception-safe ARC for exception deallocation tests 
+need F/CF for testonthread() in GC mode
+TEST_CFLAGS -fobjc-arc-exceptions -framework Foundation
+
 llvm-gcc unavoidably warns about our deliberately out-of-order handlers
 
 TEST_BUILD_OUTPUT
@@ -19,6 +23,7 @@ END
 #include <objc/objc-exception.h>
 
 static volatile int state = 0;
+static volatile int dealloced = 0;
 #define BAD 1000000
 
 #if defined(USE_FOUNDATION)
@@ -30,6 +35,8 @@ static volatile int state = 0;
 +(id)exception { return AUTORELEASE([[self alloc] initWithName:@"Super" reason:@"reason" userInfo:nil]);  }
 -(void)check { state++; }
 +(void)check { testassert(!"caught class object, not instance"); }
+-(void)dealloc { dealloced++; SUPER_DEALLOC(); }
+-(void)finalize { dealloced++; [super finalize]; }
 @end
 
 #define FILENAME "nsexc.m"
@@ -41,6 +48,8 @@ static volatile int state = 0;
 +(id)exception { return AUTORELEASE([self new]); }
 -(void)check { state++; }
 +(void)check { testassert(!"caught class object, not instance"); }
+-(void)dealloc { dealloced++; SUPER_DEALLOC(); }
+-(void)finalize { dealloced++; [super finalize]; }
 @end
 
 #define FILENAME "exc.m"
@@ -122,38 +131,50 @@ void terminator() {
 #endif
 
 
+#define TEST(code)                                              \
+    do {                                                        \
+        testonthread(^{ PUSH_POOL { code } POP_POOL; });        \
+        testcollect();                                          \
+    } while (0)
+
+
+
 int main()
 {
-    PUSH_POOL {
+    testprintf("try-catch-finally, exception caught exactly\n");
+    
+    TEST({
+        state = 0;
+        dealloced = 0;
+        @try {
+            state++;
+            @try {
+                state++;
+                @throw [Super exception];
+                state = BAD;
+            } 
+            @catch (Super *e) {
+                state++;
+                [e check];  // state++
+            }
+            @finally {
+                state++;
+            }
+            state++;
+        } 
+        @catch (...) {
+            state = BAD;
+        }
+    });
+    testassert(state == 6);
+    testassert(dealloced == 1);
 
-        testprintf("try-catch-finally, exception caught exactly\n");
-        
+
+    testprintf("try-finally, no exception thrown\n");
+    
+    TEST({
         state = 0;
-        @try {
-            state++;
-            @try {
-                state++;
-                @throw [Super exception];
-                state = BAD;
-            } 
-            @catch (Super *e) {
-                state++;
-                [e check];  // state++
-            }
-            @finally {
-                state++;
-            }
-            state++;
-        } 
-        @catch (...) {
-            state = BAD;
-        }
-        testassert(state == 6);
-        
-        
-        testprintf("try-finally, no exception thrown\n");
-        
-        state = 0;
+        dealloced = 0;
         @try {
             state++;
             @try {
@@ -167,12 +188,16 @@ int main()
         @catch (...) {
             state = BAD;
         }
-        testassert(state == 4);
-        
-        
-        testprintf("try-finally, with exception\n");
-        
+    });
+    testassert(state == 4);
+    testassert(dealloced == 0);
+    
+    
+    testprintf("try-finally, with exception\n");
+    
+    TEST({
         state = 0;
+        dealloced = 0;
         @try {
             state++;
             @try {
@@ -189,12 +214,56 @@ int main()
             state++;
             [e check];  // state++
         }
-        testassert(state == 5);
-        
-        
-        testprintf("try-catch-finally, no exception\n");
-        
+    });
+    testassert(state == 5);
+    testassert(dealloced == 1);
+
+
+#if __OBJC2__
+    testprintf("try-finally, with autorelease pool pop during unwind\n");
+    // Popping an autorelease pool during unwind used to deallocate the 
+    // exception object, but now we retain them while in flight.
+
+    // This use-after-free is undetected without MallocScribble or guardmalloc.
+    if (!getenv("MallocScribble")  &&  
+        (!getenv("DYLD_INSERT_LIBRARIES")  || 
+         !strstr(getenv("DYLD_INSERT_LIBRARIES"), "libgmalloc"))) 
+    {
+        testwarn("MallocScribble not set");
+    }
+
+    TEST({
         state = 0;
+        dealloced = 0;
+        @try {
+            void *pool2 = objc_autoreleasePoolPush();
+            state++;
+            @try {
+                state++;
+                @throw [Super exception];
+                state = BAD;
+            } 
+            @finally {
+                state++;
+                objc_autoreleasePoolPop(pool2);
+            }
+            state = BAD;
+        } 
+        @catch (id e) {
+            state++;
+            [e check];  // state++
+        }
+    });
+    testassert(state == 5);
+    testassert(dealloced == 1);
+#endif
+
+    
+    testprintf("try-catch-finally, no exception\n");
+    
+    TEST({
+        state = 0;
+        dealloced = 0;
         @try {
             state++;
             @try {
@@ -210,12 +279,16 @@ int main()
         } @catch (...) {
             state = BAD;
         }
-        testassert(state == 4);
-        
-        
-        testprintf("try-catch-finally, exception not caught\n");
-        
+    });
+    testassert(state == 4);
+    testassert(dealloced == 0);
+    
+    
+    testprintf("try-catch-finally, exception not caught\n");
+    
+    TEST({
         state = 0;
+        dealloced = 0;
         @try {
             state++;
             @try {
@@ -235,12 +308,16 @@ int main()
             state++;
             [e check];  // state++
         }
-        testassert(state == 5);
-        
-        
-        testprintf("try-catch-finally, exception caught exactly, rethrown\n");
-        
+    });
+    testassert(state == 5);
+    testassert(dealloced == 1);
+    
+    
+    testprintf("try-catch-finally, exception caught exactly, rethrown\n");
+    
+    TEST({
         state = 0;
+        dealloced = 0;
         @try {
             state++;
             @try {
@@ -263,12 +340,16 @@ int main()
             state++;
             [e check];  // state++
         }
-        testassert(state == 7);
+    });
+    testassert(state == 7);
+    testassert(dealloced == 1);
+    
         
-        
-        testprintf("try-catch, no exception\n");
-        
+    testprintf("try-catch, no exception\n");
+    
+    TEST({
         state = 0;
+        dealloced = 0;
         @try {
             state++;
             @try {
@@ -281,12 +362,16 @@ int main()
         } @catch (...) {
             state = BAD;
         }
-        testassert(state == 3);
-        
-        
-        testprintf("try-catch, exception not caught\n");
-        
+    });
+    testassert(state == 3);
+    testassert(dealloced == 0);
+
+    
+    testprintf("try-catch, exception not caught\n");
+    
+    TEST({
         state = 0;
+        dealloced = 0;
         @try {
             state++;
             @try {
@@ -303,12 +388,16 @@ int main()
             state++;
             [e check];  // state++
         }
-        testassert(state == 4);
-        
-        
-        testprintf("try-catch, exception caught exactly\n");
-        
+    });
+    testassert(state == 4);
+    testassert(dealloced == 1);
+    
+    
+    testprintf("try-catch, exception caught exactly\n");
+
+    TEST({
         state = 0;
+        dealloced = 0;
         @try {
             state++;
             @try {
@@ -325,12 +414,16 @@ int main()
         @catch (...) {
             state = BAD;
         }
-        testassert(state == 5);
-        
-        
-        testprintf("try-catch, exception caught exactly, rethrown\n");
-        
+    });
+    testassert(state == 5);
+    testassert(dealloced == 1);
+    
+    
+    testprintf("try-catch, exception caught exactly, rethrown\n");
+    
+    TEST({
         state = 0;
+        dealloced = 0;
         @try {
             state++;
             @try {
@@ -350,12 +443,16 @@ int main()
             state++;
             [e check];  // state++
         }
-        testassert(state == 6);
-        
-        
-        testprintf("try-catch, exception caught exactly, thrown again explicitly\n");
-        
+    });
+    testassert(state == 6);
+    testassert(dealloced == 1);
+
+    
+    testprintf("try-catch, exception caught exactly, thrown again explicitly\n");
+
+    TEST({
         state = 0;
+        dealloced = 0;
         @try {
             state++;
             @try {
@@ -375,12 +472,16 @@ int main()
             state++;
             [e check];  // state++
         }
-        testassert(state == 6);
-        
-        
-        testprintf("try-catch, default catch, rethrown\n");
-        
+    });
+    testassert(state == 6);
+    testassert(dealloced == 1);
+    
+    
+    testprintf("try-catch, default catch, rethrown\n");
+    
+    TEST({
         state = 0;
+        dealloced = 0;
         @try {
             state++;
             @try {
@@ -399,12 +500,16 @@ int main()
             state++;
             [e check];  // state++
         }
-        testassert(state == 5);
-        
-        
-        testprintf("try-catch, default catch, rethrown and caught inside nested handler\n");
-        
+    });
+    testassert(state == 5);
+    testassert(dealloced == 1);
+    
+    
+    testprintf("try-catch, default catch, rethrown and caught inside nested handler\n");
+    
+    TEST({
         state = 0;
+        dealloced = 0;
         @try {
             state++;
             @try {
@@ -437,12 +542,16 @@ int main()
         @catch (...) {
             state = BAD;
         }
-        testassert(state == 9);
-        
-        
-        testprintf("try-catch, default catch, rethrown inside nested handler but not caught\n");
-        
+    });
+    testassert(state == 9);
+    testassert(dealloced == 1);
+    
+    
+    testprintf("try-catch, default catch, rethrown inside nested handler but not caught\n");
+    
+    TEST({
         state = 0;
+        dealloced = 0;
         @try {
             state++;
             @try {
@@ -473,13 +582,17 @@ int main()
             state++;
             [e check];  // state++
         }
-        testassert(state == 7);
-
-
+    });
+    testassert(state == 7);
+    testassert(dealloced == 1);
+    
+    
 #if __cplusplus  &&  __OBJC2__
-        testprintf("C++ try/catch, Objective-C exception superclass\n");
-
+    testprintf("C++ try/catch, Objective-C exception superclass\n");
+    
+    TEST({
         state = 0;
+        dealloced = 0;
         try {
             state++;
             try {
@@ -511,12 +624,16 @@ int main()
             state++;
             [e check];  // state++;
         }
-        testassert(state == 8);
-
-
-        testprintf("C++ try/catch, Objective-C exception subclass\n");
-
+    });
+    testassert(state == 8);
+    testassert(dealloced == 1);
+    
+    
+    testprintf("C++ try/catch, Objective-C exception subclass\n");
+    
+    TEST({
         state = 0;
+        dealloced = 0;
         try {
             state++;
             try {
@@ -548,7 +665,9 @@ int main()
             state++;
             [e check];  // state++;
         }
-        testassert(state == 8);
+    });
+    testassert(state == 8);
+    testassert(dealloced == 1);
 
 #endif        
         
@@ -557,15 +676,16 @@ int main()
         // alt handlers for modern Mac OS only
 
 #else
+    {
         // alt handlers
         // run a lot to catch failed unregistration (runtime complains at 1000)
 #define ALT_HANDLER_REPEAT 2000
-        int i;
         
         testprintf("alt handler, no exception\n");
         
-        for (i = 0; i < ALT_HANDLER_REPEAT; i++) {
-            PUSH_POOL {
+        TEST({
+            dealloced = 0;
+            for (int i = 0; i < ALT_HANDLER_REPEAT; i++) {
                 state = 0;
                 @try {
                     state++;
@@ -582,13 +702,16 @@ int main()
                     state = BAD;
                 }
                 testassert(state == 3);
-            } POP_POOL;
-        }        
+            }
+        });
+        testassert(dealloced == 0);
+        
         
         testprintf("alt handler, exception thrown through\n");
         
-        for (i = 0; i < ALT_HANDLER_REPEAT; i++) {
-            PUSH_POOL {
+        TEST({
+            dealloced = 0;
+            for (int i = 0; i < ALT_HANDLER_REPEAT; i++) {
                 state = 0;
                 @try {
                     state++;
@@ -611,14 +734,16 @@ int main()
                     [e check];  // state++
                 }
                 testassert(state == 5);
-            } POP_POOL;
-        }
+            }
+        });
+        testassert(dealloced == ALT_HANDLER_REPEAT);
         
         
         testprintf("alt handler, nested\n");
         
-        for (i = 0; i < ALT_HANDLER_REPEAT; i++) {
-            PUSH_POOL {
+        TEST({
+            dealloced = 0;
+            for (int i = 0; i < ALT_HANDLER_REPEAT; i++) {
                 state = 0;
                 @try {
                     state++;
@@ -645,14 +770,16 @@ int main()
                     state = BAD;
                 }
                 testassert(state == 9);
-            } POP_POOL;
-        }
+            }
+        });
+        testassert(dealloced == ALT_HANDLER_REPEAT);
         
         
         testprintf("alt handler, nested, rethrows in between\n");
         
-        for (i = 0; i < ALT_HANDLER_REPEAT; i++) {
-            PUSH_POOL {
+        TEST({
+            dealloced = 0;
+            for (int i = 0; i < ALT_HANDLER_REPEAT; i++) {
                 state = 0;
                 @try {
                     state++;
@@ -681,14 +808,16 @@ int main()
                     [e check];  // state++
                 }
                 testassert(state == 10);
-            } POP_POOL;
-        }
+            }
+        });
+        testassert(dealloced == ALT_HANDLER_REPEAT);
         
         
         testprintf("alt handler, exception thrown and caught inside\n");
         
-        for (i = 0; i < ALT_HANDLER_REPEAT; i++) {
-            PUSH_POOL {
+        TEST({
+            dealloced = 0;
+            for (int i = 0; i < ALT_HANDLER_REPEAT; i++) {
                 state = 0;
                 @try {
                     state++;
@@ -709,15 +838,17 @@ int main()
                     state = BAD;
                 }
                 testassert(state == 5);
-            } POP_POOL;
-        }
+            }
+        });
+        testassert(dealloced == ALT_HANDLER_REPEAT);
 
 
 #if defined(USE_FOUNDATION)
         testprintf("alt handler, rdar://10055775\n");
         
-        for (i = 0; i < ALT_HANDLER_REPEAT; i++) {
-            PUSH_POOL {
+        TEST({
+            dealloced = 0;
+            for (int i = 0; i < ALT_HANDLER_REPEAT; i++) {
                 state = 0;
                 @try {
                     uintptr_t token = objc_addExceptionHandler(altHandler1, (void*)altHandler1);
@@ -727,22 +858,24 @@ int main()
                     }
                     state++;
                     // state++ inside alt handler
-                    [NSException raise:@"foo" format:@"bar"];
+                    [Super raise:@"foo" format:@"bar"];
                     state = BAD;
                     objc_removeExceptionHandler(token);
                 } @catch (id e) {
-                    testassert(state == 2);
+                    state++;
+                    testassert(state == 3);
                 }
-            } POP_POOL;
-        }
+                testassert(state == 3);
+            }
+        });
+        testassert(dealloced == ALT_HANDLER_REPEAT);
+
 // defined(USE_FOUNDATION)
 #endif
 
-
+    }
 // alt handlers
 #endif
-
-    } POP_POOL;
 
 #if __cplusplus  &&  __OBJC2__
     std::set_terminate(terminator);

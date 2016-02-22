@@ -39,7 +39,7 @@
 // symbols defined in assembly files
 // Don't use the symbols directly; they're thumb-biased on some ARM archs.
 #define TRAMP(tramp)                                \
-    static inline uintptr_t tramp(void) {           \
+    static inline __unused uintptr_t tramp(void) {  \
         extern void *_##tramp;                      \
         return ((uintptr_t)&_##tramp) & ~1UL;       \
     }
@@ -184,25 +184,25 @@ static TrampolineBlockPagePair *headPagePairs[ArgumentModeCount];
 
 static inline void _lock() {
 #if __OBJC2__
-    rwlock_write(&runtimeLock);
+    runtimeLock.write();
 #else
-    mutex_lock(&classLock);
+    classLock.lock();
 #endif
 }
 
 static inline void _unlock() {
 #if __OBJC2__
-    rwlock_unlock_write(&runtimeLock);
+    runtimeLock.unlockWrite();
 #else
-    mutex_unlock(&classLock);
+    classLock.unlock();
 #endif
 }
 
 static inline void _assert_locked() {
 #if __OBJC2__
-    rwlock_assert_writing(&runtimeLock);
+    runtimeLock.assertWriting();
 #else
-    mutex_assert_locked(&classLock);
+    classLock.assertLocked();
 #endif
 }
 

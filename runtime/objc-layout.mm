@@ -57,15 +57,15 @@
 * Allocates and returns a compressed string matching the given layout bitmap.
 **********************************************************************/
 static unsigned char *
-compress_layout(const uint8_t *bits, size_t bitmap_bits, BOOL weak)
+compress_layout(const uint8_t *bits, size_t bitmap_bits, bool weak)
 {
-    BOOL all_set = YES;
-    BOOL none_set = YES;
+    bool all_set = YES;
+    bool none_set = YES;
     unsigned char *result;
 
     // overallocate a lot; reallocate at correct size later
     unsigned char * const layout = (unsigned char *)
-        _calloc_internal(bitmap_bits + 1, 1);
+        calloc(bitmap_bits + 1, 1);
     unsigned char *l = layout;
 
     size_t i = 0;
@@ -115,9 +115,9 @@ compress_layout(const uint8_t *bits, size_t bitmap_bits, BOOL weak)
     } else if (all_set  &&  !weak) {
         result = NULL;  // NULL ivar layout means all-scanned
     } else {
-        result = (unsigned char *)_strdup_internal((char *)layout); 
+        result = (unsigned char *)strdup((char *)layout); 
     }
-    _free_internal(layout);
+    free(layout);
     return result;
 }
 
@@ -215,7 +215,7 @@ static void decompress_layout(const unsigned char *layout_string, layout_bitmap 
 layout_bitmap 
 layout_bitmap_create(const unsigned char *layout_string,
                      size_t layoutStringInstanceSize, 
-                     size_t instanceSize, BOOL weak)
+                     size_t instanceSize, bool weak)
 {
     layout_bitmap result;
     size_t words = instanceSize / sizeof(id);
@@ -223,7 +223,7 @@ layout_bitmap_create(const unsigned char *layout_string,
     result.weak = weak;
     result.bitCount = words;
     result.bitsAllocated = words;
-    result.bits = (uint8_t *)_calloc_internal((words+7)/8, 1);
+    result.bits = (uint8_t *)calloc((words+7)/8, 1);
 
     if (!layout_string) {
         if (!weak) {
@@ -249,7 +249,7 @@ layout_bitmap_create(const unsigned char *layout_string,
  * The returned bitmap must be freed with layout_bitmap_free().
  **********************************************************************/
 layout_bitmap
-layout_bitmap_create_empty(size_t instanceSize, BOOL weak)
+layout_bitmap_create_empty(size_t instanceSize, bool weak)
 {
     layout_bitmap result;
     size_t words = instanceSize / sizeof(id);
@@ -257,7 +257,7 @@ layout_bitmap_create_empty(size_t instanceSize, BOOL weak)
     result.weak = weak;
     result.bitCount = words;
     result.bitsAllocated = words;
-    result.bits = (uint8_t *)_calloc_internal((words+7)/8, 1);
+    result.bits = (uint8_t *)calloc((words+7)/8, 1);
 
     return result;
 }
@@ -265,7 +265,7 @@ layout_bitmap_create_empty(size_t instanceSize, BOOL weak)
 void 
 layout_bitmap_free(layout_bitmap bits)
 {
-    if (bits.bits) _free_internal(bits.bits);
+    if (bits.bits) free(bits.bits);
 }
 
 const unsigned char * 
@@ -274,7 +274,7 @@ layout_string_create(layout_bitmap bits)
     const unsigned char *result =
         compress_layout(bits.bits, bits.bitCount, bits.weak);
 
-#ifndef NDEBUG
+#if DEBUG
     // paranoia: cycle to bitmap and back to string again, and compare
     layout_bitmap check = layout_bitmap_create(result, bits.bitCount*sizeof(id), 
                                                bits.bitCount*sizeof(id), bits.weak);
@@ -335,7 +335,7 @@ layout_bitmap_grow(layout_bitmap *bits, size_t newCount)
         size_t newAllocated = bits->bitsAllocated * 2;
         if (newAllocated < newCount) newAllocated = newCount;
         bits->bits = (uint8_t *)
-            _realloc_internal(bits->bits, (newAllocated+7) / 8);
+            realloc(bits->bits, (newAllocated+7) / 8);
         bits->bitsAllocated = newAllocated;
     }
     assert(bits->bitsAllocated >= bits->bitCount);
@@ -401,11 +401,11 @@ layout_bitmap_slide_anywhere(layout_bitmap *bits, size_t oldPos, size_t newPos)
 * dst must be at least as long as src.
 * Returns YES if any of dst's bits were changed.
 **********************************************************************/
-BOOL
+bool
 layout_bitmap_splat(layout_bitmap dst, layout_bitmap src, 
                     size_t oldSrcInstanceSize)
 {
-    BOOL changed;
+    bool changed;
     size_t oldSrcBitCount;
     size_t bit;
 
@@ -440,10 +440,10 @@ layout_bitmap_splat(layout_bitmap dst, layout_bitmap src,
 * dst must be at least as long as src.
 * Returns YES if any of dst's bits were changed.
 **********************************************************************/
-BOOL
+bool
 layout_bitmap_or(layout_bitmap dst, layout_bitmap src, const char *msg)
 {
-    BOOL changed = NO;
+    bool changed = NO;
     size_t bit;
 
     if (dst.bitCount < src.bitCount) {
@@ -471,10 +471,10 @@ layout_bitmap_or(layout_bitmap dst, layout_bitmap src, const char *msg)
 * dst must be at least as long as src.
 * Returns YES if any of dst's bits were changed.
 **********************************************************************/
-BOOL
+bool
 layout_bitmap_clear(layout_bitmap dst, layout_bitmap src, const char *msg)
 {
-    BOOL changed = NO;
+    bool changed = NO;
     size_t bit;
 
     if (dst.bitCount < src.bitCount) {
@@ -617,7 +617,7 @@ static char *skip_ivar_struct_name(char *type) {
 * 
 **********************************************************************/
 static char *scan_ivar_type_for_layout(char *type, long offset, long bits_size, unsigned char *bits, long *next_offset);
-static char *scan_basic_ivar_type(char *type, long *size, long *alignment, BOOL *is_reference) {
+static char *scan_basic_ivar_type(char *type, long *size, long *alignment, bool *is_reference) {
     // assume it is a non-reference type
     *is_reference = NO;
     
@@ -801,7 +801,7 @@ static char *scan_basic_ivar_type(char *type, long *size, long *alignment, BOOL 
 static char *scan_ivar_type_for_layout(char *type, long offset, long bits_size, unsigned char *bits, long *next_offset) {
     long size;                                   // size of a basic type
     long alignment;                              // alignment of the basic type
-    BOOL is_reference;                      // true if the type indicates a reference to a garbage collected object
+    bool is_reference;                      // true if the type indicates a reference to a garbage collected object
     
     // get the first character
     char ch = *type;

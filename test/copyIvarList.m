@@ -5,6 +5,7 @@
 #include <malloc/malloc.h>
 #include <objc/objc-runtime.h>
 
+OBJC_ROOT_CLASS
 @interface SuperIvars { 
     id isa;
     int ivar1;
@@ -18,7 +19,7 @@
 } @end
 @implementation SubIvars @end
 
-
+OBJC_ROOT_CLASS
 @interface FourIvars {
     int ivar1;
     int ivar2;
@@ -27,6 +28,7 @@
 } @end
 @implementation FourIvars @end
 
+OBJC_ROOT_CLASS
 @interface NoIvars { } @end
 @implementation NoIvars @end
 

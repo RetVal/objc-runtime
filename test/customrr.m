@@ -2,7 +2,7 @@
 // TEST_CONFIG MEM=mrc
 /*
 TEST_BUILD
-    $C{COMPILE} $DIR/customrr.m '-Wl,-exported_symbol,.objc_class_name_InheritingSubCat' -o customrr.out 
+    $C{COMPILE} $DIR/customrr.m -fvisibility=default -o customrr.out 
     $C{COMPILE} -undefined dynamic_lookup -dynamiclib $DIR/customrr-cat1.m -o customrr-cat1.dylib
     $C{COMPILE} -undefined dynamic_lookup -dynamiclib $DIR/customrr-cat2.m -o customrr-cat2.dylib
 END
@@ -16,6 +16,7 @@ END
 #if !__OBJC2__
 
 // pacify exported symbols list
+OBJC_ROOT_CLASS
 @interface InheritingSubCat @end
 @implementation InheritingSubCat @end
 
@@ -34,6 +35,8 @@ static int PlusRetains;
 static int PlusReleases;
 static int PlusAutoreleases;
 static int PlusRetainCounts;
+static int Allocs;
+static int AllocWithZones;
 
 static int SubRetains;
 static int SubReleases;
@@ -43,6 +46,8 @@ static int SubPlusRetains;
 static int SubPlusReleases;
 static int SubPlusAutoreleases;
 static int SubPlusRetainCounts;
+static int SubAllocs;
+static int SubAllocWithZones;
 
 static int Imps;
 
@@ -61,6 +66,8 @@ static void zero(void) {
     PlusReleases = 0;
     PlusAutoreleases = 0;
     PlusRetainCounts = 0;
+    Allocs = 0;
+    AllocWithZones = 0;
 
     SubRetains = 0;
     SubReleases = 0;
@@ -70,6 +77,8 @@ static void zero(void) {
     SubPlusReleases = 0;
     SubPlusAutoreleases = 0;
     SubPlusRetainCounts = 0;
+    SubAllocs = 0;
+    SubAllocWithZones = 0;
 
     Imps = 0;
 }
@@ -83,6 +92,8 @@ id HackPlusRetain(id self, SEL _cmd __unused) { PlusRetains++; return self; }
 void HackPlusRelease(id self __unused, SEL _cmd __unused) { PlusReleases++; }
 id HackPlusAutorelease(id self, SEL _cmd __unused) { PlusAutoreleases++; return self; }
 NSUInteger HackPlusRetainCount(id self __unused, SEL _cmd __unused) { PlusRetainCounts++; return 1; }
+id HackAlloc(Class self, SEL _cmd __unused) { Allocs++; return class_createInstance(self, 0); }
+id HackAllocWithZone(Class self, SEL _cmd __unused) { AllocWithZones++; return class_createInstance(self, 0); }
 
 
 @interface OverridingSub : NSObject @end
@@ -98,6 +109,23 @@ NSUInteger HackPlusRetainCount(id self __unused, SEL _cmd __unused) { PlusRetain
 +(NSUInteger) retainCount { SubPlusRetainCounts++; return 1; }
 
 @end
+
+@interface OverridingASub : NSObject @end
+@implementation OverridingASub
++(id) alloc { SubAllocs++; return class_createInstance(self, 0); }
+@end
+
+@interface OverridingAWZSub : NSObject @end
+@implementation OverridingAWZSub
++(id) allocWithZone:(NSZone * __unused)z { SubAllocWithZones++; return class_createInstance(self, 0); }
+@end
+
+@interface OverridingAAWZSub : NSObject @end
+@implementation OverridingAAWZSub
++(id) alloc { SubAllocs++; return class_createInstance(self, 0); }
++(id) allocWithZone:(NSZone * __unused)z { SubAllocWithZones++; return class_createInstance(self, 0); }
+@end
+
 
 @interface InheritingSub : NSObject @end
 @implementation InheritingSub @end
@@ -138,6 +166,37 @@ NSUInteger HackPlusRetainCount(id self __unused, SEL _cmd __unused) { PlusRetain
 @implementation InheritingSubCat_2 @end
 
 
+extern uintptr_t OBJC_CLASS_$_UnrealizedSubA1;
+@interface UnrealizedSubA1 : NSObject @end
+@implementation UnrealizedSubA1 @end
+extern uintptr_t OBJC_CLASS_$_UnrealizedSubA2;
+@interface UnrealizedSubA2 : NSObject @end
+@implementation UnrealizedSubA2 @end
+extern uintptr_t OBJC_CLASS_$_UnrealizedSubA3;
+@interface UnrealizedSubA3 : NSObject @end
+@implementation UnrealizedSubA3 @end
+
+extern uintptr_t OBJC_CLASS_$_UnrealizedSubB1;
+@interface UnrealizedSubB1 : NSObject @end
+@implementation UnrealizedSubB1 @end
+extern uintptr_t OBJC_CLASS_$_UnrealizedSubB2;
+@interface UnrealizedSubB2 : NSObject @end
+@implementation UnrealizedSubB2 @end
+extern uintptr_t OBJC_CLASS_$_UnrealizedSubB3;
+@interface UnrealizedSubB3 : NSObject @end
+@implementation UnrealizedSubB3 @end
+
+extern uintptr_t OBJC_CLASS_$_UnrealizedSubC1;
+@interface UnrealizedSubC1 : NSObject @end
+@implementation UnrealizedSubC1 @end
+extern uintptr_t OBJC_CLASS_$_UnrealizedSubC2;
+@interface UnrealizedSubC2 : NSObject @end
+@implementation UnrealizedSubC2 @end
+extern uintptr_t OBJC_CLASS_$_UnrealizedSubC3;
+@interface UnrealizedSubC3 : NSObject @end
+@implementation UnrealizedSubC3 @end
+
+
 int main(int argc __unused, char **argv)
 {
     objc_autoreleasePoolPush();
@@ -169,6 +228,10 @@ int main(int argc __unused, char **argv)
         m[2] = (IMP)HackPlusAutorelease;
         m = (IMP *)class_getClassMethod(cls, @selector(retainCount));
         m[2] = (IMP)HackPlusRetainCount;
+        m = (IMP *)class_getClassMethod(cls, @selector(alloc));
+        m[2] = (IMP)HackAlloc;
+        m = (IMP *)class_getClassMethod(cls, @selector(allocWithZone:));
+        m[2] = (IMP)HackAllocWithZone;
 
         _objc_flush_caches(cls);
 
@@ -179,6 +242,11 @@ int main(int argc __unused, char **argv)
     Class cls = [NSObject class];
     Class icl = [InheritingSub class];
     Class ocl = [OverridingSub class];
+    /*
+    Class oa1 = [OverridingASub class];
+    Class oa2 = [OverridingAWZSub class];
+    Class oa3 = [OverridingAAWZSub class];
+    */
     NSObject *obj = [NSObject new];
     InheritingSub *inh = [InheritingSub new];
     OverridingSub *ovr = [OverridingSub new];
@@ -191,6 +259,9 @@ int main(int argc __unused, char **argv)
     void *dlh;
 
 
+#if __x86_64__
+    // vtable dispatch can introduce bypass just like the ARC entrypoints
+#else
     testprintf("method dispatch does not bypass\n");
     zero();
     
@@ -235,6 +306,73 @@ int main(int argc __unused, char **argv)
     testassert(SubPlusReleases == 1);
     [ocl autorelease];
     testassert(SubPlusAutoreleases == 1);
+
+    [UnrealizedSubA1 retain];
+    testassert(PlusRetains == 3);
+    [UnrealizedSubA2 release];
+    testassert(PlusReleases == 3);
+    [UnrealizedSubA3 autorelease];
+    testassert(PlusAutoreleases == 3);
+#endif
+
+
+    testprintf("objc_msgSend() does not bypass\n");
+    zero();
+
+    id (*retain_fn)(id, SEL) = (id(*)(id, SEL))objc_msgSend;
+    void (*release_fn)(id, SEL) = (void(*)(id, SEL))objc_msgSend;
+    id (*autorelease_fn)(id, SEL) = (id(*)(id, SEL))objc_msgSend;
+
+    retain_fn(obj, @selector(retain));
+    testassert(Retains == 1);
+    release_fn(obj, @selector(release));
+    testassert(Releases == 1);
+    autorelease_fn(obj, @selector(autorelease));
+    testassert(Autoreleases == 1);
+
+    retain_fn(cls, @selector(retain));
+    testassert(PlusRetains == 1);
+    release_fn(cls, @selector(release));
+    testassert(PlusReleases == 1);
+    autorelease_fn(cls, @selector(autorelease));
+    testassert(PlusAutoreleases == 1);
+
+    retain_fn(inh, @selector(retain));
+    testassert(Retains == 2);
+    release_fn(inh, @selector(release));
+    testassert(Releases == 2);
+    autorelease_fn(inh, @selector(autorelease));
+    testassert(Autoreleases == 2);
+
+    retain_fn(icl, @selector(retain));
+    testassert(PlusRetains == 2);
+    release_fn(icl, @selector(release));
+    testassert(PlusReleases == 2);
+    autorelease_fn(icl, @selector(autorelease));
+    testassert(PlusAutoreleases == 2);
+    
+    retain_fn(ovr, @selector(retain));
+    testassert(SubRetains == 1);
+    release_fn(ovr, @selector(release));
+    testassert(SubReleases == 1);
+    autorelease_fn(ovr, @selector(autorelease));
+    testassert(SubAutoreleases == 1);
+
+    retain_fn(ocl, @selector(retain));
+    testassert(SubPlusRetains == 1);
+    release_fn(ocl, @selector(release));
+    testassert(SubPlusReleases == 1);
+    autorelease_fn(ocl, @selector(autorelease));
+    testassert(SubPlusAutoreleases == 1);
+
+#if __OBJC2__
+    retain_fn((Class)&OBJC_CLASS_$_UnrealizedSubB1, @selector(retain));
+    testassert(PlusRetains == 3);
+    release_fn((Class)&OBJC_CLASS_$_UnrealizedSubB2, @selector(release));
+    testassert(PlusReleases == 3);
+    autorelease_fn((Class)&OBJC_CLASS_$_UnrealizedSubB3, @selector(autorelease));
+    testassert(PlusAutoreleases == 3);
+#endif
 
 
     testprintf("arc function bypasses instance but not class or override\n");
@@ -282,6 +420,15 @@ int main(int argc __unused, char **argv)
     objc_autorelease(ocl);
     testassert(SubPlusAutoreleases == 1);
 
+#if __OBJC2__
+    objc_retain((Class)&OBJC_CLASS_$_UnrealizedSubC1);
+    testassert(PlusRetains == 3);
+    objc_release((Class)&OBJC_CLASS_$_UnrealizedSubC2);
+    testassert(PlusReleases == 3);
+    objc_autorelease((Class)&OBJC_CLASS_$_UnrealizedSubC3);
+    testassert(PlusAutoreleases == 3);
+#endif
+
 
     testprintf("unrelated addMethod does not clobber\n");
     zero();
@@ -306,7 +453,7 @@ int main(int argc __unused, char **argv)
     objc_autorelease(obj);
     testassert(Autoreleases == 0);
 
-    class_addMethod(cls->isa, @selector(retain), (IMP)imp_fn, "");
+    class_addMethod(object_getClass(cls), @selector(retain), (IMP)imp_fn, "");
     
     objc_retain(obj);
     testassert(Retains == 0);

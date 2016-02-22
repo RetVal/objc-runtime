@@ -90,7 +90,7 @@ static void allocateExt(Class cls)
     } 
     if (!cls->ext) {
         uint32_t size = (uint32_t)sizeof(old_class_ext);
-        cls->ext = (old_class_ext *)_calloc_internal(size, 1);
+        cls->ext = (old_class_ext *)calloc(size, 1);
         cls->ext->size = size;
     }
 }
@@ -155,11 +155,11 @@ static old_method_list *fixupSelectorsInMethodList(Class cls, old_method_list *m
     if ( mlist->obsolete == fixed_up_method_list ) {
         // method list OK
     } else {
-        BOOL isBundle = (cls->info & CLS_FROM_BUNDLE) ? YES : NO;
+        bool isBundle = cls->info & CLS_FROM_BUNDLE;
         if (!isBundle) {
             old_mlist = mlist;
             size = sizeof(old_method_list) - sizeof(old_method) + old_mlist->method_count * sizeof(old_method);
-            mlist = (old_method_list *)_malloc_internal(size);
+            mlist = (old_method_list *)malloc(size);
             memmove(mlist, old_mlist, size);
         } else {
             // Mach-O bundles are fixed up in place. 
@@ -197,11 +197,10 @@ static old_method_list *fixupSelectorsInMethodList(Class cls, old_method_list *m
 *
 * void *iterator = nil;
 * old_method_list *mlist;
-* mutex_lock(&methodListLock);
+* mutex_locker_t lock(methodListLock);
 * while ((mlist = nextMethodList(cls, &iterator))) {
 *     // do something with mlist
 * }
-* mutex_unlock(&methodListLock);
 **********************************************************************/
 static old_method_list *nextMethodList(Class cls,
                                                void **it)
@@ -387,7 +386,7 @@ IMP lookUpImpOrForward(Class cls, SEL sel, id inst,
     Method meth;
     bool triedResolver = NO;
 
-    mutex_assert_unlocked(&methodListLock);
+    methodListLock.assertUnlocked();
 
     // Optimistic cache lookup
     if (cache) {
@@ -413,7 +412,7 @@ IMP lookUpImpOrForward(Class cls, SEL sel, id inst,
     // be added but ignored indefinitely because the cache was re-filled 
     // with the old value after the cache flush on behalf of the category.
  retry:
-    mutex_lock(&methodListLock);
+    methodListLock.lock();
 
     // Ignore GC selectors
     if (ignoreSelector(sel)) {
@@ -468,7 +467,7 @@ IMP lookUpImpOrForward(Class cls, SEL sel, id inst,
     // No implementation found. Try method resolver once.
 
     if (resolver  &&  !triedResolver) {
-        mutex_unlock(&methodListLock);
+        methodListLock.unlock();
         _class_resolveMethod(cls, sel, inst);
         triedResolver = YES;
         goto retry;
@@ -481,7 +480,7 @@ IMP lookUpImpOrForward(Class cls, SEL sel, id inst,
     methodPC = _objc_msgForward_impcache;
 
  done:
-    mutex_unlock(&methodListLock);
+    methodListLock.unlock();
 
     // paranoia: look for ignored selectors with non-ignored implementations
     assert(!(ignoreSelector(sel)  &&  methodPC != (IMP)&_objc_ignored_method));
@@ -603,7 +602,7 @@ nextPropertyList(Class cls, uintptr_t *indexp)
 {
     old_property_list *result = nil;
 
-    mutex_assert_locked(&classLock);
+    classLock.assertLocked();
     if (! ((cls->info & CLS_EXT)  &&  cls->ext)) {
         // No class ext
         result = nil;
@@ -676,7 +675,7 @@ void class_setIvarLayout(Class cls, const uint8_t *layout)
     } 
 
     // fixme leak
-    cls->ivar_layout = _ustrdup_internal(layout);
+    cls->ivar_layout = ustrdupMaybeNil(layout);
 }
 
 // SPI:  Instance-specific object layout.
@@ -715,14 +714,12 @@ void class_setWeakIvarLayout(Class cls, const uint8_t *layout)
 {
     if (!cls) return;
 
-    mutex_lock(&classLock);
+    mutex_locker_t lock(classLock);
 
     allocateExt(cls);
     
     // fixme leak
-    cls->ext->weak_ivar_layout = _ustrdup_internal(layout);
-
-    mutex_unlock(&classLock);
+    cls->ext->weak_ivar_layout = ustrdupMaybeNil(layout);
 }
 
 
@@ -760,16 +757,22 @@ const char *class_getName(Class cls)
 * Return the ordinary class for this class or metaclass. 
 * Used by +initialize. 
 **********************************************************************/
-Class _class_getNonMetaClass(Class cls, id obj __unused)
+Class _class_getNonMetaClass(Class cls, id obj)
 {
     // fixme ick
     if (cls->isMetaClass()) {
-        if (strncmp(cls->name, "_%", 2) == 0) {
+        if (cls->info & CLS_CONSTRUCTING) {
+            // Class is under construction and isn't in the class_hash, 
+            // so objc_getClass doesn't work.
+            cls = obj;  // fixme this may be nil in some paths
+        }
+        else if (strncmp(cls->name, "_%", 2) == 0) {
             // Posee's meta's name is smashed and isn't in the class_hash, 
             // so objc_getClass doesn't work.
             const char *baseName = strchr(cls->name, '%'); // get posee's real name
             cls = objc_getClass(baseName);
-        } else {
+        }
+        else {
             cls = objc_getClass(cls->name);
         }
         assert(cls);
@@ -831,14 +834,10 @@ IMP _category_getLoadMethod(Category cat)
 **********************************************************************/
 OBJC_EXPORT struct objc_method_list *class_nextMethodList(Class cls, void **it)
 {
-    old_method_list *result;
-
     OBJC_WARN_DEPRECATED;
 
-    mutex_lock(&methodListLock);
-    result = nextMethodList(cls, it);
-    mutex_unlock(&methodListLock);
-    return (struct objc_method_list *)result;
+    mutex_locker_t lock(methodListLock);
+    return (struct objc_method_list *) nextMethodList(cls, it);
 }
 
 
@@ -852,9 +851,10 @@ OBJC_EXPORT void class_addMethods(Class cls, struct objc_method_list *meths)
     OBJC_WARN_DEPRECATED;
 
     // Add the methods.
-    mutex_lock(&methodListLock);
-    _objc_insertMethods(cls, (old_method_list *)meths, nil);
-    mutex_unlock(&methodListLock);
+    {
+        mutex_locker_t lock(methodListLock);
+        _objc_insertMethods(cls, (old_method_list *)meths, nil);
+    }
 
     // Must flush when dynamically adding methods.  No need to flush
     // all the class method caches.  If cls is a meta class, though,
@@ -871,9 +871,10 @@ OBJC_EXPORT void class_removeMethods(Class cls, struct objc_method_list *meths)
     OBJC_WARN_DEPRECATED;
 
     // Remove the methods
-    mutex_lock(&methodListLock);
-    _objc_removeMethods(cls, (old_method_list *)meths);
-    mutex_unlock(&methodListLock);
+    {
+        mutex_locker_t lock(methodListLock);
+        _objc_removeMethods(cls, (old_method_list *)meths);
+    }
 
     // Must flush when dynamically removing methods.  No need to flush
     // all the class method caches.  If cls is a meta class, though,
@@ -896,29 +897,19 @@ IMP lookupNamedMethodInMethodList(old_method_list *mlist, const char *meth_name)
 
 static Method _class_getMethod(Class cls, SEL sel)
 {
-    Method result;
-    
-    mutex_lock(&methodListLock);
-    result = (Method)_getMethod(cls, sel);
-    mutex_unlock(&methodListLock);
-
-    return result;
+    mutex_locker_t lock(methodListLock);
+    return (Method)_getMethod(cls, sel);
 }
 
 static Method _class_getMethodNoSuper(Class cls, SEL sel)
 {
-    Method result;
-
-    mutex_lock(&methodListLock);
-    result = (Method)_findMethodInClass(cls, sel);
-    mutex_unlock(&methodListLock);
-
-    return result;
+    mutex_locker_t lock(methodListLock);
+    return (Method)_findMethodInClass(cls, sel);
 }
 
 static Method _class_getMethodNoSuper_nolock(Class cls, SEL sel)
 {
-    mutex_assert_locked(&methodListLock);
+    methodListLock.assertLocked();
     return (Method)_findMethodInClass(cls, sel);
 }
 
@@ -991,23 +982,21 @@ static NXMapTable *	posed_class_hash = nil;
 extern "C" 
 Class _objc_getOrigClass(const char *name)
 {
-    Class ret;
-
     // Look for class among the posers
-    ret = Nil;
-    mutex_lock(&classLock);
-    if (posed_class_hash)
-        ret = (Class) NXMapGet (posed_class_hash, name);
-    mutex_unlock(&classLock);
-    if (ret)
-        return ret;
+    {
+        mutex_locker_t lock(classLock);
+        if (posed_class_hash) {
+            Class cls = (Class) NXMapGet (posed_class_hash, name);
+            if (cls) return cls;
+        }
+    }
 
     // Not a poser.  Do a normal lookup.
-    ret = objc_getClass (name);
-    if (!ret)
-        _objc_inform ("class `%s' not linked into application", name);
+    Class cls = objc_getClass (name);
+    if (cls) return cls;
 
-    return ret;
+    _objc_inform ("class `%s' not linked into application", name);
+    return nil;
 }
 
 Class objc_getOrigClass(const char *name)
@@ -1024,21 +1013,17 @@ Class objc_getOrigClass(const char *name)
 **********************************************************************/
 static void	_objc_addOrigClass	   (Class origClass)
 {
-    mutex_lock(&classLock);
+    mutex_locker_t lock(classLock);
 
     // Create the poser's hash table on first use
     if (!posed_class_hash)
     {
-        posed_class_hash = NXCreateMapTableFromZone (NXStrValueMapPrototype,
-                                                     8,
-                                                     _objc_internal_zone ());
+        posed_class_hash = NXCreateMapTable(NXStrValueMapPrototype, 8);
     }
 
     // Add the named class iff it is not already there (or collides?)
     if (NXMapGet (posed_class_hash, origClass->name) == 0)
         NXMapInsert (posed_class_hash, origClass->name, origClass);
-
-    mutex_unlock(&classLock);
 }
 
 
@@ -1053,7 +1038,7 @@ static void	_objc_addOrigClass	   (Class origClass)
 void change_class_references(Class imposter, 
                              Class original, 
                              Class copy, 
-                             BOOL changeSuperRefs)
+                             bool changeSuperRefs)
 {
     header_info *hInfo;
     Class clsObject;
@@ -1132,7 +1117,7 @@ Class class_poseAs(Class imposter, Class original)
     // Build a string to use to replace the name of the original class.
 #if TARGET_OS_WIN32
 #   define imposterNamePrefix "_%"
-    imposterNamePtr = _malloc_internal(strlen(original->name) + strlen(imposterNamePrefix) + 1);
+    imposterNamePtr = malloc(strlen(original->name) + strlen(imposterNamePrefix) + 1);
     strcpy(imposterNamePtr, imposterNamePrefix);
     strcat(imposterNamePtr, original->name);
 #   undef imposterNamePrefix
@@ -1155,10 +1140,10 @@ Class class_poseAs(Class imposter, Class original)
     // its normal life in addition to changing the behavior of
     // the original.  As a hack we don't bother to copy the metaclass.
     // For some reason we modify the original rather than the copy.
-    copy = (Class)_malloc_internal(sizeof(objc_class));
+    copy = (Class)malloc(sizeof(objc_class));
     memmove(copy, imposter, sizeof(objc_class));
 
-    mutex_lock(&classLock);
+    mutex_locker_t lock(classLock);
 
     // Remove both the imposter and the original class.
     NXHashRemove (class_hash, imposter);
@@ -1191,8 +1176,6 @@ Class class_poseAs(Class imposter, Class original)
     NXHashInsert (class_hash, imposter);
     NXHashInsert (class_hash, original);
 
-    mutex_unlock(&classLock);
-
     return imposter;
 }
 
@@ -1213,8 +1196,8 @@ static void flush_caches(Class target, bool flush_meta)
     unsigned int subclassCount;
 #endif
 
-    mutex_lock(&classLock);
-    mutex_lock(&cacheUpdateLock);
+    mutex_locker_t lock(classLock);
+    mutex_locker_t lock2(cacheUpdateLock);
 
     // Leaf classes are fastest because there are no subclass caches to flush.
     // fixme instrument
@@ -1223,8 +1206,6 @@ static void flush_caches(Class target, bool flush_meta)
         
         if (target->ISA()  &&  (target->ISA()->info & CLS_LEAF)) {
             _cache_flush (target->ISA());
-            mutex_unlock(&cacheUpdateLock);
-            mutex_unlock(&classLock);
             return;  // done
         } else {
             // Reset target and handle it by one of the methods below.
@@ -1363,9 +1344,6 @@ static void flush_caches(Class target, bool flush_meta)
     if (collectALot) {
         _cache_collect(true);
     }
-
-    mutex_unlock(&cacheUpdateLock);
-    mutex_unlock(&classLock);
 }
 
 
@@ -1387,8 +1365,8 @@ void flush_marked_caches(void)
     Class supercls;
     NXHashState state;
 
-    mutex_lock(&classLock);
-    mutex_lock(&cacheUpdateLock);
+    mutex_locker_t lock(classLock);
+    mutex_locker_t lock2(cacheUpdateLock);
 
     state = NXInitHashState(class_hash);
     while (NXNextHashState(class_hash, &state, (void**)&cls)) {
@@ -1416,9 +1394,6 @@ void flush_marked_caches(void)
             cls->ISA()->clearInfo(CLS_FLUSH_CACHE);
         }
     }
-
-    mutex_unlock(&cacheUpdateLock);
-    mutex_unlock(&classLock);
 }
 
 
@@ -1455,10 +1430,10 @@ static IMP _class_getLoadMethod_nocheck(Class cls)
 }
 
 
-BOOL _class_hasLoadMethod(Class cls)
+bool _class_hasLoadMethod(Class cls)
 {
     if (cls->ISA()->info & CLS_HAS_LOAD_METHOD) return YES;
-    return (_class_getLoadMethod_nocheck(cls) ? YES : NO);
+    return _class_getLoadMethod_nocheck(cls);
 }
 
 
@@ -1536,7 +1511,7 @@ unsigned int method_getArgumentInfo(Method m, int arg,
 }
 
 
-static spinlock_t impLock = SPINLOCK_INITIALIZER;
+static spinlock_t impLock;
 
 IMP method_setImplementation(Method m_gen, IMP imp)
 {
@@ -1550,10 +1525,10 @@ IMP method_setImplementation(Method m_gen, IMP imp)
         return m->method_imp;
     }
 
-    spinlock_lock(&impLock);
+    impLock.lock();
     old = m->method_imp;
     m->method_imp = imp;
-    spinlock_unlock(&impLock);
+    impLock.unlock();
     return old;
 }
 
@@ -1572,11 +1547,11 @@ void method_exchangeImplementations(Method m1_gen, Method m2_gen)
         return;
     }
 
-    spinlock_lock(&impLock);
+    impLock.lock();
     m1_imp = m1->method_imp;
     m1->method_imp = m2->method_imp;
     m2->method_imp = m1_imp;
-    spinlock_unlock(&impLock);
+    impLock.unlock();
 }
 
 
@@ -1605,22 +1580,16 @@ objc_property_attribute_t *property_copyAttributeList(objc_property_t prop,
         return nil;
     }
 
-    objc_property_attribute_t *result;
-    mutex_lock(&classLock);
-    result = copyPropertyAttributeList(oldproperty(prop)->attributes,outCount);
-    mutex_unlock(&classLock);
-    return result;
+    mutex_locker_t lock(classLock);
+    return copyPropertyAttributeList(oldproperty(prop)->attributes,outCount);
 }
 
 char * property_copyAttributeValue(objc_property_t prop, const char *name)
 {
     if (!prop  ||  !name  ||  *name == '\0') return nil;
     
-    char *result;
-    mutex_lock(&classLock);
-    result = copyPropertyAttributeValue(oldproperty(prop)->attributes, name);
-    mutex_unlock(&classLock);
-    return result;    
+    mutex_locker_t lock(classLock);
+    return copyPropertyAttributeValue(oldproperty(prop)->attributes, name);
 }
 
 
@@ -1628,14 +1597,14 @@ char * property_copyAttributeValue(objc_property_t prop, const char *name)
 * class_addMethod
 **********************************************************************/
 static IMP _class_addMethod(Class cls, SEL name, IMP imp, 
-                            const char *types, BOOL replace)
+                            const char *types, bool replace)
 {
     old_method *m;
     IMP result = nil;
 
     if (!types) types = "";
 
-    mutex_lock(&methodListLock);
+    mutex_locker_t lock(methodListLock);
 
     if ((m = _findMethodInClass(cls, name))) {
         // already exists
@@ -1647,11 +1616,11 @@ static IMP _class_addMethod(Class cls, SEL name, IMP imp,
     } else {
         // fixme could be faster
         old_method_list *mlist = 
-            (old_method_list *)_calloc_internal(sizeof(old_method_list), 1);
+            (old_method_list *)calloc(sizeof(old_method_list), 1);
         mlist->obsolete = fixed_up_method_list;
         mlist->method_count = 1;
         mlist->method_list[0].method_name = name;
-        mlist->method_list[0].method_types = _strdup_internal(types);
+        mlist->method_list[0].method_types = strdup(types);
         if (!ignoreSelector(name)) {
             mlist->method_list[0].method_imp = imp;
         } else {
@@ -1668,8 +1637,6 @@ static IMP _class_addMethod(Class cls, SEL name, IMP imp,
         result = nil;
     }
 
-    mutex_unlock(&methodListLock);
-
     return result;
 }
 
@@ -1683,7 +1650,7 @@ BOOL class_addMethod(Class cls, SEL name, IMP imp, const char *types)
     if (!cls) return NO;
 
     old = _class_addMethod(cls, name, imp, types, NO);
-    return old ? NO : YES;
+    return !old;
 }
 
 
@@ -1704,7 +1671,7 @@ IMP class_replaceMethod(Class cls, SEL name, IMP imp, const char *types)
 BOOL class_addIvar(Class cls, const char *name, size_t size, 
                    uint8_t alignment, const char *type)
 {
-    BOOL result = YES;
+    bool result = YES;
 
     if (!cls) return NO;
     if (ISMETA(cls)) return NO;
@@ -1713,7 +1680,7 @@ BOOL class_addIvar(Class cls, const char *name, size_t size,
     if (!type) type = "";
     if (name  &&  0 == strcmp(name, "")) name = nil;
     
-    mutex_lock(&classLock);
+    mutex_locker_t lock(classLock);
 
     // Check for existing ivar with this name
     // fixme check superclasses?
@@ -1746,15 +1713,15 @@ BOOL class_addIvar(Class cls, const char *name, size_t size,
 
         // allocate new ivar list
         cls->ivars = (old_ivar_list *)
-            _calloc_internal(oldSize+sizeof(old_ivar), 1);
+            calloc(oldSize+sizeof(old_ivar), 1);
         if (old) memcpy(cls->ivars, old, oldSize);
         if (old  &&  malloc_size(old)) free(old);
         cls->ivars->ivar_count = newCount;
         ivar = &cls->ivars->ivar_list[newCount-1];
 
         // set ivar name and type
-        ivar->ivar_name = _strdup_internal(name);
-        ivar->ivar_type = _strdup_internal(type);
+        ivar->ivar_name = strdup(name);
+        ivar->ivar_type = strdup(type);
 
         // align if necessary
         alignBytes = 1 << alignment;
@@ -1765,8 +1732,6 @@ BOOL class_addIvar(Class cls, const char *name, size_t size,
         ivar->ivar_offset = (int)cls->instance_size;
         cls->instance_size += (long)size;
     }
-
-    mutex_unlock(&classLock);
 
     return result;
 }
@@ -1783,18 +1748,16 @@ BOOL class_addProtocol(Class cls, Protocol *protocol_gen)
     if (!cls) return NO;
     if (class_conformsToProtocol(cls, protocol_gen)) return NO;
 
-    mutex_lock(&classLock);
+    mutex_locker_t lock(classLock);
 
     // fixme optimize - protocol list doesn't escape?
-    plist = (old_protocol_list*)_calloc_internal(sizeof(old_protocol_list), 1);
+    plist = (old_protocol_list*)calloc(sizeof(old_protocol_list), 1);
     plist->count = 1;
     plist->list[0] = protocol;
     plist->next = cls->protocols;
     cls->protocols = plist;
 
     // fixme metaclass?
-
-    mutex_unlock(&classLock);
 
     return YES;
 }
@@ -1806,7 +1769,7 @@ BOOL class_addProtocol(Class cls, Protocol *protocol_gen)
 * Used by category attachment and  class_addProperty() 
 * Locking: acquires classLock
 **********************************************************************/
-BOOL 
+bool 
 _class_addProperties(Class cls,
                      old_property_list *additions)
 {
@@ -1815,10 +1778,10 @@ _class_addProperties(Class cls,
     if (!(cls->info & CLS_EXT)) return NO;
 
     newlist = (old_property_list *)
-        _memdup_internal(additions, sizeof(*newlist) - sizeof(newlist->first) 
+        memdup(additions, sizeof(*newlist) - sizeof(newlist->first) 
                          + (additions->entsize * additions->count));
 
-    mutex_lock(&classLock);
+    mutex_locker_t lock(classLock);
 
     allocateExt(cls);
     if (!cls->ext->propertyLists) {
@@ -1829,7 +1792,7 @@ _class_addProperties(Class cls,
     else if (cls->info & CLS_NO_PROPERTY_ARRAY) {
         // cls has one property list - make a new array
         old_property_list **newarray = (old_property_list **)
-            _malloc_internal(3 * sizeof(*newarray));
+            malloc(3 * sizeof(*newarray));
         newarray[0] = newlist;
         newarray[1] = (old_property_list *)cls->ext->propertyLists;
         newarray[2] = nil;
@@ -1842,7 +1805,7 @@ _class_addProperties(Class cls,
         int count = 0;
         while (cls->ext->propertyLists[count]) count++;
         newarray = (old_property_list **)
-            _malloc_internal((count+2) * sizeof(*newarray));
+            malloc((count+2) * sizeof(*newarray));
         newarray[0] = newlist;
         memcpy(&newarray[1], &cls->ext->propertyLists[0], 
                count * sizeof(*newarray));
@@ -1850,8 +1813,6 @@ _class_addProperties(Class cls,
         free(cls->ext->propertyLists);
         cls->ext->propertyLists = newarray;
     }
-
-    mutex_unlock(&classLock);
 
     return YES;
 }
@@ -1862,10 +1823,10 @@ _class_addProperties(Class cls,
 * Adds a property to a class. Returns NO if the proeprty already exists.
 * Locking: acquires classLock
 **********************************************************************/
-static BOOL 
+static bool 
 _class_addProperty(Class cls, const char *name, 
                    const objc_property_attribute_t *attrs, unsigned int count, 
-                   BOOL replace)
+                   bool replace)
 {
     if (!cls) return NO;
     if (!name) return NO;
@@ -1877,10 +1838,9 @@ _class_addProperty(Class cls, const char *name,
     } 
     else if (prop) {
         // replace existing
-        mutex_lock(&classLock);
+        mutex_locker_t lock(classLock);
         try_free(prop->attributes);
         prop->attributes = copyPropertyAttributeString(attrs, count);
-        mutex_unlock(&classLock);
         return YES;
     } 
     else {
@@ -1888,7 +1848,7 @@ _class_addProperty(Class cls, const char *name,
         old_property_list proplist;
         proplist.entsize = sizeof(old_property);
         proplist.count = 1;
-        proplist.first.name = _strdup_internal(name);
+        proplist.first.name = strdup(name);
         proplist.first.attributes = copyPropertyAttributeString(attrs, count);
         
         return _class_addProperties(cls, &proplist);
@@ -1929,7 +1889,7 @@ class_copyProtocolList(Class cls, unsigned int *outCount)
         return nil;
     }
 
-    mutex_lock(&classLock);
+    mutex_locker_t lock(classLock);
 
     for (plist = cls->protocols; plist != nil; plist = plist->next) {
         count += (int)plist->count;
@@ -1950,8 +1910,6 @@ class_copyProtocolList(Class cls, unsigned int *outCount)
         result[p] = nil;
     }
 
-    mutex_unlock(&classLock);
-
     if (outCount) *outCount = count;
     return result;
 }
@@ -1962,12 +1920,11 @@ class_copyProtocolList(Class cls, unsigned int *outCount)
 **********************************************************************/
 objc_property_t class_getProperty(Class cls, const char *name)
 {
-    old_property *result;
     if (!cls  ||  !name) return nil;
 
-    mutex_lock(&classLock);
+    mutex_locker_t lock(classLock);
 
-    for (result = nil; cls && !result; cls = cls->superclass) {
+    for (; cls; cls = cls->superclass) {
         uintptr_t iterator = 0;
         old_property_list *plist;
         while ((plist = nextPropertyList(cls, &iterator))) {
@@ -1975,17 +1932,13 @@ objc_property_t class_getProperty(Class cls, const char *name)
             for (i = 0; i < plist->count; i++) {
                 old_property *p = property_list_nth(plist, i);
                 if (0 == strcmp(name, p->name)) {
-                    result = p;
-                    goto done;
+                    return (objc_property_t)p;
                 }
             }
         }
     }
 
- done:
-    mutex_unlock(&classLock);
-
-    return (objc_property_t)result;
+    return nil;
 }
 
 
@@ -2008,7 +1961,7 @@ objc_property_t *class_copyPropertyList(Class cls, unsigned int *outCount)
         return nil;
     }
 
-    mutex_lock(&classLock);
+    mutex_locker_t lock(classLock);
 
     iterator = 0;
     while ((plist = nextPropertyList(cls, &iterator))) {
@@ -2027,8 +1980,6 @@ objc_property_t *class_copyPropertyList(Class cls, unsigned int *outCount)
         }
         result[p] = nil;
     }
-
-    mutex_unlock(&classLock);
 
     if (outCount) *outCount = count;
     return (objc_property_t *)result;
@@ -2054,7 +2005,7 @@ Method *class_copyMethodList(Class cls, unsigned int *outCount)
         return nil;
     }
 
-    mutex_lock(&methodListLock);
+    mutex_locker_t lock(methodListLock);
 
     iterator = nil;
     while ((mlist = nextMethodList(cls, &iterator))) {
@@ -2079,8 +2030,6 @@ Method *class_copyMethodList(Class cls, unsigned int *outCount)
         }
         result[m] = nil;
     }
-
-    mutex_unlock(&methodListLock);
 
     if (outCount) *outCount = count;
     return result;
@@ -2126,7 +2075,7 @@ Ivar *class_copyIvarList(Class cls, unsigned int *outCount)
 * objc_allocateClass.
 **********************************************************************/
 
-void set_superclass(Class cls, Class supercls, BOOL cls_is_new)
+void set_superclass(Class cls, Class supercls, bool cls_is_new)
 {
     Class meta = cls->ISA();
 
@@ -2169,8 +2118,8 @@ Class objc_initializeClassPair(Class supercls, const char *name, Class cls, Clas
     set_superclass(cls, supercls, YES);
 
     // Set basic info
-    cls->name = _strdup_internal(name);
-    meta->name = _strdup_internal(name);
+    cls->name = strdup(name);
+    meta->name = strdup(name);
     cls->version = 0;
     meta->version = 7;
     cls->info = CLS_CLASS | CLS_CONSTRUCTING | CLS_EXT | CLS_LEAF;
@@ -2257,7 +2206,7 @@ void objc_registerClassPair(Class cls)
         return;
     }
 
-    mutex_lock(&classLock);
+    mutex_locker_t lock(classLock);
 
     // Build ivar layouts
     if (UseGC) {
@@ -2271,7 +2220,7 @@ void objc_registerClassPair(Class cls)
         else if (cls->ivars == nil) {
             // No local ivars. Use superclass's layout.
             cls->ivar_layout = 
-                _ustrdup_internal(cls->superclass->ivar_layout);
+                ustrdupMaybeNil(cls->superclass->ivar_layout);
         }
         else {
             // Has local ivars. Build layout based on superclass.
@@ -2301,22 +2250,14 @@ void objc_registerClassPair(Class cls)
             // No local ivars. Use superclass's layout.
             const uint8_t *weak = 
                 class_getWeakIvarLayout(cls->superclass);
-            if (weak) {
-                cls->ext->weak_ivar_layout = _ustrdup_internal(weak);
-            } else {
-                cls->ext->weak_ivar_layout = nil;
-            }
+            cls->ext->weak_ivar_layout = ustrdupMaybeNil(weak);
         }
         else {
             // Has local ivars. Build layout based on superclass.
             // No way to add weak ivars yet.
             const uint8_t *weak = 
                 class_getWeakIvarLayout(cls->superclass);
-            if (weak) {
-                cls->ext->weak_ivar_layout = _ustrdup_internal(weak);
-            } else {
-                cls->ext->weak_ivar_layout = nil;
-            }
+            cls->ext->weak_ivar_layout = ustrdupMaybeNil(weak);
         }
     }
 
@@ -2329,8 +2270,6 @@ void objc_registerClassPair(Class cls)
     NXHashInsertIfAbsent(class_hash, cls);
     objc_addRegisteredClass(cls);
     //objc_addRegisteredClass(cls->ISA());  if we ever allocate classes from GC
-
-    mutex_unlock(&classLock);
 }
 
 
@@ -2359,7 +2298,7 @@ Class objc_duplicateClass(Class original, const char *name, size_t extraBytes)
         duplicate->info |= original->info & (CLS_EXT|CLS_NO_PROPERTY_ARRAY);
         duplicate->ivar_layout = original->ivar_layout;
         if (original->ext) {
-            duplicate->ext = (old_class_ext *)_malloc_internal(original->ext->size);
+            duplicate->ext = (old_class_ext *)malloc(original->ext->size);
             memcpy(duplicate->ext, original->ext, original->ext->size);
         } else {
             duplicate->ext = nil;
@@ -2382,10 +2321,9 @@ Class objc_duplicateClass(Class original, const char *name, size_t extraBytes)
         free(originalMethods);
     }
 
-    mutex_lock(&classLock);
+    mutex_locker_t lock(classLock);
     NXHashInsert(class_hash, duplicate);
     objc_addRegisteredClass(duplicate);
-    mutex_unlock(&classLock);
 
     return duplicate;
 }
@@ -2409,12 +2347,11 @@ void objc_disposeClassPair(Class cls)
         return;
     }
 
-    mutex_lock(&classLock);
+    mutex_locker_t lock(classLock);
     NXHashRemove(class_hash, cls);
     objc_removeRegisteredClass(cls);
     unload_class(cls->ISA());
     unload_class(cls);
-    mutex_unlock(&classLock);
 }
 
 

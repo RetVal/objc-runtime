@@ -28,7 +28,7 @@ int main()
     for (i = 0; i < count; i++) {
         const char *name = malloc_get_zone_name((malloc_zone_t *)zones[i]);
         if (name) {
-            BOOL is_objc = (0 == strcmp(name, "ObjC")) ? YES : NO;
+            BOOL is_objc = (0 == strcmp(name, "ObjC_Internal")) ? YES : NO;
             if (is_objc) has_objc = YES;
             testprintf("zone %s\n", name);
         }

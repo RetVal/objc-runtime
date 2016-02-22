@@ -9,7 +9,7 @@ IMP i;
 id o = nil;
 BOOL b = YES;
 BOOL b2 = NO;
-#if !__has_feature(objc_arr)
+#if !__has_feature(objc_arc)
 __strong void *p;
 #endif
 id __unsafe_unretained u;
@@ -34,8 +34,14 @@ int main()
 {
     testassert(YES);
     testassert(!NO);
+#if __cplusplus
+    testwarn("rdar://12371870 -Wnull-conversion");
+    testassert(!(bool)nil);
+    testassert(!(bool)Nil);
+#else
     testassert(!nil);
     testassert(!Nil);
+#endif
 
 #if __has_feature(objc_bool)
     // YES[array] is disallowed for objc just as true[array] is for C++

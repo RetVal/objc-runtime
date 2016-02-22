@@ -1,7 +1,7 @@
 /*
 rdar://8553305
 
-TEST_CONFIG SDK=iphoneos
+TEST_CONFIG OS=iphoneos
 TEST_CRASHES
 
 TEST_BUILD

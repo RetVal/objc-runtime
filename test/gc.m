@@ -1,3 +1,6 @@
+#import <objc/objc-api.h>
+
+OBJC_ROOT_CLASS
 @interface GC @end
 @implementation GC @end
 

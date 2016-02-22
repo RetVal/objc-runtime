@@ -59,9 +59,11 @@ typedef id (*IMP)(id, SEL, ...);
 #define OBJC_BOOL_DEFINED
 
 /// Type to represent a boolean value.
-#if !defined(OBJC_HIDE_64) && TARGET_OS_IPHONE && __LP64__
+#if (TARGET_OS_IPHONE && __LP64__)  ||  TARGET_OS_WATCH
+#define OBJC_BOOL_IS_BOOL 1
 typedef bool BOOL;
 #else
+#define OBJC_BOOL_IS_CHAR 1
 typedef signed char BOOL; 
 // BOOL is explicitly signed so @encode(BOOL) == "c" rather than "C" 
 // even if -funsigned-char is used.

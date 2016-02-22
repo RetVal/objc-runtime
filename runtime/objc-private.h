@@ -52,7 +52,7 @@ typedef struct objc_class *Class;
 typedef struct objc_object *id;
 
 namespace {
-    class SideTable;
+    struct SideTable;
 };
 
 
@@ -78,15 +78,15 @@ union isa_t
     // uintptr_t extraBytes : 1;  // allocated with extra bytes
 
 # if __arm64__
-#   define ISA_MASK        0x00000001fffffff8ULL
-#   define ISA_MAGIC_MASK  0x000003fe00000001ULL
-#   define ISA_MAGIC_VALUE 0x000001a400000001ULL
+#   define ISA_MASK        0x0000000ffffffff8ULL
+#   define ISA_MAGIC_MASK  0x000003f000000001ULL
+#   define ISA_MAGIC_VALUE 0x000001a000000001ULL
     struct {
         uintptr_t indexed           : 1;
         uintptr_t has_assoc         : 1;
         uintptr_t has_cxx_dtor      : 1;
-        uintptr_t shiftcls          : 30; // MACH_VM_MAX_ADDRESS 0x1a0000000
-        uintptr_t magic             : 9;
+        uintptr_t shiftcls          : 33; // MACH_VM_MAX_ADDRESS 0x1000000000
+        uintptr_t magic             : 6;
         uintptr_t weakly_referenced : 1;
         uintptr_t deallocating      : 1;
         uintptr_t has_sidetable_rc  : 1;
@@ -97,19 +97,20 @@ union isa_t
 
 # elif __x86_64__
 #   define ISA_MASK        0x00007ffffffffff8ULL
-#   define ISA_MAGIC_MASK  0x0000000000000001ULL
-#   define ISA_MAGIC_VALUE 0x0000000000000001ULL
+#   define ISA_MAGIC_MASK  0x001f800000000001ULL
+#   define ISA_MAGIC_VALUE 0x001d800000000001ULL
     struct {
         uintptr_t indexed           : 1;
         uintptr_t has_assoc         : 1;
         uintptr_t has_cxx_dtor      : 1;
         uintptr_t shiftcls          : 44; // MACH_VM_MAX_ADDRESS 0x7fffffe00000
+        uintptr_t magic             : 6;
         uintptr_t weakly_referenced : 1;
         uintptr_t deallocating      : 1;
         uintptr_t has_sidetable_rc  : 1;
-        uintptr_t extra_rc          : 14;
-#       define RC_ONE   (1ULL<<50)
-#       define RC_HALF  (1ULL<<13)
+        uintptr_t extra_rc          : 8;
+#       define RC_ONE   (1ULL<<56)
+#       define RC_HALF  (1ULL<<7)
     };
 
 # else
@@ -197,7 +198,7 @@ private:
     id rootRetain_overflow(bool tryRetain);
     bool rootRelease_underflow(bool performDealloc);
 
-    void clearDeallocating_weak();
+    void clearDeallocating_slow();
 
     // Side table retain count overflow for nonpointer isa
     void sidetable_lock();
@@ -205,7 +206,7 @@ private:
 
     void sidetable_moveExtraRC_nolock(size_t extra_rc, bool isDeallocating, bool weaklyReferenced);
     bool sidetable_addExtraRC_nolock(size_t delta_rc);
-    bool sidetable_subExtraRC_nolock(size_t delta_rc);
+    size_t sidetable_subExtraRC_nolock(size_t delta_rc);
     size_t sidetable_getExtraRC_nolock();
 #endif
 
@@ -217,15 +218,15 @@ private:
     void sidetable_setWeaklyReferenced_nolock();
 
     id sidetable_retain();
-    id sidetable_retain_slow(SideTable *table);
+    id sidetable_retain_slow(SideTable& table);
 
-    bool sidetable_release(bool performDealloc = true);
-    bool sidetable_release_slow(SideTable *table, bool performDealloc = true);
+    uintptr_t sidetable_release(bool performDealloc = true);
+    uintptr_t sidetable_release_slow(SideTable& table, bool performDealloc = true);
 
     bool sidetable_tryRetain();
 
     uintptr_t sidetable_retainCount();
-#if !NDEBUG
+#if DEBUG
     bool sidetable_present();
 #endif
 };
@@ -250,11 +251,14 @@ typedef struct old_property *objc_property_t;
 #include "objc-os.h"
 #include "objc-abi.h"
 #include "objc-api.h"
-#include "objc-auto.h"
 #include "objc-config.h"
 #include "objc-internal.h"
 #include "maptable.h"
 #include "hashtable2.h"
+
+#if SUPPORT_GC
+#include "objc-auto.h"
+#endif
 
 /* Do not include message.h here. */
 /* #include "message.h" */
@@ -275,6 +279,14 @@ typedef struct old_property *objc_property_t;
 #include "objc-references.h"
 #include "objc-initialize.h"
 #include "objc-loadmethod.h"
+
+
+#if SUPPORT_PREOPT  &&  __cplusplus
+#include <objc-shared-cache.h>
+using objc_selopt_t = const objc_opt::objc_selopt_t;
+#else
+struct objc_selopt_t;
+#endif
 
 
 __BEGIN_DECLS
@@ -341,8 +353,8 @@ __BEGIN_DECLS
 */
    
 
-typedef struct _header_info {
-    struct _header_info *next;
+typedef struct header_info {
+    struct header_info *next;
     const headerType *mhdr;
     const objc_image_info *info;
     const char *fname;  // same as Dl_info.dli_fname
@@ -351,6 +363,16 @@ typedef struct _header_info {
     bool allClassesRealized;
 
     // Do not add fields without editing ObjCModernAbstraction.hpp
+
+    bool isLoaded() {
+        return loaded;
+    }
+
+    bool isBundle() {
+        return mhdr->filetype == MH_BUNDLE;
+    }
+
+    bool isPreoptimized() const;
 
 #if !__OBJC2__
     struct old_protocol **proto_refs;
@@ -376,21 +398,18 @@ extern header_info *FirstHeader;
 extern header_info *LastHeader;
 extern int HeaderCount;
 
-extern uint32_t AppSDKVersion;  // X.Y.Z is 0xXXXXYYZZ
-
 extern void appendHeader(header_info *hi);
 extern void removeHeader(header_info *hi);
 
 extern objc_image_info *_getObjcImageInfo(const headerType *head, size_t *size);
-extern BOOL _hasObjcContents(const header_info *hi);
+extern bool _hasObjcContents(const header_info *hi);
 
 
 /* selectors */
-extern void sel_init(BOOL gc, size_t selrefCount);
-extern SEL sel_registerNameNoLock(const char *str, BOOL copy);
+extern void sel_init(bool gc, size_t selrefCount);
+extern SEL sel_registerNameNoLock(const char *str, bool copy);
 extern void sel_lock(void);
 extern void sel_unlock(void);
-extern BOOL sel_preoptimizationValid(const header_info *hi);
 
 extern SEL SEL_load;
 extern SEL SEL_initialize;
@@ -420,29 +439,12 @@ extern void disableSharedCacheOptimizations(void);
 extern bool isPreoptimized(void);
 extern header_info *preoptimizedHinfoForHeader(const headerType *mhdr);
 
-#if SUPPORT_PREOPT  &&  __cplusplus
-#include <objc-shared-cache.h>
-using objc_selopt_t = const objc_opt::objc_selopt_t;
-#else
-struct objc_selopt_t;
-#endif
-
 extern objc_selopt_t *preoptimizedSelectors(void);
+
+extern Protocol *getPreoptimizedProtocol(const char *name);
+
 extern Class getPreoptimizedClass(const char *name);
 extern Class* copyPreoptimizedClasses(const char *name, int *outCount);
-
-
-/* optional malloc zone for runtime data */
-extern malloc_zone_t *_objc_internal_zone(void);
-extern void *_malloc_internal(size_t size);
-extern void *_calloc_internal(size_t count, size_t size);
-extern void *_realloc_internal(void *ptr, size_t size);
-extern char *_strdup_internal(const char *str);
-extern char *_strdupcat_internal(const char *s1, const char *s2);
-extern uint8_t *_ustrdup_internal(const uint8_t *str);
-extern void *_memdup_internal(const void *mem, size_t size);
-extern void _free_internal(void *ptr);
-extern size_t _malloc_size_internal(void *ptr);
 
 extern Class _calloc_class(size_t size);
 
@@ -451,7 +453,7 @@ extern IMP lookUpImpOrNil(Class, SEL, id obj, bool initialize, bool cache, bool 
 extern IMP lookUpImpOrForward(Class, SEL, id obj, bool initialize, bool cache, bool resolver);
 
 extern IMP lookupMethodInClassAndLoadCache(Class cls, SEL sel);
-extern BOOL class_respondsToSelector_inst(Class cls, SEL sel, id inst);
+extern bool class_respondsToSelector_inst(Class cls, SEL sel, id inst);
 
 extern bool objcMsgLogEnabled;
 extern bool logMessageSend(bool isClassMethod,
@@ -510,106 +512,42 @@ extern mutex_t classLock;
 extern mutex_t methodListLock;
 #endif
 
-/* Lock debugging */
-#if defined(NDEBUG)  ||  TARGET_OS_WIN32
+class monitor_locker_t : nocopy_t {
+    monitor_t& lock;
+  public:
+    monitor_locker_t(monitor_t& newLock) : lock(newLock) { lock.enter(); }
+    ~monitor_locker_t() { lock.leave(); }
+};
 
-#define mutex_lock(m)             _mutex_lock_nodebug(m)
-#define mutex_try_lock(m)         _mutex_try_lock_nodebug(m)
-#define mutex_unlock(m)           _mutex_unlock_nodebug(m)
-#define mutex_assert_locked(m)    do { } while (0)
-#define mutex_assert_unlocked(m)  do { } while (0)
+class mutex_locker_t : nocopy_t {
+    mutex_t& lock;
+  public:
+    mutex_locker_t(mutex_t& newLock) 
+        : lock(newLock) { lock.lock(); }
+    ~mutex_locker_t() { lock.unlock(); }
+};
 
-#define recursive_mutex_lock(m)             _recursive_mutex_lock_nodebug(m)
-#define recursive_mutex_try_lock(m)         _recursive_mutex_try_lock_nodebug(m)
-#define recursive_mutex_unlock(m)           _recursive_mutex_unlock_nodebug(m)
-#define recursive_mutex_assert_locked(m)    do { } while (0)
-#define recursive_mutex_assert_unlocked(m)  do { } while (0)
+class recursive_mutex_locker_t : nocopy_t {
+    recursive_mutex_t& lock;
+  public:
+    recursive_mutex_locker_t(recursive_mutex_t& newLock) 
+        : lock(newLock) { lock.lock(); }
+    ~recursive_mutex_locker_t() { lock.unlock(); }
+};
 
-#define monitor_enter(m)            _monitor_enter_nodebug(m)
-#define monitor_exit(m)             _monitor_exit_nodebug(m)
-#define monitor_wait(m)             _monitor_wait_nodebug(m)
-#define monitor_assert_locked(m)    do { } while (0)
-#define monitor_assert_unlocked(m)  do { } while (0)
+class rwlock_reader_t : nocopy_t {
+    rwlock_t& lock;
+  public:
+    rwlock_reader_t(rwlock_t& newLock) : lock(newLock) { lock.read(); }
+    ~rwlock_reader_t() { lock.unlockRead(); }
+};
 
-#define rwlock_read(m)              _rwlock_read_nodebug(m)
-#define rwlock_write(m)             _rwlock_write_nodebug(m)
-#define rwlock_try_read(m)          _rwlock_try_read_nodebug(m)
-#define rwlock_try_write(m)         _rwlock_try_write_nodebug(m)
-#define rwlock_unlock_read(m)       _rwlock_unlock_read_nodebug(m)
-#define rwlock_unlock_write(m)      _rwlock_unlock_write_nodebug(m)
-#define rwlock_assert_reading(m)    do { } while (0)
-#define rwlock_assert_writing(m)    do { } while (0)
-#define rwlock_assert_locked(m)     do { } while (0)
-#define rwlock_assert_unlocked(m)   do { } while (0)
-
-#else
-
-extern int _mutex_lock_debug(mutex_t *lock, const char *name);
-extern int _mutex_try_lock_debug(mutex_t *lock, const char *name);
-extern int _mutex_unlock_debug(mutex_t *lock, const char *name);
-extern void _mutex_assert_locked_debug(mutex_t *lock, const char *name);
-extern void _mutex_assert_unlocked_debug(mutex_t *lock, const char *name);
-
-extern int _recursive_mutex_lock_debug(recursive_mutex_t *lock, const char *name);
-extern int _recursive_mutex_try_lock_debug(recursive_mutex_t *lock, const char *name);
-extern int _recursive_mutex_unlock_debug(recursive_mutex_t *lock, const char *name);
-extern void _recursive_mutex_assert_locked_debug(recursive_mutex_t *lock, const char *name);
-extern void _recursive_mutex_assert_unlocked_debug(recursive_mutex_t *lock, const char *name);
-
-extern int _monitor_enter_debug(monitor_t *lock, const char *name);
-extern int _monitor_exit_debug(monitor_t *lock, const char *name);
-extern int _monitor_wait_debug(monitor_t *lock, const char *name);
-extern void _monitor_assert_locked_debug(monitor_t *lock, const char *name);
-extern void _monitor_assert_unlocked_debug(monitor_t *lock, const char *name);
-
-extern void _rwlock_read_debug(rwlock_t *l, const char *name);
-extern void _rwlock_write_debug(rwlock_t *l, const char *name);
-extern int  _rwlock_try_read_debug(rwlock_t *l, const char *name);
-extern int  _rwlock_try_write_debug(rwlock_t *l, const char *name);
-extern void _rwlock_unlock_read_debug(rwlock_t *l, const char *name);
-extern void _rwlock_unlock_write_debug(rwlock_t *l, const char *name);
-extern void _rwlock_assert_reading_debug(rwlock_t *l, const char *name);
-extern void _rwlock_assert_writing_debug(rwlock_t *l, const char *name);
-extern void _rwlock_assert_locked_debug(rwlock_t *l, const char *name);
-extern void _rwlock_assert_unlocked_debug(rwlock_t *l, const char *name);
-
-#define mutex_lock(m)             _mutex_lock_debug (m, #m)
-#define mutex_try_lock(m)         _mutex_try_lock_debug (m, #m)
-#define mutex_unlock(m)           _mutex_unlock_debug (m, #m)
-#define mutex_assert_locked(m)    _mutex_assert_locked_debug (m, #m)
-#define mutex_assert_unlocked(m)  _mutex_assert_unlocked_debug (m, #m)
-
-#define recursive_mutex_lock(m)             _recursive_mutex_lock_debug (m, #m)
-#define recursive_mutex_try_lock(m)         _recursive_mutex_try_lock_debug (m, #m)
-#define recursive_mutex_unlock(m)           _recursive_mutex_unlock_debug (m, #m)
-#define recursive_mutex_assert_locked(m)    _recursive_mutex_assert_locked_debug (m, #m)
-#define recursive_mutex_assert_unlocked(m)  _recursive_mutex_assert_unlocked_debug (m, #m)
-
-#define monitor_enter(m)            _monitor_enter_debug(m, #m)
-#define monitor_exit(m)             _monitor_exit_debug(m, #m)
-#define monitor_wait(m)             _monitor_wait_debug(m, #m)
-#define monitor_assert_locked(m)    _monitor_assert_locked_debug(m, #m)
-#define monitor_assert_unlocked(m)  _monitor_assert_unlocked_debug(m, #m)
-
-#define rwlock_read(m)              _rwlock_read_debug(m, #m)
-#define rwlock_write(m)             _rwlock_write_debug(m, #m)
-#define rwlock_try_read(m)          _rwlock_try_read_debug(m, #m)
-#define rwlock_try_write(m)         _rwlock_try_write_debug(m, #m)
-#define rwlock_unlock_read(m)       _rwlock_unlock_read_debug(m, #m)
-#define rwlock_unlock_write(m)      _rwlock_unlock_write_debug(m, #m)
-#define rwlock_assert_reading(m)    _rwlock_assert_reading_debug(m, #m)
-#define rwlock_assert_writing(m)    _rwlock_assert_writing_debug(m, #m)
-#define rwlock_assert_locked(m)     _rwlock_assert_locked_debug(m, #m)
-#define rwlock_assert_unlocked(m)   _rwlock_assert_unlocked_debug(m, #m)
-
-#endif
-
-#define rwlock_unlock(m, s)                           \
-    do {                                              \
-        if ((s) == RDONLY) rwlock_unlock_read(m);     \
-        else if ((s) == RDWR) rwlock_unlock_write(m); \
-    } while (0)
-
+class rwlock_writer_t : nocopy_t {
+    rwlock_t& lock;
+  public:
+    rwlock_writer_t(rwlock_t& newLock) : lock(newLock) { lock.write(); }
+    ~rwlock_writer_t() { lock.unlockWrite(); }
+};
 
 /* ignored selector support */
 
@@ -654,7 +592,7 @@ static inline int ignoreSelectorNamed(const char *sel)
 }
 
 /* GC startup */
-extern void gc_init(BOOL wantsGC);
+extern void gc_init(bool wantsGC);
 extern void gc_init2(void);
 
 /* Exceptions */
@@ -696,7 +634,7 @@ extern void gc_register_datasegment(uintptr_t base, size_t size);
 extern void gc_unregister_datasegment(uintptr_t base, size_t size);
 
 /* objc_dumpHeap implementation */
-extern BOOL _objc_dumpHeap(auto_zone_t *zone, const char *filename);
+extern bool _objc_dumpHeap(auto_zone_t *zone, const char *filename);
 
 #endif
 
@@ -708,17 +646,7 @@ extern BOOL _objc_dumpHeap(auto_zone_t *zone, const char *filename);
 
 extern void environ_init(void);
 
-extern void logReplacedMethod(const char *className, SEL s, BOOL isMeta, const char *catName, IMP oldImp, IMP newImp);
-
-static __inline uint32_t _objc_strhash(const char *s) {
-    uint32_t hash = 0;
-    for (;;) {
-	int a = *s++;
-	if (0 == a) break;
-	hash += (hash << 8) + a;
-    }
-    return hash;
-}
+extern void logReplacedMethod(const char *className, SEL s, bool isMeta, const char *catName, IMP oldImp, IMP newImp);
 
 
 // objc per-thread storage
@@ -733,7 +661,7 @@ typedef struct {
 
 } _objc_pthread_data;
 
-extern _objc_pthread_data *_objc_fetch_pthread_data(BOOL create);
+extern _objc_pthread_data *_objc_fetch_pthread_data(bool create);
 extern void tls_init(void);
 
 // encoding.h
@@ -760,33 +688,34 @@ typedef struct {
     uint8_t *bits;
     size_t bitCount;
     size_t bitsAllocated;
-    BOOL weak;
+    bool weak;
 } layout_bitmap;
-extern layout_bitmap layout_bitmap_create(const unsigned char *layout_string, size_t layoutStringInstanceSize, size_t instanceSize, BOOL weak);
-extern layout_bitmap layout_bitmap_create_empty(size_t instanceSize, BOOL weak);
+extern layout_bitmap layout_bitmap_create(const unsigned char *layout_string, size_t layoutStringInstanceSize, size_t instanceSize, bool weak);
+extern layout_bitmap layout_bitmap_create_empty(size_t instanceSize, bool weak);
 extern void layout_bitmap_free(layout_bitmap bits);
 extern const unsigned char *layout_string_create(layout_bitmap bits);
 extern void layout_bitmap_set_ivar(layout_bitmap bits, const char *type, size_t offset);
 extern void layout_bitmap_grow(layout_bitmap *bits, size_t newCount);
 extern void layout_bitmap_slide(layout_bitmap *bits, size_t oldPos, size_t newPos);
 extern void layout_bitmap_slide_anywhere(layout_bitmap *bits, size_t oldPos, size_t newPos);
-extern BOOL layout_bitmap_splat(layout_bitmap dst, layout_bitmap src, 
+extern bool layout_bitmap_splat(layout_bitmap dst, layout_bitmap src, 
                                 size_t oldSrcInstanceSize);
-extern BOOL layout_bitmap_or(layout_bitmap dst, layout_bitmap src, const char *msg);
-extern BOOL layout_bitmap_clear(layout_bitmap dst, layout_bitmap src, const char *msg);
+extern bool layout_bitmap_or(layout_bitmap dst, layout_bitmap src, const char *msg);
+extern bool layout_bitmap_clear(layout_bitmap dst, layout_bitmap src, const char *msg);
 extern void layout_bitmap_print(layout_bitmap bits);
 
 
 // fixme runtime
-extern Class look_up_class(const char *aClassName, BOOL includeUnconnected, BOOL includeClassHandler);
-extern const char *map_images(enum dyld_image_states state, uint32_t infoCount, const struct dyld_image_info infoList[]);
+extern Class look_up_class(const char *aClassName, bool includeUnconnected, bool includeClassHandler);
+extern "C" const char *map_2_images(enum dyld_image_states state, uint32_t infoCount, const struct dyld_image_info infoList[]);
 extern const char *map_images_nolock(enum dyld_image_states state, uint32_t infoCount, const struct dyld_image_info infoList[]);
 extern const char * load_images(enum dyld_image_states state, uint32_t infoCount, const struct dyld_image_info infoList[]);
-extern BOOL load_images_nolock(enum dyld_image_states state, uint32_t infoCount, const struct dyld_image_info infoList[]);
+extern bool load_images_nolock(enum dyld_image_states state, uint32_t infoCount, const struct dyld_image_info infoList[]);
 extern void unmap_image(const struct mach_header *mh, intptr_t vmaddr_slide);
 extern void unmap_image_nolock(const struct mach_header *mh);
 extern void _read_images(header_info **hList, uint32_t hCount);
-extern void prepare_load_methods(header_info *hi);
+extern void prepare_load_methods(const headerType *mhdr);
+extern bool hasLoadMethods(const headerType *mhdr);
 extern void _unload_image(header_info *hi);
 extern const char ** _objc_copyClassNamesForImage(header_info *hi, unsigned int *outCount);
 
@@ -796,7 +725,6 @@ extern const header_info *_headerForClass(Class cls);
 extern Class _class_remap(Class cls);
 extern Class _class_getNonMetaClass(Class cls, id obj);
 extern Ivar _class_getVariable(Class cls, const char *name, Class *memberOf);
-extern BOOL _class_usesAutomaticRetainRelease(Class cls);
 extern uint32_t _class_getInstanceStart(Class cls);
 
 extern unsigned _class_createInstancesFromZone(Class cls, size_t extraBytes, void *zone, id *results, unsigned num_requested);
@@ -836,22 +764,117 @@ __END_DECLS
 #define countof(arr) (sizeof(arr) / sizeof((arr)[0]))
 
 
+static __inline uint32_t _objc_strhash(const char *s) {
+    uint32_t hash = 0;
+    for (;;) {
+	int a = *s++;
+	if (0 == a) break;
+	hash += (hash << 8) + a;
+    }
+    return hash;
+}
+
+#if __cplusplus
+
+template <typename T>
+static inline T log2u(T x) {
+    return (x<2) ? 0 : log2u(x>>1)+1;
+}
+
+template <typename T>
+static inline T exp2u(T x) {
+    return (1 << x);
+}
+
+template <typename T>
+static T exp2m1u(T x) { 
+    return (1 << x) - 1; 
+}
+
+#endif
+
+
 // Global operator new and delete. We must not use any app overrides.
 // This ALSO REQUIRES each of these be in libobjc's unexported symbol list.
 #if __cplusplus
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Winline-new-delete"
 #include <new>
-inline void* operator new(std::size_t size) throw (std::bad_alloc) { return _malloc_internal(size); }
-inline void* operator new[](std::size_t size) throw (std::bad_alloc) { return _malloc_internal(size); }
-inline void* operator new(std::size_t size, const std::nothrow_t&) throw() { return _malloc_internal(size); }
-inline void* operator new[](std::size_t size, const std::nothrow_t&) throw() { return _malloc_internal(size); }
-inline void operator delete(void* p) throw() { _free_internal(p); }
-inline void operator delete[](void* p) throw() { _free_internal(p); }
-inline void operator delete(void* p, const std::nothrow_t&) throw() { _free_internal(p); }
-inline void operator delete[](void* p, const std::nothrow_t&) throw() { _free_internal(p); }
+inline void* operator new(std::size_t size) throw (std::bad_alloc) { return malloc(size); }
+inline void* operator new[](std::size_t size) throw (std::bad_alloc) { return malloc(size); }
+inline void* operator new(std::size_t size, const std::nothrow_t&) throw() { return malloc(size); }
+inline void* operator new[](std::size_t size, const std::nothrow_t&) throw() { return malloc(size); }
+inline void operator delete(void* p) throw() { free(p); }
+inline void operator delete[](void* p) throw() { free(p); }
+inline void operator delete(void* p, const std::nothrow_t&) throw() { free(p); }
+inline void operator delete[](void* p, const std::nothrow_t&) throw() { free(p); }
 #pragma clang diagnostic pop
 #endif
+
+
+class TimeLogger {
+    uint64_t mStart;
+    bool mRecord;
+ public:
+    TimeLogger(bool record = true) 
+     : mStart(nanoseconds())
+     , mRecord(record) 
+    { }
+
+    void log(const char *msg) {
+        if (mRecord) {
+            uint64_t end = nanoseconds();
+            _objc_inform("%.2f ms: %s", (end - mStart) / 1000000.0, msg);
+            mStart = nanoseconds();
+        }
+    }
+};
+
+
+// StripedMap<T> is a map of void* -> T, sized appropriately 
+// for cache-friendly lock striping. 
+// For example, this may be used as StripedMap<spinlock_t>
+// or as StripedMap<SomeStruct> where SomeStruct stores a spin lock.
+template<typename T>
+class StripedMap {
+
+    enum { CacheLineSize = 64 };
+
+#if TARGET_OS_EMBEDDED
+    enum { StripeCount = 8 };
+#else
+    enum { StripeCount = 64 };
+#endif
+
+    struct PaddedT {
+        T value alignas(CacheLineSize);
+    };
+
+    PaddedT array[StripeCount];
+
+    static unsigned int indexForPointer(const void *p) {
+        uintptr_t addr = reinterpret_cast<uintptr_t>(p);
+        return ((addr >> 4) ^ (addr >> 9)) % StripeCount;
+    }
+
+ public:
+    T& operator[] (const void *p) { 
+        return array[indexForPointer(p)].value; 
+    }
+    const T& operator[] (const void *p) const { 
+        return const_cast<StripedMap<T> >(this)[p];
+    }
+
+#if DEBUG
+    StripedMap() {
+        // Verify alignment expectations.
+        uintptr_t base = (uintptr_t)&array[0].value;
+        uintptr_t delta = (uintptr_t)&array[1].value - base;
+        assert(delta % CacheLineSize == 0);
+        assert(base % CacheLineSize == 0);
+    }
+#endif
+};
 
 
 // DisguisedPtr<T> acts like pointer type T*, except the 
@@ -902,6 +925,14 @@ class DisguisedPtr {
     // pointer arithmetic operators omitted 
     // because we don't currently use them anywhere
 };
+
+// fixme type id is weird and not identical to objc_object*
+static inline bool operator == (DisguisedPtr<objc_object> lhs, id rhs) {
+    return lhs == (objc_object *)rhs;
+}
+static inline bool operator != (DisguisedPtr<objc_object> lhs, id rhs) {
+    return lhs != (objc_object *)rhs;
+}
 
 
 // Pointer hash function.

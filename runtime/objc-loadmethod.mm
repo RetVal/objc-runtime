@@ -63,7 +63,7 @@ void add_class_to_loadable_list(Class cls)
 {
     IMP method;
 
-    recursive_mutex_assert_locked(&loadMethodLock);
+    loadMethodLock.assertLocked();
 
     method = cls->getLoadMethod();
     if (!method) return;  // Don't bother if cls has no +load method
@@ -76,7 +76,7 @@ void add_class_to_loadable_list(Class cls)
     if (loadable_classes_used == loadable_classes_allocated) {
         loadable_classes_allocated = loadable_classes_allocated*2 + 16;
         loadable_classes = (struct loadable_class *)
-            _realloc_internal(loadable_classes,
+            realloc(loadable_classes,
                               loadable_classes_allocated *
                               sizeof(struct loadable_class));
     }
@@ -97,7 +97,7 @@ void add_category_to_loadable_list(Category cat)
 {
     IMP method;
 
-    recursive_mutex_assert_locked(&loadMethodLock);
+    loadMethodLock.assertLocked();
 
     method = _category_getLoadMethod(cat);
 
@@ -112,7 +112,7 @@ void add_category_to_loadable_list(Category cat)
     if (loadable_categories_used == loadable_categories_allocated) {
         loadable_categories_allocated = loadable_categories_allocated*2 + 16;
         loadable_categories = (struct loadable_category *)
-            _realloc_internal(loadable_categories,
+            realloc(loadable_categories,
                               loadable_categories_allocated *
                               sizeof(struct loadable_category));
     }
@@ -130,7 +130,7 @@ void add_category_to_loadable_list(Category cat)
 **********************************************************************/
 void remove_class_from_loadable_list(Class cls)
 {
-    recursive_mutex_assert_locked(&loadMethodLock);
+    loadMethodLock.assertLocked();
 
     if (loadable_classes) {
         int i;
@@ -155,7 +155,7 @@ void remove_class_from_loadable_list(Class cls)
 **********************************************************************/
 void remove_category_from_loadable_list(Category cat)
 {
-    recursive_mutex_assert_locked(&loadMethodLock);
+    loadMethodLock.assertLocked();
 
     if (loadable_categories) {
         int i;
@@ -205,7 +205,7 @@ static void call_class_loads(void)
     }
     
     // Destroy the detached list.
-    if (classes) _free_internal(classes);
+    if (classes) free(classes);
 }
 
 
@@ -221,10 +221,10 @@ static void call_class_loads(void)
 *
 * Called only by call_load_methods().
 **********************************************************************/
-static BOOL call_category_loads(void)
+static bool call_category_loads(void)
 {
     int i, shift;
-    BOOL new_categories_added = NO;
+    bool new_categories_added = NO;
     
     // Detach current loadable list.
     struct loadable_category *cats = loadable_categories;
@@ -270,14 +270,14 @@ static BOOL call_category_loads(void)
         if (used == allocated) {
             allocated = allocated*2 + 16;
             cats = (struct loadable_category *)
-                _realloc_internal(cats, allocated *
+                realloc(cats, allocated *
                                   sizeof(struct loadable_category));
         }
         cats[used++] = loadable_categories[i];
     }
 
     // Destroy the new list.
-    if (loadable_categories) _free_internal(loadable_categories);
+    if (loadable_categories) free(loadable_categories);
 
     // Reattach the (now augmented) detached list. 
     // But if there's nothing left to load, destroy the list.
@@ -286,7 +286,7 @@ static BOOL call_category_loads(void)
         loadable_categories_used = used;
         loadable_categories_allocated = allocated;
     } else {
-        if (cats) _free_internal(cats);
+        if (cats) free(cats);
         loadable_categories = nil;
         loadable_categories_used = 0;
         loadable_categories_allocated = 0;
@@ -336,10 +336,10 @@ static BOOL call_category_loads(void)
 **********************************************************************/
 void call_load_methods(void)
 {
-    static BOOL loading = NO;
-    BOOL more_categories;
+    static bool loading = NO;
+    bool more_categories;
 
-    recursive_mutex_assert_locked(&loadMethodLock);
+    loadMethodLock.assertLocked();
 
     // Re-entrant calls do nothing; the outermost call will finish the job.
     if (loading) return;

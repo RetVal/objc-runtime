@@ -3,13 +3,10 @@ _environ_init
 _tls_init
 _lock_init
 _recursive_mutex_init
-__malloc_internal
-__objc_internal_zone
 _exception_init
 _map_images
 _map_images_nolock
 __getObjcImageInfo
-__calloc_internal
 __hasObjcContents
 __objc_appendHeader
 _verify_gc_readiness
@@ -72,7 +69,6 @@ ___objc_sel_set_get
 __Z9protocolsv
 __getObjc2ProtocolList
 _NXMapKeyCopyingInsert
-__strdup_internal
 __NXMapRehash
 __getObjc2ProtocolRefs
 __Z13remapProtocolm
@@ -81,7 +77,7 @@ __Z12realizeClassP7class_t
 __Z11addSubclassP7class_tS0_
 __Z17attachMethodListsP7class_tPP13method_list_tiaPa
 __Z15fixupMethodListP13method_list_ta
-__memdup_internal
+_memdup
 __ZNSt3__113__stable_sortIRN8method_t16SortBySELAddressEN13method_list_t15method_iteratorEEEvT0_S6_T_NS_15iterator_traitsIS6_E1
 __Z9addMethodP7class_tP13objc_selectorPFP11objc_objectS3_S1_zEPKca
 __Z23getMethodNoSuper_nolockP7class_tP13objc_selector
@@ -93,7 +89,6 @@ _objc_addRegisteredClass
 _layout_bitmap_create
 _set_bits
 _layout_bitmap_free
-__free_internal
 __ZNSt3__116__insertion_sortIRN8method_t16SortBySELAddressEN13method_list_t15method_iteratorEEEvT0_S6_T_
 __Z17buildProtocolListP13category_listPK15protocol_list_tPS3_
 __Z17buildPropertyListPK15property_list_tP13category_lista
@@ -108,7 +103,6 @@ __Z16remethodizeClassP7class_t
 __Z11flushCachesP7class_t
 _flush_cache
 __class_getCache
-__realloc_internal
 _load_images
 _load_images_nolock
 _prepare_load_methods

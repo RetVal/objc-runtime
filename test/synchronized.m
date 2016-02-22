@@ -87,6 +87,7 @@ int main()
     testassert(err == OBJC_SYNC_SUCCESS);
     // should have waited more than WAIT_SEC but less than WAIT_SEC+1
     // fixme hack: sleep(1) is ending 500 usec too early on x86_64 buildbot
+    // (rdar://6456975)
     testassert(end.tv_sec*1000000LL+end.tv_usec >= 
                start.tv_sec*1000000LL+start.tv_usec + WAIT_SEC*1000000LL
                - 3*500 /*hack*/);

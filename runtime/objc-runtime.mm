@@ -57,7 +57,7 @@ struct option_t {
 };
 
 const option_t Settings[] = {
-#define OPTION(var, env, help) {& var, #env, help, sizeof(#env)},
+#define OPTION(var, env, help) {&var, #env, help, strlen(#env)}, 
 #include "objc-env.h"
 #undef OPTION
 };
@@ -93,8 +93,6 @@ SEL SEL_allowsWeakReference = NULL;
 header_info *FirstHeader = 0;  // NULL means empty list
 header_info *LastHeader  = 0;  // NULL means invalid; recompute it
 int HeaderCount = 0;
-
-uint32_t AppSDKVersion = 0;
 
 
 /***********************************************************************
@@ -233,10 +231,17 @@ void environ_init(void)
 
     bool PrintHelp = false;
     bool PrintOptions = false;
+    bool maybeMallocDebugging = false;
 
     // Scan environ[] directly instead of calling getenv() a lot.
     // This optimizes the case where none are set.
     for (char **p = *_NSGetEnviron(); *p != nil; p++) {
+        if (0 == strncmp(*p, "Malloc", 6)  ||  0 == strncmp(*p, "DYLD", 4)  ||  
+            0 == strncmp(*p, "NSZombiesEnabled", 16))
+        {
+            maybeMallocDebugging = true;
+        }
+
         if (0 != strncmp(*p, "OBJC_", 5)) continue;
         
         if (0 == strncmp(*p, "OBJC_HELP=", 10)) {
@@ -261,6 +266,24 @@ void environ_init(void)
                 break;
             }
         }            
+    }
+
+    // Special case: enable some autorelease pool debugging 
+    // when some malloc debugging is enabled 
+    // and OBJC_DEBUG_POOL_ALLOCATION is not set to something other than NO.
+    if (maybeMallocDebugging) {
+        const char *insert = getenv("DYLD_INSERT_LIBRARIES");
+        const char *zombie = getenv("NSZombiesEnabled");
+        const char *pooldebug = getenv("OBJC_DEBUG_POOL_ALLOCATION");
+        if ((getenv("MallocStackLogging")
+             || getenv("MallocStackLoggingNoCompact")
+             || (zombie && (*zombie == 'Y' || *zombie == 'y'))
+             || (insert && strstr(insert, "libgmalloc")))
+            &&
+            (!pooldebug || 0 == strcmp(pooldebug, "YES")))
+        {
+            DebugPoolAllocation = true;
+        }
     }
 
     // Print OBJC_HELP and OBJC_PRINT_OPTIONS output.
@@ -292,7 +315,7 @@ void environ_init(void)
 **********************************************************************/
 void 
 logReplacedMethod(const char *className, SEL s, 
-                  BOOL isMeta, const char *catName, 
+                  bool isMeta, const char *catName, 
                   IMP oldImp, IMP newImp)
 {
     const char *oldImage = "??";
@@ -335,14 +358,14 @@ void objc_setMultithreaded (BOOL flag)
 * If the data doesn't exist yet and create is NO, return NULL.
 * If the data doesn't exist yet and create is YES, allocate and return it.
 **********************************************************************/
-_objc_pthread_data *_objc_fetch_pthread_data(BOOL create)
+_objc_pthread_data *_objc_fetch_pthread_data(bool create)
 {
     _objc_pthread_data *data;
 
     data = (_objc_pthread_data *)tls_get(_objc_pthread_key);
     if (!data  &&  create) {
         data = (_objc_pthread_data *)
-            _calloc_internal(1, sizeof(_objc_pthread_data));
+            calloc(1, sizeof(_objc_pthread_data));
         tls_set(_objc_pthread_key, data);
     }
 
@@ -371,7 +394,7 @@ void _objc_pthread_destroyspecific(void *arg)
 
         // add further cleanup here...
 
-        _free_internal(data);
+        free(data);
     }
 }
 
@@ -454,7 +477,7 @@ const char *class_getImageName(Class cls)
     DWORD charactersCopied;
     Class origCls;
     HMODULE classModule;
-    BOOL res;
+    bool res;
 #endif
     if (!cls) return NULL;
 
@@ -594,10 +617,16 @@ void objc_setAssociatedObject_non_gc(id object, const void *key, id value, objc_
 #if SUPPORT_GC
 
 id objc_getAssociatedObject_gc(id object, const void *key) {
+    // auto_zone doesn't handle tagged pointer objects. Track it ourselves.
+    if (object->isTaggedPointer()) return objc_getAssociatedObject_non_gc(object, key);
+
     return (id)auto_zone_get_associative_ref(gc_zone, object, (void *)key);
 }
 
 void objc_setAssociatedObject_gc(id object, const void *key, id value, objc_AssociationPolicy policy) {
+    // auto_zone doesn't handle tagged pointer objects. Track it ourselves.
+    if (object->isTaggedPointer()) return objc_setAssociatedObject_non_gc(object, key, value, policy);
+
     if ((policy & OBJC_ASSOCIATION_COPY_NONATOMIC) == OBJC_ASSOCIATION_COPY_NONATOMIC) {
         value = ((id(*)(id, SEL))objc_msgSend)(value, SEL_copy);
     }

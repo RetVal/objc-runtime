@@ -48,10 +48,6 @@ typedef struct _MapPair {
     const void	*value;
 } MapPair;
 
-static unsigned log2u(unsigned x) { return (x<2) ? 0 : log2u(x>>1)+1; };
-
-static INLINE unsigned exp2u(unsigned x) { return (1 << x); };
-
 static INLINE unsigned xorHash(unsigned hash) { 
     unsigned xored = (hash & 0xffff) ^ (hash >> 16);
     return ((xored * 65521) + hash);
@@ -343,7 +339,7 @@ void *NXMapKeyCopyingInsert(NXMapTable *table, const void *key, const void *valu
         // key DOES exist in table - use table's key for insertion
     } else {
         // key DOES NOT exist in table - copy the new key before insertion
-        realKey = (void *)_strdup_internal((char *)key);
+        realKey = (void *)strdup((char *)key);
     }
     return NXMapInsert(table, realKey, value);
 }
@@ -362,7 +358,7 @@ void *NXMapKeyFreeingRemove(NXMapTable *table, const void *key)
     if ((realKey = NXMapMember(table, key, &realValue)) != NX_MAPNOTAKEY) {
         // key DOES exist in table - remove pair and free key
         realValue = NXMapRemove(table, realKey);
-        _free_internal(realKey); // the key from the table, not necessarily the one given
+        free(realKey); // the key from the table, not necessarily the one given
         return realValue;
     } else {
         // key DOES NOT exist in table - nothing to do

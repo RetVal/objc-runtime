@@ -11,6 +11,7 @@ static void ctor(void)
     testassert(state2 == 0);
 }
 
+OBJC_ROOT_CLASS
 @interface Two @end
 @implementation Two
 +(void) load

@@ -172,7 +172,7 @@ encoding_getArgumentInfo(const char *typedesc, unsigned int arg,
 {
     unsigned nargs = 0;
     int self_offset = 0;
-    BOOL offset_is_negative = NO;
+    bool offset_is_negative = NO;
 
     // First, skip the return type
     typedesc = SkipFirstType (typedesc);

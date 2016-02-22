@@ -75,11 +75,17 @@ void _objc_error(id rcv, const char *fmt, va_list args)
 #else
 
 #include <vproc_priv.h>
-#include <simple_lock.h>
+//#include <_simple.h>
 
 OBJC_EXPORT void	(*_error)(id, const char *, va_list);
 
 static void _objc_trap(void) __attribute__((noreturn));
+
+// Return true if c is a UTF8 continuation byte
+static bool isUTF8Continuation(char c)
+{
+    return (c & 0xc0) == 0x80;  // continuation byte is 0b10xxxxxx
+}
 
 // Add "message" to any forthcoming crash log.
 static void _objc_crashlog(const char *message)
@@ -98,13 +104,21 @@ static void _objc_crashlog(const char *message)
     }
 #endif
 
-    static mutex_t crashlog_lock = MUTEX_INITIALIZER;
-    mutex_lock(&crashlog_lock);
+    static mutex_t crashlog_lock;
+    mutex_locker_t lock(crashlog_lock);
 
     char *oldmsg = (char *)CRGetCrashLogMessage();
+    size_t oldlen;
+    const size_t limit = 8000;
 
     if (!oldmsg) {
         newmsg = strdup(message);
+    } else if ((oldlen = strlen(oldmsg)) > limit) {
+        // limit total length by dropping old contents
+        char *truncmsg = oldmsg + oldlen - limit;
+        // advance past partial UTF-8 bytes
+        while (isUTF8Continuation(*truncmsg)) truncmsg++;
+        asprintf(&newmsg, "... %s\n%s", truncmsg, message);
     } else {
         asprintf(&newmsg, "%s\n%s", oldmsg, message);
     }
@@ -117,8 +131,6 @@ static void _objc_crashlog(const char *message)
         if (oldmsg) free(oldmsg);
         CRSetCrashLogMessage(newmsg);
     }
-
-    mutex_unlock(&crashlog_lock);
 }
 
 // Returns true if logs should be sent to stderr as well as syslog.
@@ -129,15 +141,10 @@ static bool also_do_stderr(void)
     int ret = fstat(STDERR_FILENO, &st);
     if (ret < 0) return false;
     mode_t m = st.st_mode & S_IFMT;
-    if (m == S_IFREG  ||  m == S_IFSOCK) return true;
-    if (!(m == S_IFIFO  ||  m == S_IFCHR)) return false;
-
-    // if it could be a pipe back to launchd, fail
-    int64_t val = 0;
-    vproc_swap_integer(NULL, VPROC_GSK_IS_MANAGED, NULL, &val);
-    if (val) return false;
-    
-    return true;
+    if (m == S_IFREG  ||  m == S_IFSOCK  ||  m == S_IFIFO  ||  m == S_IFCHR) {
+        return true;
+    }
+    return false;
 }
 
 // Print "message" to the console.

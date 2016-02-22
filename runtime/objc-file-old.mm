@@ -137,7 +137,7 @@ getsegbynamefromheader(const headerType *head, const char *segname)
     return NULL;
 }
 
-BOOL
+bool
 _hasObjcContents(const header_info *hi)
 {
     // Look for an __OBJC,* section other than __OBJC,__image_info

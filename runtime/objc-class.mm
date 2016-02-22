@@ -201,8 +201,17 @@ Class object_getClass(id obj)
 **********************************************************************/
 Class object_setClass(id obj, Class cls)
 {
-    if (obj) return obj->changeIsa(cls);
-    else return Nil;
+    if (!obj) return nil;
+
+    // Prevent a deadlock between the weak reference machinery
+    // and the +initialize machinery by ensuring that no 
+    // weakly-referenced object has an un-+initialized isa.
+    // Unresolved future classes are not so protected.
+    if (!cls->isFuture()  &&  !cls->isInitialized()) {
+        _class_initialize(_class_getNonMetaClass(cls, nil));
+    }
+
+    return obj->changeIsa(cls);
 }
 
 
@@ -272,7 +281,7 @@ Ivar object_getInstanceVariable(id obj, const char *name, void **value)
     return nil;
 }
 
-static BOOL is_scanned_offset(ptrdiff_t ivar_offset, const uint8_t *layout) {
+static bool is_scanned_offset(ptrdiff_t ivar_offset, const uint8_t *layout) {
     ptrdiff_t index = 0, ivar_index = ivar_offset / sizeof(void*);
     uint8_t byte;
     while ((byte = *layout++)) {
@@ -479,8 +488,8 @@ static void _class_resolveClassMethod(Class cls, SEL sel, id inst)
         return;
     }
 
-    BOOL (*msg)(Class, SEL, SEL) = (typeof(msg))objc_msgSend;
-    BOOL resolved = msg(_class_getNonMetaClass(cls, inst), 
+    BOOL (*msg)(Class, SEL, SEL) = (__typeof__(msg))objc_msgSend;
+    bool resolved = msg(_class_getNonMetaClass(cls, inst), 
                         SEL_resolveClassMethod, sel);
 
     // Cache the result (good or bad) so the resolver doesn't fire next time.
@@ -522,8 +531,8 @@ static void _class_resolveInstanceMethod(Class cls, SEL sel, id inst)
         return;
     }
 
-    BOOL (*msg)(Class, SEL, SEL) = (typeof(msg))objc_msgSend;
-    BOOL resolved = msg(cls, SEL_resolveInstanceMethod, sel);
+    BOOL (*msg)(Class, SEL, SEL) = (__typeof__(msg))objc_msgSend;
+    bool resolved = msg(cls, SEL_resolveInstanceMethod, sel);
 
     // Cache the result (good or bad) so the resolver doesn't fire next time.
     // +resolveInstanceMethod adds to self a.k.a. cls
@@ -637,7 +646,7 @@ BOOL class_respondsToSelector(Class cls, SEL sel)
 
 // inst is an instance of cls or a subclass thereof, or nil if none is known.
 // Non-nil inst is faster in some cases. See lookUpImpOrForward() for details.
-BOOL class_respondsToSelector_inst(Class cls, SEL sel, id inst)
+bool class_respondsToSelector_inst(Class cls, SEL sel, id inst)
 {
     IMP imp;
 
@@ -647,7 +656,7 @@ BOOL class_respondsToSelector_inst(Class cls, SEL sel, id inst)
     // We're not returning a callable IMP anyway.
     imp = lookUpImpOrNil(cls, sel, inst, 
                          NO/*initialize*/, YES/*cache*/, YES/*resolver*/);
-    return imp ? YES : NO;
+    return bool(imp);
 }
 
 
@@ -740,10 +749,10 @@ bool logMessageSend(bool isClassMethod,
             implementingClass,
             sel_getName(selector));
 
-    static spinlock_t lock = SPINLOCK_INITIALIZER;
-    spinlock_lock(&lock);
+    static spinlock_t lock;
+    lock.lock();
     write (objcMsgLogFD, buf, strlen(buf));
-    spinlock_unlock(&lock);
+    lock.unlock();
 
     // Tell caller to not cache the method
     return false;
@@ -772,83 +781,12 @@ void instrumentObjcMessageSends(BOOL flag)
 #endif
 
 
-/***********************************************************************
-* _malloc_internal
-* _calloc_internal
-* _realloc_internal
-* _strdup_internal
-* _strdupcat_internal
-* _memdup_internal
-* _free_internal
-* Convenience functions for the internal malloc zone.
-**********************************************************************/
-void *_malloc_internal(size_t size) 
-{
-    return malloc_zone_malloc(_objc_internal_zone(), size);
-}
-
-void *_calloc_internal(size_t count, size_t size) 
-{
-    return malloc_zone_calloc(_objc_internal_zone(), count, size);
-}
-
-void *_realloc_internal(void *ptr, size_t size)
-{
-    return malloc_zone_realloc(_objc_internal_zone(), ptr, size);
-}
-
-char *_strdup_internal(const char *str)
-{
-    size_t len;
-    char *dup;
-    if (!str) return nil;
-    len = strlen(str);
-    dup = (char *)malloc_zone_malloc(_objc_internal_zone(), len + 1);
-    memcpy(dup, str, len + 1);
-    return dup;
-}
-
-uint8_t *_ustrdup_internal(const uint8_t *str)
-{
-    return (uint8_t *)_strdup_internal((char *)str);
-}
-
-// allocate a new string that concatenates s1+s2.
-char *_strdupcat_internal(const char *s1, const char *s2)
-{
-    size_t len1 = strlen(s1);
-    size_t len2 = strlen(s2);
-    char *dup = (char *)
-        malloc_zone_malloc(_objc_internal_zone(), len1 + len2 + 1);
-    memcpy(dup, s1, len1);
-    memcpy(dup + len1, s2, len2 + 1);
-    return dup;
-}
-
-void *_memdup_internal(const void *mem, size_t len)
-{
-    void *dup = malloc_zone_malloc(_objc_internal_zone(), len);
-    memcpy(dup, mem, len);
-    return dup;
-}
-
-void _free_internal(void *ptr)
-{
-    malloc_zone_free(_objc_internal_zone(), ptr);
-}
-
-size_t _malloc_size_internal(void *ptr)
-{
-    malloc_zone_t *zone = _objc_internal_zone();
-    return zone->size(zone, ptr);
-}
-
 Class _calloc_class(size_t size)
 {
 #if SUPPORT_GC
     if (UseGC) return (Class) malloc_zone_calloc(gc_zone, 1, size);
 #endif
-    return (Class) _calloc_internal(1, size);
+    return (Class) calloc(1, size);
 }
 
 Class class_getSuperclass(Class cls)
@@ -1018,7 +956,7 @@ copyPropertyAttributeString(const objc_property_attribute_t *attrs,
     unsigned int i;
     if (count == 0) return strdup("");
     
-#ifndef NDEBUG
+#if DEBUG
     // debug build: sanitize input
     for (i = 0; i < count; i++) {
         assert(attrs[i].name);
@@ -1079,7 +1017,7 @@ copyPropertyAttributeString(const objc_property_attribute_t *attrs,
 */
 static unsigned int 
 iteratePropertyAttributes(const char *attrs, 
-                          BOOL (*fn)(unsigned int index, 
+                          bool (*fn)(unsigned int index, 
                                      void *ctx1, void *ctx2, 
                                      const char *name, size_t nlen, 
                                      const char *value, size_t vlen), 
@@ -1087,7 +1025,7 @@ iteratePropertyAttributes(const char *attrs,
 {
     if (!attrs) return 0;
 
-#ifndef NDEBUG
+#if DEBUG
     const char *attrsend = attrs + strlen(attrs);
 #endif
     unsigned int attrcount = 0;
@@ -1137,7 +1075,7 @@ iteratePropertyAttributes(const char *attrs,
         valueStart = start;
         valueEnd = end;
 
-        BOOL more = (*fn)(attrcount, ctx1, ctx2, 
+        bool more = (*fn)(attrcount, ctx1, ctx2, 
                           nameStart, nameEnd-nameStart, 
                           valueStart, valueEnd-valueStart);
         attrcount++;
@@ -1148,7 +1086,7 @@ iteratePropertyAttributes(const char *attrs,
 }
 
 
-static BOOL 
+static bool 
 copyOneAttribute(unsigned int index, void *ctxa, void *ctxs, 
                  const char *name, size_t nlen, const char *value, size_t vlen)
 {
@@ -1222,7 +1160,7 @@ copyPropertyAttributeList(const char *attrs, unsigned int *outCount)
 }
 
 
-static BOOL 
+static bool 
 findOneAttribute(unsigned int index, void *ctxa, void *ctxs, 
                  const char *name, size_t nlen, const char *value, size_t vlen)
 {

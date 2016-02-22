@@ -32,6 +32,7 @@
 // to get the critical regions for which method caches 
 // cannot be garbage collected.
 
+.align 2
 .private_extern _objc_entryPoints
 _objc_entryPoints:
 	.long	_cache_getImp
@@ -296,12 +297,10 @@ $0:
 
 1:
 	// loop
-	cmpl	$$0, (%eax)
-	je	LCacheMiss_f		// if (bucket->sel == 0) cache miss
-	cmpl	8(%edx), %eax
-	je	3f			// if (bucket = cache->buckets) wrap
+	cmpl	$$1, (%eax)
+	jbe	3f			// if (bucket->sel <= 1) wrap or miss
 	
-	subl	$$8, %eax		// bucket--
+	addl	$$8, %eax		// bucket++
 2:
 	cmpl	(%eax), %ecx		// if (bucket->sel != sel)
 	jne	1b			//     scan more
@@ -309,22 +308,21 @@ $0:
 	CacheHit $0			// call or return imp
 
 3:	
+	// wrap or miss
+	jb	LCacheMiss_f		// if (bucket->sel < 1) cache miss
 	// wrap
-	movzwl	12(%edx), %eax		// eax = mask
-	shll	$$3, %eax		// eax = offset = mask * 8
-	addl	8(%edx), %eax		// eax = bucket = cache->buckets+offset
+	movl	4(%eax), %eax		// bucket->imp is really first bucket
 	jmp	2f
 
-	// clone scanning loop to crash instead of hang when cache is corrupt
+	// Clone scanning loop to miss instead of hang when cache is corrupt.
+	// The slow path may detect any corruption and halt later.
 
 1:
 	// loop
-	cmpl	$$0, (%eax)
-	je	LCacheMiss_f		// if (bucket->sel == 0) cache miss
-	cmpl	8(%edx), %eax
-	je	3f			// if (bucket = cache->buckets) wrap
+	cmpq	$$1, (%eax)
+	jbe	3f			// if (bucket->sel <= 1) wrap or miss
 	
-	subl	$$8, %eax		// bucket--
+	addl	$$8, %eax		// bucket++
 2:
 	cmpl	(%eax), %ecx		// if (bucket->sel != sel)
 	jne	1b			//     scan more
@@ -332,29 +330,8 @@ $0:
 	CacheHit $0			// call or return imp
 
 3:	
-	// double wrap - busted
-
-	pushl	%ebp
-	movl	%esp, %ebp
-	pushl	$$0
-	pushl	$$0
-	pushl	$$0		// stack alignment
-	pushl	%edx		// isa
-	pushl	%ecx		// SEL
-.if $0 == STRET  ||  $0 == SUPER_STRET
-	movl	self_stret+4(%ebp), %ecx
-.elseif $0 == GETIMP
-	movl	$$0, %ecx
-.else
-	movl	self+4(%ebp), %ecx
-.endif
-	pushl	%ecx		// receiver
-
-.if $0 == GETIMP
-	call	_cache_getImp_corrupt_cache_error
-.else
-	call	_objc_msgSend_corrupt_cache_error
-.endif
+	// double wrap or miss
+	jmp	LCacheMiss_f
 	
 .endmacro
 
@@ -381,16 +358,26 @@ $0:
 	
 	movl	%esp, %ebp
 	.cfi_def_cfa_register ebp
+
+	subl	$$(8+5*16), %esp
+
+	movdqa  %xmm3, 4*16(%esp)
+	movdqa  %xmm2, 3*16(%esp)
+	movdqa  %xmm1, 2*16(%esp)
+	movdqa  %xmm0, 1*16(%esp)
 	
-	sub	$$12, %esp		// align stack
-	
-	pushl	%edx			// class
-	pushl	%ecx			// selector
-	pushl	%eax			// receiver
+	movl	%edx, 8(%esp)		// class
+	movl	%ecx, 4(%esp)		// selector
+	movl	%eax, 0(%esp)		// receiver
 	call	__class_lookupMethodAndLoadCache3
 
 	// imp in eax
-	
+
+	movdqa  4*16(%esp), %xmm3
+	movdqa  3*16(%esp), %xmm2
+	movdqa  2*16(%esp), %xmm1
+	movdqa  1*16(%esp), %xmm0
+
 	leave
 	.cfi_def_cfa esp, 4
 	.cfi_same_value ebp
@@ -852,7 +839,7 @@ L_forward_stret_handler:
 	
 	END_ENTRY _method_invoke_stret
 
-#if !defined(NDEBUG)
+#if DEBUG
 	STATIC_ENTRY __objc_ignored_method
 	
 	movl	self(%esp), %eax

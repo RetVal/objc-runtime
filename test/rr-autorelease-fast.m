@@ -2,6 +2,7 @@
 // TEST_CFLAGS -Os
 
 #include "test.h"
+#include "testroot.i"
 
 #if __i386__
 
@@ -17,21 +18,23 @@ int main()
 #include <objc/objc-abi.h>
 #include <Foundation/Foundation.h>
 
-static int did_dealloc;
+@interface TestObject : TestRoot @end
+@implementation TestObject @end
 
-@interface TestObject : NSObject
-@end
-@implementation TestObject
--(void)dealloc
-{
-    did_dealloc = 1;
-    [super dealloc];
-}
-@end
 
-// rdar://9319305 clang transforms objc_retainAutoreleasedReturnValue() 
-// into objc_retain() sometimes
-extern id objc_retainAutoreleasedReturnValue(id obj) __asm__("_objc_retainAutoreleasedReturnValue");
+#ifdef __arm__
+#   define MAGIC      asm volatile("mov r7, r7")
+#   define NOT_MAGIC  asm volatile("mov r6, r6")
+#elif __arm64__
+#   define MAGIC      asm volatile("mov x29, x29")
+#   define NOT_MAGIC  asm volatile("mov x28, x28")
+#elif __x86_64__
+#   define MAGIC      asm volatile("")
+#   define NOT_MAGIC  asm volatile("nop")
+#else
+#   error unknown architecture
+#endif
+
 
 int
 main()
@@ -43,60 +46,268 @@ main()
     PUSH_POOL {
         TestObject *warm_up = [[TestObject alloc] init];
         testassert(warm_up);
-        warm_up = objc_retainAutoreleasedReturnValue(_objc_rootAutorelease(warm_up));
+        warm_up = objc_retainAutoreleasedReturnValue(warm_up);
+        warm_up = objc_unsafeClaimAutoreleasedReturnValue(warm_up);
         [warm_up release];
         warm_up = nil;
     } POP_POOL;
 #endif
     
-    testprintf("Successful return autorelease handshake\n");
+    testprintf("  Successful +1 -> +1 handshake\n");
     
     PUSH_POOL {
         obj = [[TestObject alloc] init];
         testassert(obj);
         
-        did_dealloc = 0;
-        tmp = _objc_rootAutorelease(obj);
-#ifdef __arm__
-        asm volatile("mov r7, r7");
-#endif
+        TestRootRetain = 0;
+        TestRootRelease = 0;
+        TestRootAutorelease = 0;
+        TestRootDealloc = 0;
+
+        tmp = objc_autoreleaseReturnValue(obj);
+        MAGIC;
         tmp = objc_retainAutoreleasedReturnValue(tmp);
-        testassert(!did_dealloc);
+
+        testassert(TestRootDealloc == 0);
+        testassert(TestRootRetain == 0);
+        testassert(TestRootRelease == 0);
+        testassert(TestRootAutorelease == 0);
         
-        did_dealloc = 0;
         [tmp release];
-        testassert(did_dealloc);
-        
-        did_dealloc = 0;
+        testassert(TestRootDealloc == 1);
+        testassert(TestRootRetain == 0);
+        testassert(TestRootRelease == 1);
+        testassert(TestRootAutorelease == 0);
+
     } POP_POOL;
-    testassert(!did_dealloc);
     
-    
-    testprintf("Failed return autorelease handshake\n");
+    testprintf("Unsuccessful +1 -> +1 handshake\n");
     
     PUSH_POOL {
         obj = [[TestObject alloc] init];
         testassert(obj);
         
-        did_dealloc = 0;
-        tmp = _objc_rootAutorelease(obj);
-#ifdef __arm__
-        asm volatile("mov r6, r6");
-#elif __x86_64__
-        asm volatile("mov %rdi, %rdi");
-#endif
+        TestRootRetain = 0;
+        TestRootRelease = 0;
+        TestRootAutorelease = 0;
+        TestRootDealloc = 0;
+
+        tmp = objc_autoreleaseReturnValue(obj);
+        NOT_MAGIC;
         tmp = objc_retainAutoreleasedReturnValue(tmp);
-        testassert(!did_dealloc);
+
+        testassert(TestRootDealloc == 0);
+        testassert(TestRootRetain == 1);
+        testassert(TestRootRelease == 0);
+        testassert(TestRootAutorelease == 1);
         
-        did_dealloc = 0;
         [tmp release];
-        testassert(!did_dealloc);
-        
-        did_dealloc = 0;
+        testassert(TestRootDealloc == 0);
+        testassert(TestRootRetain == 1);
+        testassert(TestRootRelease == 1);
+        testassert(TestRootAutorelease == 1);
+
     } POP_POOL;
-    testassert(did_dealloc);
+    testassert(TestRootDealloc == 1);
+    testassert(TestRootRetain == 1);
+    testassert(TestRootRelease == 2);
+    testassert(TestRootAutorelease == 1);
+
+
+    testprintf("  Successful +0 -> +1 handshake\n");
+    
+    PUSH_POOL {
+        obj = [[TestObject alloc] init];
+        testassert(obj);
+        
+        TestRootRetain = 0;
+        TestRootRelease = 0;
+        TestRootAutorelease = 0;
+        TestRootDealloc = 0;
+
+        tmp = objc_retainAutoreleaseReturnValue(obj);
+        MAGIC;
+        tmp = objc_retainAutoreleasedReturnValue(tmp);
+
+        testassert(TestRootDealloc == 0);
+        testassert(TestRootRetain == 1);
+        testassert(TestRootRelease == 0);
+        testassert(TestRootAutorelease == 0);
+        
+        [tmp release];
+        testassert(TestRootDealloc == 0);
+        testassert(TestRootRetain == 1);
+        testassert(TestRootRelease == 1);
+        testassert(TestRootAutorelease == 0);
+
+        [tmp release];
+        testassert(TestRootDealloc == 1);
+        testassert(TestRootRetain == 1);
+        testassert(TestRootRelease == 2);
+        testassert(TestRootAutorelease == 0);
+
+    } POP_POOL;
+    
+    testprintf("Unsuccessful +0 -> +1 handshake\n");
+    
+    PUSH_POOL {
+        obj = [[TestObject alloc] init];
+        testassert(obj);
+        
+        TestRootRetain = 0;
+        TestRootRelease = 0;
+        TestRootAutorelease = 0;
+        TestRootDealloc = 0;
+
+        tmp = objc_retainAutoreleaseReturnValue(obj);
+        NOT_MAGIC;
+        tmp = objc_retainAutoreleasedReturnValue(tmp);
+
+        testassert(TestRootDealloc == 0);
+        testassert(TestRootRetain == 2);
+        testassert(TestRootRelease == 0);
+        testassert(TestRootAutorelease == 1);
+        
+        [tmp release];
+        testassert(TestRootDealloc == 0);
+        testassert(TestRootRetain == 2);
+        testassert(TestRootRelease == 1);
+        testassert(TestRootAutorelease == 1);
+
+        [tmp release];
+        testassert(TestRootDealloc == 0);
+        testassert(TestRootRetain == 2);
+        testassert(TestRootRelease == 2);
+        testassert(TestRootAutorelease == 1);
+
+    } POP_POOL;
+    testassert(TestRootDealloc == 1);
+    testassert(TestRootRetain == 2);
+    testassert(TestRootRelease == 3);
+    testassert(TestRootAutorelease == 1);
+
+
+    testprintf("  Successful +1 -> +0 handshake\n");
+    
+    PUSH_POOL {
+        obj = [[[TestObject alloc] init] retain];
+        testassert(obj);
+        
+        TestRootRetain = 0;
+        TestRootRelease = 0;
+        TestRootAutorelease = 0;
+        TestRootDealloc = 0;
+
+        tmp = objc_autoreleaseReturnValue(obj);
+        MAGIC;
+        tmp = objc_unsafeClaimAutoreleasedReturnValue(tmp);
+
+        testassert(TestRootDealloc == 0);
+        testassert(TestRootRetain == 0);
+        testassert(TestRootRelease == 1);
+        testassert(TestRootAutorelease == 0);
+        
+        [tmp release];
+        testassert(TestRootDealloc == 1);
+        testassert(TestRootRetain == 0);
+        testassert(TestRootRelease == 2);
+        testassert(TestRootAutorelease == 0);
+
+    } POP_POOL;
+
+    testprintf("Unsuccessful +1 -> +0 handshake\n");
+    
+    PUSH_POOL {
+        obj = [[[TestObject alloc] init] retain];
+        testassert(obj);
+        
+        TestRootRetain = 0;
+        TestRootRelease = 0;
+        TestRootAutorelease = 0;
+        TestRootDealloc = 0;
+
+        tmp = objc_autoreleaseReturnValue(obj);
+        NOT_MAGIC;
+        tmp = objc_unsafeClaimAutoreleasedReturnValue(tmp);
+
+        testassert(TestRootDealloc == 0);
+        testassert(TestRootRetain == 0);
+        testassert(TestRootRelease == 0);
+        testassert(TestRootAutorelease == 1);
+        
+        [tmp release];
+        testassert(TestRootDealloc == 0);
+        testassert(TestRootRetain == 0);
+        testassert(TestRootRelease == 1);
+        testassert(TestRootAutorelease == 1);
+
+    } POP_POOL;
+    testassert(TestRootDealloc == 1);
+    testassert(TestRootRetain == 0);
+    testassert(TestRootRelease == 2);
+    testassert(TestRootAutorelease == 1);
 
     
+    testprintf("  Successful +0 -> +0 handshake\n");
+    
+    PUSH_POOL {
+        obj = [[TestObject alloc] init];
+        testassert(obj);
+        
+        TestRootRetain = 0;
+        TestRootRelease = 0;
+        TestRootAutorelease = 0;
+        TestRootDealloc = 0;
+
+        tmp = objc_retainAutoreleaseReturnValue(obj);
+        MAGIC;
+        tmp = objc_unsafeClaimAutoreleasedReturnValue(tmp);
+
+        testassert(TestRootDealloc == 0);
+        testassert(TestRootRetain == 0);
+        testassert(TestRootRelease == 0);
+        testassert(TestRootAutorelease == 0);
+        
+        [tmp release];
+        testassert(TestRootDealloc == 1);
+        testassert(TestRootRetain == 0);
+        testassert(TestRootRelease == 1);
+        testassert(TestRootAutorelease == 0);
+
+    } POP_POOL;
+
+    testprintf("Unsuccessful +0 -> +0 handshake\n");
+    
+    PUSH_POOL {
+        obj = [[TestObject alloc] init];
+        testassert(obj);
+        
+        TestRootRetain = 0;
+        TestRootRelease = 0;
+        TestRootAutorelease = 0;
+        TestRootDealloc = 0;
+
+        tmp = objc_retainAutoreleaseReturnValue(obj);
+        NOT_MAGIC;
+        tmp = objc_unsafeClaimAutoreleasedReturnValue(tmp);
+
+        testassert(TestRootDealloc == 0);
+        testassert(TestRootRetain == 1);
+        testassert(TestRootRelease == 0);
+        testassert(TestRootAutorelease == 1);
+        
+        [tmp release];
+        testassert(TestRootDealloc == 0);
+        testassert(TestRootRetain == 1);
+        testassert(TestRootRelease == 1);
+        testassert(TestRootAutorelease == 1);
+
+    } POP_POOL;
+    testassert(TestRootDealloc == 1);
+    testassert(TestRootRetain == 1);
+    testassert(TestRootRelease == 2);
+    testassert(TestRootAutorelease == 1);
+
     succeed(__FILE__);
     
     return 0;

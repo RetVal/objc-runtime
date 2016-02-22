@@ -23,11 +23,98 @@
 
 #include "objc-private.h"
 
-#include "objc-config.h"
-#include "objc-auto.h"
-#include "objc-accessors.h"
 
-#ifndef OBJC_NO_GC
+#if OBJC_NO_GC  &&  OBJC_NO_GC_API
+
+// No GC and no GC symbols needed. We're done here.
+
+#elif OBJC_NO_GC  &&  !OBJC_NO_GC_API
+
+// No GC but we do need to export GC symbols.
+// These are mostly the same as the OBJC_NO_GC inline versions in objc-auto.h.
+
+OBJC_EXPORT void objc_collect(unsigned long options __unused) { }
+OBJC_EXPORT BOOL objc_collectingEnabled(void) { return NO; }
+OBJC_EXPORT void objc_setCollectionThreshold(size_t threshold __unused) { }
+OBJC_EXPORT void objc_setCollectionRatio(size_t ratio __unused) { }
+OBJC_EXPORT void objc_startCollectorThread(void) { }
+
+#if TARGET_OS_WIN32
+OBJC_EXPORT BOOL objc_atomicCompareAndSwapPtr(id predicate, id replacement, volatile id *objectLocation) 
+    { void *original = InterlockedCompareExchangePointer((void * volatile *)objectLocation, (void *)replacement, (void *)predicate); return (original == predicate); }
+
+OBJC_EXPORT BOOL objc_atomicCompareAndSwapPtrBarrier(id predicate, id replacement, volatile id *objectLocation) 
+    { void *original = InterlockedCompareExchangePointer((void * volatile *)objectLocation, (void *)replacement, (void *)predicate); return (original == predicate); }
+#else
+OBJC_EXPORT BOOL objc_atomicCompareAndSwapPtr(id predicate, id replacement, volatile id *objectLocation) 
+    { return OSAtomicCompareAndSwapPtr((void *)predicate, (void *)replacement, (void * volatile *)objectLocation); }
+
+OBJC_EXPORT BOOL objc_atomicCompareAndSwapPtrBarrier(id predicate, id replacement, volatile id *objectLocation) 
+    { return OSAtomicCompareAndSwapPtrBarrier((void *)predicate, (void *)replacement, (void * volatile *)objectLocation); }
+#endif
+
+OBJC_EXPORT BOOL objc_atomicCompareAndSwapGlobal(id predicate, id replacement, volatile id *objectLocation) 
+    { return objc_atomicCompareAndSwapPtr(predicate, replacement, objectLocation); }
+
+OBJC_EXPORT BOOL objc_atomicCompareAndSwapGlobalBarrier(id predicate, id replacement, volatile id *objectLocation) 
+    { return objc_atomicCompareAndSwapPtrBarrier(predicate, replacement, objectLocation); }
+
+OBJC_EXPORT BOOL objc_atomicCompareAndSwapInstanceVariable(id predicate, id replacement, volatile id *objectLocation) 
+    { return objc_atomicCompareAndSwapPtr(predicate, replacement, objectLocation); }
+
+OBJC_EXPORT BOOL objc_atomicCompareAndSwapInstanceVariableBarrier(id predicate, id replacement, volatile id *objectLocation) 
+    { return objc_atomicCompareAndSwapPtrBarrier(predicate, replacement, objectLocation); }
+
+
+OBJC_EXPORT id objc_assign_strongCast(id val, id *dest) 
+    { return (*dest = val); }
+
+OBJC_EXPORT id objc_assign_global(id val, id *dest) 
+    { return (*dest = val); }
+
+OBJC_EXPORT id objc_assign_threadlocal(id val, id *dest)
+    { return (*dest = val); }
+
+OBJC_EXPORT id objc_assign_ivar(id val, id dest, ptrdiff_t offset) 
+    { return (*(id*)((char *)dest+offset) = val); }
+
+OBJC_EXPORT id objc_read_weak(id *location) 
+    { return *location; }
+
+OBJC_EXPORT id objc_assign_weak(id value, id *location) 
+    { return (*location = value); }
+
+OBJC_EXPORT void *objc_memmove_collectable(void *dst, const void *src, size_t size) 
+    { return memmove(dst, src, size); }
+
+OBJC_EXPORT void objc_finalizeOnMainThread(Class cls __unused) { }
+OBJC_EXPORT BOOL objc_is_finalized(void *ptr __unused) { return NO; }
+OBJC_EXPORT void objc_clear_stack(unsigned long options __unused) { }
+
+OBJC_EXPORT BOOL objc_collecting_enabled(void) { return NO; }
+OBJC_EXPORT void objc_set_collection_threshold(size_t threshold __unused) { } 
+OBJC_EXPORT void objc_set_collection_ratio(size_t ratio __unused) { } 
+OBJC_EXPORT void objc_start_collector_thread(void) { }
+
+OBJC_EXPORT id objc_allocate_object(Class cls, int extra) 
+    { return class_createInstance(cls, extra); }
+
+OBJC_EXPORT void objc_registerThreadWithCollector() { }
+OBJC_EXPORT void objc_unregisterThreadWithCollector() { }
+OBJC_EXPORT void objc_assertRegisteredThreadWithCollector() { }
+
+OBJC_EXPORT malloc_zone_t* objc_collect_init(int(*callback)() __unused) { return nil; }
+OBJC_EXPORT void* objc_collectableZone() { return nil; }
+
+OBJC_EXPORT BOOL objc_isAuto(id object __unused) { return NO; }
+OBJC_EXPORT BOOL objc_dumpHeap(char *filename __unused, unsigned long length __unused)
+    { return NO; }
+
+// OBJC_NO_GC && !OBJC_NO_GC_API
+#else
+// !OBJC_NO_GC
+
+// Garbage collection.
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -45,12 +132,15 @@
 #include <dispatch/private.h>
 
 #include "objc-private.h"
+#include "objc-config.h"
+#include "objc-accessors.h"
+#include "objc-auto.h"
 #include "objc-references.h"
 #include "maptable.h"
 #include "message.h"
 #include "objc-gdb.h"
 
-#if !defined(NDEBUG)  &&  !__OBJC2__
+#if DEBUG  &&  !__OBJC2__
 #include "objc-exception.h"
 #endif
 
@@ -58,10 +148,10 @@
 static auto_zone_t *gc_zone_init(void);
 static void gc_block_init(void);
 static void registeredClassTableInit(void);
-static BOOL objc_isRegisteredClass(Class candidate);
+static bool objc_isRegisteredClass(Class candidate);
 
 int8_t UseGC = -1;
-static BOOL WantsMainThreadFinalization = NO;
+static bool WantsMainThreadFinalization = NO;
 
 auto_zone_t *gc_zone = nil;
 
@@ -130,8 +220,8 @@ typedef struct BatchFinalizeBlock {
     auto_zone_foreach_object_t foreach;
     auto_zone_cursor_t cursor;
     size_t cursor_size;
-    volatile BOOL finished;
-    volatile BOOL started;
+    volatile bool finished;
+    volatile bool started;
     struct BatchFinalizeBlock *next;
 } BatchFinalizeBlock_t;
 
@@ -154,7 +244,7 @@ static void batchFinalizeOnMainThread(void);
 
 void objc_collect(unsigned long options) {
     if (!UseGC) return;
-    BOOL onMainThread = pthread_main_np() ? YES : NO;
+    bool onMainThread = pthread_main_np();
     
     // while we're here, sneak off and do some finalization work (if any)
     if (onMainThread) batchFinalizeOnMainThread();
@@ -171,7 +261,7 @@ void objc_collect(unsigned long options) {
         amode |= AUTO_ZONE_COLLECT_LOCAL_COLLECTION;
     }
     if (options & OBJC_WAIT_UNTIL_DONE) {
-        __block BOOL done = NO;
+        __block bool done = NO;
         // If executing on the main thread, use the main thread work queue condition to block,
         // so main thread finalization can complete. Otherwise, use a thread-local condition.
         pthread_mutex_t localMutex = PTHREAD_MUTEX_INITIALIZER, *mutex = &localMutex;
@@ -565,7 +655,7 @@ static bool batchFinalize(auto_zone_t *zone,
                           size_t cursor_size,
                           void (*finalizeAnObject)(void *, void*))
 {
-#if !defined(NDEBUG)  &&  !__OBJC2__
+#if DEBUG  &&  !__OBJC2__
     // debug: don't call try/catch before exception handlers are installed
     objc_exception_functions_t table = {};
     objc_exception_get_functions(&table);
@@ -737,12 +827,12 @@ static void _NSResurrectedObject_finalize(id self, SEL _cmd) {
     _objc_rootFinalize(self);
 }
 
-static BOOL _NSResurrectedObject_resolveInstanceMethod(id self, SEL _cmd, SEL name) {
+static bool _NSResurrectedObject_resolveInstanceMethod(id self, SEL _cmd, SEL name) {
     class_addMethod((Class)self, name, (IMP)_NSResurrectedObject_instanceMethod, "@@:");
     return YES;
 }
 
-static BOOL _NSResurrectedObject_resolveClassMethod(id self, SEL _cmd, SEL name) {
+static bool _NSResurrectedObject_resolveClassMethod(id self, SEL _cmd, SEL name) {
     class_addMethod(self->ISA(), name, (IMP)_NSResurrectedObject_classMethod, "@@:");
     return YES;
 }
@@ -792,7 +882,7 @@ static const char* objc_name_for_object(auto_zone_t *zone, void *object) {
 * Collection support
 **********************************************************************/
 
-static BOOL objc_isRegisteredClass(Class candidate);
+static bool objc_isRegisteredClass(Class candidate);
 
 static const unsigned char *objc_layout_for_address(auto_zone_t *zone, void *address) {
     id object = (id)address;
@@ -892,7 +982,7 @@ void objc_assertRegisteredThreadWithCollector()
 }
 
 // Always called by _objcInit, even if GC is off.
-void gc_init(BOOL wantsGC)
+void gc_init(bool wantsGC)
 {
     assert(UseGC == -1);
     UseGC = wantsGC;
@@ -1011,7 +1101,7 @@ static void registeredClassTableInit() {
 
 // Verify that a particular pointer is to a class.
 // Safe from any thread anytime
-static BOOL objc_isRegisteredClass(Class candidate) {
+static bool objc_isRegisteredClass(Class candidate) {
     assert(UseGC);
     // nil is never a valid ISA.
     if (candidate == nil) return NO;
@@ -1336,7 +1426,5 @@ static char *name_for_address(auto_zone_t *zone, vm_address_t base, vm_address_t
 }
 
 
-
-
-
+// not OBJC_NO_GC
 #endif

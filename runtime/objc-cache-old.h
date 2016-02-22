@@ -32,7 +32,7 @@ extern IMP _cache_getImp(Class cls, SEL sel);
 extern Method _cache_getMethod(Class cls, SEL sel, IMP objc_msgForward_internal_imp);
 
 extern void flush_cache(Class cls);
-extern BOOL _cache_fill(Class cls, Method meth, SEL sel);
+extern bool _cache_fill(Class cls, Method meth, SEL sel);
 extern void _cache_addForwardEntry(Class cls, SEL sel);
 extern IMP  _cache_addIgnoredEntry(Class cls, SEL sel);
 extern void _cache_free(Cache cache);

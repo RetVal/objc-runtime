@@ -47,10 +47,6 @@ void *thread(void *arg)
 
 int main()
 {
-#if TARGET_IPHONE_SIMULATOR
-    testwarn("simulator hangs calling dlopen() from +load");
-    succeed(__FILE__);
-#else
     pthread_t t[COUNT];
     uintptr_t i;
 
@@ -66,5 +62,4 @@ int main()
     testassert(state == COUNT*26);
 
     succeed(__FILE__);
-#endif
 }

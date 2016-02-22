@@ -1,6 +1,7 @@
-// TEST_CFLAGS -framework Foundation
-
 /* 
+need exception-safe ARC for exception deallocation tests 
+TEST_CFLAGS -fobjc-arc-exceptions -framework Foundation
+
 llvm-gcc unavoidably warns about our deliberately out-of-order handlers
 
 TEST_BUILD_OUTPUT

@@ -34,11 +34,6 @@
 #include "objc-runtime-old.h"
 #include "objcrt.h"
 
-malloc_zone_t *_objc_internal_zone(void) 
-{ 
-    return NULL; 
-}
-
 int monitor_init(monitor_t *c) 
 {
     // fixme error checking
@@ -122,7 +117,7 @@ WINBOOL APIENTRY DllMain( HMODULE hModule,
 
 OBJC_EXPORT void *_objc_init_image(HMODULE image, const objc_sections *sects)
 {
-    header_info *hi = _malloc_internal(sizeof(header_info));
+    header_info *hi = malloc(sizeof(header_info));
     size_t count, i;
 
     hi->mhdr = (const headerType *)image;
@@ -195,55 +190,12 @@ bool crashlog_header_name(header_info *hi)
 #include "objc-file-old.h"
 #include "objc-file.h"
 
-void mutex_init(mutex_t *m)
-{
-    pthread_mutex_init(m, NULL);
-}
-
-
-void recursive_mutex_init(recursive_mutex_t *m)
-{
-    // fixme error checking
-    pthread_mutex_t *newmutex;
-
-    // Build recursive mutex attributes, if needed
-    static pthread_mutexattr_t *attr;
-    if (!attr) {
-        pthread_mutexattr_t *newattr = (pthread_mutexattr_t *)
-            _malloc_internal(sizeof(pthread_mutexattr_t));
-        pthread_mutexattr_init(newattr);
-        pthread_mutexattr_settype(newattr, PTHREAD_MUTEX_RECURSIVE);
-        while (!attr) {
-            if (OSAtomicCompareAndSwapPtrBarrier(0, newattr, (void**)&attr)) {
-                // we win
-                goto attr_done;
-            }
-        }
-        // someone else built the attr first
-        _free_internal(newattr);
-    }
- attr_done:
-
-    // Build the mutex itself
-    newmutex = (pthread_mutex_t *)_malloc_internal(sizeof(pthread_mutex_t));
-    pthread_mutex_init(newmutex, attr);
-    while (!m->mutex) {
-        if (OSAtomicCompareAndSwapPtrBarrier(0, newmutex, (void**)&m->mutex)) {
-            // we win
-            return;
-        }
-    }
-    
-    // someone else installed their mutex first
-    pthread_mutex_destroy(newmutex);
-}
-
 
 /***********************************************************************
 * bad_magic.
 * Return YES if the header has invalid Mach-o magic.
 **********************************************************************/
-BOOL bad_magic(const headerType *mhdr)
+bool bad_magic(const headerType *mhdr)
 {
     return (mhdr->magic != MH_MAGIC  &&  mhdr->magic != MH_MAGIC_64  &&  
             mhdr->magic != MH_CIGAM  &&  mhdr->magic != MH_CIGAM_64);
@@ -277,7 +229,7 @@ static header_info * addHeader(const headerType *mhdr)
             _objc_inform("PREOPTIMIZATION: honoring preoptimized header info at %p for %s", hi, hi->fname);
         }
 
-# if !NDEBUG
+# if DEBUG
         // Verify image_info
         size_t info_size = 0;
         const objc_image_info *image_info = _getObjcImageInfo(mhdr,&info_size);
@@ -302,7 +254,7 @@ static header_info * addHeader(const headerType *mhdr)
         if (!objc_segment  &&  !image_info) return NULL;
 
         // Allocate a header_info entry.
-        hi = (header_info *)_calloc_internal(sizeof(header_info), 1);
+        hi = (header_info *)calloc(sizeof(header_info), 1);
 
         // Set up the new header_info entry.
         hi->mhdr = mhdr;
@@ -399,7 +351,7 @@ linksToLibrary(const header_info *hi, const char *name)
 * all already-loaded libraries support the executable's GC mode.
 * Returns TRUE if the executable wants GC on.
 **********************************************************************/
-static void check_wants_gc(BOOL *appWantsGC)
+static void check_wants_gc(bool *appWantsGC)
 {
     const header_info *hi;
 
@@ -416,7 +368,7 @@ static void check_wants_gc(BOOL *appWantsGC)
         *appWantsGC = NO;
         for (hi = FirstHeader; hi != NULL; hi = hi->next) {
             if (hi->mhdr->filetype == MH_EXECUTE) {
-                *appWantsGC = _objcHeaderSupportsGC(hi) ? YES : NO;
+                *appWantsGC = _objcHeaderSupportsGC(hi);
 
                 if (PrintGC) {
                     _objc_inform("GC: executable '%s' %s",
@@ -461,10 +413,10 @@ static void check_wants_gc(BOOL *appWantsGC)
 * if we want gc, verify that every header describes files compiled
 * and presumably ready for gc.
 ************************************************************************/
-static void verify_gc_readiness(BOOL wantsGC,
+static void verify_gc_readiness(bool wantsGC,
                                 header_info **hList, uint32_t hCount)
 {
-    BOOL busted = NO;
+    bool busted = NO;
     uint32_t i;
 
     // Find the libraries and check their GC bits against the app's request
@@ -516,7 +468,7 @@ static void verify_gc_readiness(BOOL wantsGC,
 * Images linked to the executable are always permitted; they are 
 * enforced inside map_images() itself.
 **********************************************************************/
-static BOOL InitialDyldRegistration = NO;
+static bool InitialDyldRegistration = NO;
 static const char *gc_enforcer(enum dyld_image_states state, 
                                uint32_t infoCount, 
                                const struct dyld_image_info info[])
@@ -603,41 +555,6 @@ static const char *gc_enforcer(enum dyld_image_states state,
 #endif
 
 
-
-/***********************************************************************
-* getSDKVersion
-* Look up the build-time SDK version for an image.
-* Version X.Y.Z is encoded as 0xXXXXYYZZ.
-* Images without the load command are assumed to be old (version 0.0.0).
-**********************************************************************/
-#if TARGET_OS_IPHONE
-    // Simulator binaries encode an iOS version
-#   define LC_VERSION_MIN LC_VERSION_MIN_IPHONEOS
-#elif TARGET_OS_MAC
-#   define LC_VERSION_MIN LC_VERSION_MIN_MACOSX
-#else
-#   error unknown OS
-#endif
-
-static uint32_t 
-getSDKVersion(const header_info *hi)
-{
-    const struct version_min_command *cmd;
-    unsigned long i;
-    
-    cmd = (const struct version_min_command *) (hi->mhdr + 1);
-    for (i = 0; i < hi->mhdr->ncmds; i++){
-        if (cmd->cmd == LC_VERSION_MIN  &&  cmd->cmdsize >= 16) {
-            return cmd->sdk;
-        }
-        cmd = (const struct version_min_command *)((char *)cmd + cmd->cmdsize);
-    }
-
-    // Lack of version load command is assumed to be old.
-    return 0;
-}
-
-
 /***********************************************************************
 * map_images_nolock
 * Process the given images which are being mapped in by dyld.
@@ -659,8 +576,8 @@ const char *
 map_images_nolock(enum dyld_image_states state, uint32_t infoCount,
                   const struct dyld_image_info infoList[])
 {
-    static BOOL firstTime = YES;
-    static BOOL wantsGC = NO;
+    static bool firstTime = YES;
+    static bool wantsGC = NO;
     uint32_t i;
     header_info *hi;
     header_info *hList[infoCount];
@@ -695,10 +612,8 @@ map_images_nolock(enum dyld_image_states state, uint32_t infoCount,
             // no objc data in this entry
             continue;
         }
-        if (mhdr->filetype == MH_EXECUTE) {
-            // Record main executable's build SDK version
-            AppSDKVersion = getSDKVersion(hi);
 
+        if (mhdr->filetype == MH_EXECUTE) {
             // Size some data structures based on main executable's size
 #if __OBJC2__
             size_t count;
@@ -752,6 +667,12 @@ map_images_nolock(enum dyld_image_states state, uint32_t infoCount,
             seg = getsegmentdata(hi->mhdr, "__DATA", &seg_size);
             if (seg) gc_register_datasegment((uintptr_t)seg, seg_size);
 
+            seg = getsegmentdata(hi->mhdr, "__DATA_CONST", &seg_size);
+            if (seg) gc_register_datasegment((uintptr_t)seg, seg_size);
+
+            seg = getsegmentdata(hi->mhdr, "__DATA_DIRTY", &seg_size);
+            if (seg) gc_register_datasegment((uintptr_t)seg, seg_size);
+
             seg = getsegmentdata(hi->mhdr, "__OBJC", &seg_size);
             if (seg) gc_register_datasegment((uintptr_t)seg, seg_size);
             // __OBJC contains no GC data, but pointers to it are 
@@ -780,23 +701,20 @@ map_images_nolock(enum dyld_image_states state, uint32_t infoCount,
 *
 * Locking: loadMethodLock(both) and runtimeLock(new) acquired by load_images
 **********************************************************************/
-BOOL 
+bool 
 load_images_nolock(enum dyld_image_states state,uint32_t infoCount,
                    const struct dyld_image_info infoList[])
 {
-    BOOL found = NO;
+    bool found = NO;
     uint32_t i;
 
     i = infoCount;
     while (i--) {
-        header_info *hi;
-        for (hi = FirstHeader; hi != NULL; hi = hi->next) {
-            const headerType *mhdr = (headerType*)infoList[i].imageLoadAddress;
-            if (hi->mhdr == mhdr) {
-                prepare_load_methods(hi);
-                found = YES;
-            }
-        }
+        const headerType *mhdr = (headerType*)infoList[i].imageLoadAddress;
+        if (!hasLoadMethods(mhdr)) continue;
+
+        prepare_load_methods(mhdr);
+        found = YES;
     }
 
     return found;
@@ -845,6 +763,12 @@ unmap_image_nolock(const struct mach_header *mh)
         seg = getsegmentdata(hi->mhdr, "__DATA", &seg_size);
         if (seg) gc_unregister_datasegment((uintptr_t)seg, seg_size);
 
+        seg = getsegmentdata(hi->mhdr, "__DATA_CONST", &seg_size);
+        if (seg) gc_unregister_datasegment((uintptr_t)seg, seg_size);
+
+        seg = getsegmentdata(hi->mhdr, "__DATA_DIRTY", &seg_size);
+        if (seg) gc_unregister_datasegment((uintptr_t)seg, seg_size);
+
         seg = getsegmentdata(hi->mhdr, "__OBJC", &seg_size);
         if (seg) gc_unregister_datasegment((uintptr_t)seg, seg_size);
     }
@@ -854,7 +778,25 @@ unmap_image_nolock(const struct mach_header *mh)
 
     // Remove header_info from header list
     removeHeader(hi);
-    _free_internal(hi);
+    free(hi);
+}
+
+
+/***********************************************************************
+* static_init
+* Run C++ static constructor functions.
+* libc calls _objc_init() before dyld would call our static constructors, 
+* so we have to do it ourselves.
+**********************************************************************/
+static void static_init()
+{
+#if __OBJC2__
+    size_t count;
+    Initializer *inits = getLibobjcInitializers(&_mh_dylib_header, &count);
+    for (size_t i = 0; i < count; i++) {
+        inits[i]();
+    }
+#endif
 }
 
 
@@ -864,6 +806,7 @@ unmap_image_nolock(const struct mach_header *mh)
 * Old ABI: called by dyld as a library initializer
 * New ABI: called by libSystem BEFORE library initialization time
 **********************************************************************/
+
 #if !__OBJC2__
 static __attribute__((constructor))
 #endif
@@ -876,13 +819,14 @@ void _objc_init(void)
     // fixme defer initialization until an objc-using image is found?
     environ_init();
     tls_init();
+    static_init();
     lock_init();
     exception_init();
         
     // Register for unmap first, in case some +load unmaps something
     _dyld_register_func_for_remove_image(&unmap_image);
     dyld_register_image_state_change_handler(dyld_image_state_bound,
-                                             1/*batch*/, &map_images);
+                                             1/*batch*/, &map_2_images);
     dyld_register_image_state_change_handler(dyld_image_state_dependents_initialized, 0/*not batch*/, &load_images);
 }
 
@@ -894,24 +838,23 @@ void _objc_init(void)
 static const header_info *_headerForAddress(void *addr)
 {
 #if __OBJC2__
-    const char *segname = "__DATA";
+    const char *segnames[] = { "__DATA", "__DATA_CONST", "__DATA_DIRTY" };
 #else
-    const char *segname = "__OBJC";
+    const char *segnames[] = { "__OBJC" };
 #endif
     header_info *hi;
 
-    // Check all headers in the vector
-    for (hi = FirstHeader; hi != NULL; hi = hi->next)
-    {
-        uint8_t *seg;
-        unsigned long seg_size;
-
-        seg = getsegmentdata(hi->mhdr, segname, &seg_size);
-        if (!seg) continue;
-
-        // Is the class in this header?
-        if ((uint8_t *)addr >= seg  &&  (uint8_t *)addr < seg + seg_size)
-            return hi;
+    for (hi = FirstHeader; hi != NULL; hi = hi->next) {
+        for (size_t i = 0; i < sizeof(segnames)/sizeof(segnames[0]); i++) {
+            unsigned long seg_size;            
+            uint8_t *seg = getsegmentdata(hi->mhdr, segnames[i], &seg_size);
+            if (!seg) continue;
+            
+            // Is the class in this header?
+            if ((uint8_t *)addr >= seg  &&  (uint8_t *)addr < seg + seg_size) {
+                return hi;
+            }
+        }
     }
 
     // Not found
@@ -945,8 +888,8 @@ int secure_open(const char *filename, int flags, uid_t euid)
 {
     struct stat fs, ls;
     int fd = -1;
-    BOOL truncate = NO;
-    BOOL create = NO;
+    bool truncate = NO;
+    bool create = NO;
 
     if (flags & O_TRUNC) {
         // Don't truncate the file until after it is open and verified.
@@ -1011,27 +954,6 @@ int secure_open(const char *filename, int flags, uid_t euid)
             return -1;
         }
     }
-}
-
-
-/***********************************************************************
-* _objc_internal_zone.
-* Malloc zone for internal runtime data.
-* By default this is the default malloc zone, but a dedicated zone is 
-* used if environment variable OBJC_USE_INTERNAL_ZONE is set.
-**********************************************************************/
-malloc_zone_t *_objc_internal_zone(void)
-{
-    static malloc_zone_t *z = (malloc_zone_t *)-1;
-    if (z == (malloc_zone_t *)-1) {
-        if (UseInternalZone) {
-            z = malloc_create_zone(vm_page_size, 0);
-            malloc_set_zone_name(z, "ObjC_Internal");
-        } else {
-            z = malloc_default_zone();
-        }
-    }
-    return z;
 }
 
 

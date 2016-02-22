@@ -48,13 +48,6 @@
 #endif
 
 
-/* GC is unsupported on some architectures. */
-
-#if TARGET_OS_EMBEDDED  ||  TARGET_OS_IPHONE  ||  TARGET_OS_WIN32
-#   define OBJC_NO_GC 1
-#endif
-
-
 /* objc_collect() options */
 enum {
     // choose one
@@ -211,6 +204,9 @@ __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_4,__MAC_10_4, __IPHONE_NA,__IPHONE_NA);
 
 static OBJC_INLINE void objc_collect(unsigned long options __unused) { }
 static OBJC_INLINE BOOL objc_collectingEnabled(void) { return NO; }
+#if TARGET_OS_MAC  &&  !TARGET_OS_EMBEDDED  &&  !TARGET_IPHONE_SIMULATOR
+static OBJC_INLINE malloc_zone_t *objc_collectableZone(void) { return nil; }
+#endif
 static OBJC_INLINE void objc_setCollectionThreshold(size_t threshold __unused) { }
 static OBJC_INLINE void objc_setCollectionRatio(size_t ratio __unused) { }
 static OBJC_INLINE void objc_startCollectorThread(void) { }
@@ -252,6 +248,9 @@ static OBJC_INLINE id objc_assign_strongCast(id val, id *dest)
     { return (*dest = val); }
 
 static OBJC_INLINE id objc_assign_global(id val, id *dest) 
+    { return (*dest = val); }
+
+static OBJC_INLINE id objc_assign_threadlocal(id val, id *dest) 
     { return (*dest = val); }
 
 static OBJC_INLINE id objc_assign_ivar(id val, id dest, ptrdiff_t offset) 

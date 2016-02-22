@@ -9,18 +9,21 @@
 #   define RR_RETAIN(o) [o retain]
 #   define RR_RELEASE(o) [o release]
 #   define RR_AUTORELEASE(o) [o autorelease]
+#   define RR_RETAINCOUNT(o) [o retainCount]
 #else
 #   define RR_PUSH() _objc_autoreleasePoolPush()
 #   define RR_POP(p) _objc_autoreleasePoolPop(p)
 #   define RR_RETAIN(o) _objc_rootRetain((id)o)
 #   define RR_RELEASE(o) _objc_rootRelease((id)o)
 #   define RR_AUTORELEASE(o) _objc_rootAutorelease((id)o)
+#   define RR_RETAINCOUNT(o) _objc_rootRetainCount((id)o)
 #endif
 
 #include <objc/objc-internal.h>
 #include <Foundation/Foundation.h>
 
 static int state;
+static pthread_attr_t smallstack;
 
 #define NESTED_COUNT 8
 
@@ -96,6 +99,9 @@ void *autorelease_lots_fn(void *singlePool)
 
     id obj = RR_AUTORELEASE([[Deallocator alloc] init]);
 
+    // last pool has only 1 autorelease in it
+    pools[p++] = RR_PUSH();
+
     for (int i = 0; i < COUNT; i++) {
         if (rand() % 1000 == 0  &&  !singlePool) {
             pools[p++] = RR_PUSH();
@@ -109,6 +115,7 @@ void *autorelease_lots_fn(void *singlePool)
         RR_POP(pools[p]);
     }
     testassert(state == 0);
+    testassert(RR_RETAINCOUNT(obj) == 1);
     RR_POP(pools[0]);
     testassert(state == 1);
     free(pools);
@@ -173,6 +180,30 @@ void cycle(void)
         testassert(state == 1);
     }
 
+
+    // Autorelease with no pool.
+    testprintf("-- Autorelease with no pool.\n");
+    {
+        state = 0;
+        testonthread(^{
+            RR_AUTORELEASE([[Deallocator alloc] init]);
+        });
+        testassert(state == 1);
+    }
+
+    // Autorelease with no pool after popping the top-level pool.
+    testprintf("-- Autorelease with no pool after popping the last pool.\n");
+    {
+        state = 0;
+        testonthread(^{
+            void *pool = RR_PUSH();
+            RR_AUTORELEASE([[Deallocator alloc] init]);
+            RR_POP(pool);
+            RR_AUTORELEASE([[Deallocator alloc] init]);
+        });
+        testassert(state == 2);
+    }
+
     // Top-level thread pool not popped.
     // The runtime should clean it up.
 #if FOUNDATION
@@ -214,32 +245,39 @@ void cycle(void)
         testassert(state == 1);
     }
 #endif
-
-
-#if !FOUNDATION
-    // NSThread calls NSPopAutoreleasePool(0)
-    // rdar://9167170 but that currently breaks CF
-    {
-        static bool warned;
-        if (!warned) testwarn("rdar://9167170 ignore NSPopAutoreleasePool(0)");
-        warned = true;
-    }
-    /*
-    testprintf("-- pop(0).\n");
-    {
-        RR_PUSH();
-        state = 0;
-        RR_AUTORELEASE([[AutoreleaseDuringDealloc alloc] init]);
-        testassert(state == 0);
-        RR_POP(0);
-        testassert(state == 2);
-    }
-    */
-#endif
 }
+
+
+static void
+slow_cycle(void)
+{
+    // Large autorelease stack.
+    // Do this only once because it's slow.
+    testprintf("-- Large autorelease stack.\n");
+    {
+        // limit stack size: autorelease pop should not be recursive
+        pthread_t th;
+        pthread_create(&th, &smallstack, &autorelease_lots_fn, NULL);
+        pthread_join(th, NULL);
+    }
+
+    // Single large autorelease pool.
+    // Do this only once because it's slow.
+    testprintf("-- Large autorelease pool.\n");
+    {
+        // limit stack size: autorelease pop should not be recursive
+        pthread_t th;
+        pthread_create(&th, &smallstack, &autorelease_lots_fn, (void*)1);
+        pthread_join(th, NULL);
+    }
+}
+
 
 int main()
 {
+    pthread_attr_init(&smallstack);
+    pthread_attr_setstacksize(&smallstack, 16384);
+
     // inflate the refcount side table so it doesn't show up in leak checks
     {
         int count = 10000;
@@ -270,45 +308,46 @@ int main()
     }
 #endif
 
-
-    pthread_attr_t smallstack;
-    pthread_attr_init(&smallstack);
-    pthread_attr_setstacksize(&smallstack, 4096*4);
-
-    for (int i = 0; i < 100; i++) {
-        cycle();
-    }
-
-    leak_mark();
-
-    for (int i = 0; i < 1000; i++) {
-        cycle();
-    }
-
-    leak_check(0);
-
-    // Large autorelease stack.
-    // Do this only once because it's slow.
-    testprintf("-- Large autorelease stack.\n");
+    // preheat
     {
-        // limit stack size: autorelease pop should not be recursive
-        pthread_t th;
-        pthread_create(&th, &smallstack, &autorelease_lots_fn, NULL);
-        pthread_join(th, NULL);
+        for (int i = 0; i < 100; i++) {
+            cycle();
+        }
+        
+        slow_cycle();
     }
-
-    // Single large autorelease pool.
-    // Do this only once because it's slow.
-    testprintf("-- Large autorelease pool.\n");
+    
+    // check for leaks using top-level pools
     {
-        // limit stack size: autorelease pop should not be recursive
-        pthread_t th;
-        pthread_create(&th, &smallstack, &autorelease_lots_fn, (void*)1);
-        pthread_join(th, NULL);
+        leak_mark();
+        
+        for (int i = 0; i < 1000; i++) {
+            cycle();
+        }
+        
+        leak_check(0);
+        
+        slow_cycle();
+        
+        leak_check(0);
     }
-
-    leak_check(0);
-
+    
+    // check for leaks using pools not at top level
+    void *pool = RR_PUSH();
+    {
+        leak_mark();
+        
+        for (int i = 0; i < 1000; i++) {
+            cycle();
+        }
+        
+        leak_check(0);
+        
+        slow_cycle();
+        
+        leak_check(0);
+    }
+    RR_POP(pool);
 
     // NSThread.
     // Can't leak check this because it's too noisy.

@@ -23,7 +23,7 @@ int main()
     bzero(buf, malloc_size(buf));
     testassert(object_setClass(obj, [TestRoot class]) == nil);
 
-    testassert(object_getClass(obj) == buf[0]);
+    testassert(object_getClass(obj) == [TestRoot class]);
     testassert(object_getClass([TestRoot class]) == object_getClass([TestRoot class]));
     testassert(object_getClass(nil) == Nil);
 

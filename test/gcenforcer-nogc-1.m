@@ -1,7 +1,7 @@
 // gc-off app loading gc-off dylib: should work
 
 /*
-TEST_CONFIG MEM=mrc,arc SDK=macos
+TEST_CONFIG MEM=mrc,arc OS=macosx
 
 TEST_BUILD
     $C{COMPILE_C} $DIR/gc.c -dynamiclib -o libnoobjc.dylib

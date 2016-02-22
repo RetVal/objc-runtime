@@ -43,6 +43,7 @@
 // to get the critical regions for which method caches 
 // cannot be garbage collected.
 
+.align 4
 .private_extern	_objc_entryPoints
 _objc_entryPoints:
 	.quad	_cache_getImp
@@ -446,12 +447,10 @@ LExit$0:
 
 1:
 	// loop
-	cmpq	$$0, (%r10)
-	je	LCacheMiss_f		// if (bucket->sel == 0) cache miss
-	cmpq	16(%r11), %r10
-	je	3f			// if (bucket == cache->buckets) wrap
+	cmpq	$$1, (%r10)
+	jbe	3f			// if (bucket->sel <= 1) wrap or miss
 
-	subq	$$16, %r10		// bucket--
+	addq	$$16, %r10		// bucket++
 2:	
 .if $0 != STRET  &&  $0 != SUPER_STRET  &&  $0 != SUPER2_STRET
 	cmpq	(%r10), %a2		// if (bucket->sel != _cmd)
@@ -463,22 +462,21 @@ LExit$0:
 	CacheHit $0			// call or return imp
 
 3:
+	// wrap or miss
+	jb	LCacheMiss_f		// if (bucket->sel < 1) cache miss
 	// wrap
-	movl	24(%r11), %r10d		// r10 = mask a.k.a. last bucket index
-	shlq	$$4, %r10		// r10 = offset = mask<<4
-	addq	16(%r11), %r10		// r10 = &cache->buckets[mask]
+	movq	8(%r10), %r10		// bucket->imp is really first bucket
 	jmp 	2f
 
-	// clone scanning loop to crash instead of hang when cache is corrupt
+	// Clone scanning loop to miss instead of hang when cache is corrupt.
+	// The slow path may detect any corruption and halt later.
 
 1:
 	// loop
-	cmpq	$$0, (%r10)
-	je	LCacheMiss_f		// if (bucket->sel == 0) cache miss
-	cmpq	16(%r11), %r10
-	je	3f			// if (bucket == cache->buckets) wrap
+	cmpq	$$1, (%r10)
+	jbe	3f			// if (bucket->sel <= 1) wrap or miss
 
-	subq	$$16, %r10		// bucket--
+	addq	$$16, %r10		// bucket++
 2:	
 .if $0 != STRET  &&  $0 != SUPER_STRET  &&  $0 != SUPER2_STRET
 	cmpq	(%r10), %a2		// if (bucket->sel != _cmd)
@@ -490,21 +488,8 @@ LExit$0:
 	CacheHit $0			// call or return imp
 
 3:
-	// double wrap - busted
-.if $0 == STRET  ||  $0 == SUPER_STRET  ||  $0 == SUPER2_STRET
-	movq	%a2, %a1
-	movq	%a3, %a2
-.elseif $0 == GETIMP
-	movq	$$0, %a1
-.endif
-				// a1 = receiver
-				// a2 = SEL
-	movq	%r11, %a3	// a3 = isa
-.if $0 == GETIMP
-	jmp	_cache_getImp_corrupt_cache_error
-.else
-	jmp	_objc_msgSend_corrupt_cache_error
-.endif
+	// double wrap or miss
+	jmp	LCacheMiss_f
 
 .endmacro
 
@@ -1149,5 +1134,50 @@ LCacheMiss:
 .section __DATA,__objc_msg_break
 .quad 0
 .quad 0
+
+
+	// Workaround for Skype evil (rdar://19715989)
+
+	.text
+	.align 4
+	.private_extern _map_images
+	.private_extern _map_2_images
+	.private_extern _hax
+_hax:	
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+_map_images:
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	jmp _map_2_images
 
 #endif

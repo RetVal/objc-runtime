@@ -1,5 +1,14 @@
 // TEST_CONFIG
 
+#if USE_FOUNDATION
+#include <Foundation/Foundation.h>
+#define SUPERCLASS NSObject
+#define FILENAME "nscdtors.mm"
+#else
+#define SUPERCLASS TestRoot
+#define FILENAME "cdtors.mm"
+#endif
+
 #include "test.h"
 
 #include <pthread.h>
@@ -41,7 +50,7 @@ class cxx2 {
 */
 
 
-@interface CXXBase : TestRoot {
+@interface CXXBase : SUPERCLASS {
     cxx1 baseIvar;
 }
 @end
@@ -165,13 +174,30 @@ void test_inplace(void)
 }
 
 
+#if __has_feature(objc_arc) 
+
 void test_batch(void) 
 {
-#if __has_feature(objc_arc) 
     // not converted to ARC yet
     return;
+}
+
 #else
 
+// Like class_createInstances(), but refuses to accept zero allocations
+static unsigned 
+reallyCreateInstances(Class cls, size_t extraBytes, id *dst, unsigned want)
+{
+    unsigned count;
+    while (0 == (count = class_createInstances(cls, extraBytes, dst, want))) {
+        testprintf("class_createInstances created nothing; retrying\n");
+        RELEASE_VALUE([[TestRoot alloc] init]);
+    }
+    return count;
+}
+
+void test_batch(void) 
+{
     id o2[100];
     unsigned int count, i;
 
@@ -185,7 +211,7 @@ void test_batch(void)
     }
 
     ctors1 = dtors1 = ctors2 = dtors2 = 0;
-    count = class_createInstances([TestRoot class], 0, o2, 10);
+    count = reallyCreateInstances([TestRoot class], 0, o2, 10);
     testassert(count > 0);
     testassert(ctors1 == 0  &&  dtors1 == 0  &&  
                ctors2 == 0  &&  dtors2 == 0);
@@ -201,7 +227,7 @@ void test_batch(void)
     }
     
     ctors1 = dtors1 = ctors2 = dtors2 = 0;
-    count = class_createInstances([CXXBase class], 0, o2, 10);
+    count = reallyCreateInstances([CXXBase class], 0, o2, 10);
     testassert(count > 0);
     testassert(ctors1 == count  &&  dtors1 == 0  &&  
                ctors2 == 0  &&  dtors2 == 0);
@@ -217,7 +243,7 @@ void test_batch(void)
     }
     
     ctors1 = dtors1 = ctors2 = dtors2 = 0;
-    count = class_createInstances([NoCXXSub class], 0, o2, 10);
+    count = reallyCreateInstances([NoCXXSub class], 0, o2, 10);
     testassert(count > 0);
     testassert(ctors1 == count  &&  dtors1 == 0  &&  
                ctors2 == 0  &&  dtors2 == 0);
@@ -233,7 +259,7 @@ void test_batch(void)
     }
     
     ctors1 = dtors1 = ctors2 = dtors2 = 0;
-    count = class_createInstances([CXXSub class], 0, o2, 10);
+    count = reallyCreateInstances([CXXSub class], 0, o2, 10);
     testassert(count > 0);
     testassert(ctors1 == count  &&  dtors1 == 0  &&  
                ctors2 == count  &&  dtors2 == 0);
@@ -242,20 +268,38 @@ void test_batch(void)
     testcollect();
     testassert(ctors1 == count  &&  dtors1 == count  &&  
                ctors2 == count  &&  dtors2 == count);
-#endif
 }
+
+// not ARC
+#endif
+
 
 int main()
 {
+    if (objc_collectingEnabled()) {
+        testwarn("rdar://19042235 test disabled in GC because it is slow");
+        succeed(FILENAME);
+    }
+
+    for (int i = 0; i < 1000; i++) {
+        testonthread(^{ test_single(); });
+        testonthread(^{ test_inplace(); });
+        testonthread(^{ test_batch(); });
+    }
+
     testonthread(^{ test_single(); });
     testonthread(^{ test_inplace(); });
+    testonthread(^{ test_batch(); });
 
     leak_mark();
 
-    testonthread(^{ test_batch(); });
+    for (int i = 0; i < 1000; i++) {
+        testonthread(^{ test_single(); });
+        testonthread(^{ test_inplace(); });
+        testonthread(^{ test_batch(); });
+    }
 
-    // fixme can't get this to zero; may or may not be a real leak
-    leak_check(64);
+    leak_check(0);
 
     // fixme ctor exceptions aren't caught inside .cxx_construct ?
     // Single allocation, ctors fail
@@ -263,5 +307,5 @@ int main()
     // Batch allocation, ctors fail for every object
     // Batch allocation, ctors fail for every other object
 
-    succeed(__FILE__);
+    succeed(FILENAME);
 }

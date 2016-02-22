@@ -2,6 +2,7 @@
 
 int state3 = 0;
 
+OBJC_ROOT_CLASS
 @interface Three @end
 @implementation Three
 +(void)load 

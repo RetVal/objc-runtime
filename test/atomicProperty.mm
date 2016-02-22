@@ -24,33 +24,7 @@ public:
 
 @implementation TestAtomicProperty
 
-#if 1 // with new enough compiler, this will be synthesized automatically.
-
-extern void objc_copyCppObjectAtomic(void *dest, const void *src, void (*copyHelper) (void *dest, const void *source));
-
-static void copySerialNumber(void *d, const void *s) {
-    SerialNumber *dest = (SerialNumber *)d;
-    const SerialNumber *src = (const SerialNumber *)s;
-    dest->operator=(*src);
-}
-
-- (SerialNumber)number {
-    SerialNumber result;
-    objc_copyCppObjectAtomic(&result, &number, copySerialNumber);
-    return result;
-}
-
-- (void)setNumber:(SerialNumber)aNumber {
-    objc_copyCppObjectAtomic(&number, &aNumber, copySerialNumber);
-}
-
-+(void)initialize {
-    testwarn("rdar://6137845 compiler should synthesize calls to objc_copyCppObjectAtomic");
-}
-
-#else
 @synthesize number;
-#endif    
 
 @end
 

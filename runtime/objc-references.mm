@@ -122,10 +122,10 @@ namespace objc_references_support {
         }
 
         pointer allocate(size_type n, const_pointer = 0) {
-            return static_cast<pointer>(::_malloc_internal(n * sizeof(T)));
+            return static_cast<pointer>(::malloc(n * sizeof(T)));
         }
 
-        void deallocate(pointer p, size_type) { ::_free_internal(p); }
+        void deallocate(pointer p, size_type) { ::free(p); }
 
         size_type max_size() const { 
             return static_cast<size_type>(-1) / sizeof(T);
@@ -172,14 +172,14 @@ namespace objc_references_support {
     typedef ObjcAllocator<std::pair<void * const, ObjcAssociation> > ObjectAssociationMapAllocator;
     class ObjectAssociationMap : public std::map<void *, ObjcAssociation, ObjectPointerLess, ObjectAssociationMapAllocator> {
     public:
-        void *operator new(size_t n) { return ::_malloc_internal(n); }
-        void operator delete(void *ptr) { ::_free_internal(ptr); }
+        void *operator new(size_t n) { return ::malloc(n); }
+        void operator delete(void *ptr) { ::free(ptr); }
     };
     typedef ObjcAllocator<std::pair<const disguised_ptr_t, ObjectAssociationMap*> > AssociationsHashMapAllocator;
     class AssociationsHashMap : public unordered_map<disguised_ptr_t, ObjectAssociationMap *, DisguisedPointerHash, DisguisedPointerEqual, AssociationsHashMapAllocator> {
     public:
-        void *operator new(size_t n) { return ::_malloc_internal(n); }
-        void operator delete(void *ptr) { ::_free_internal(ptr); }
+        void *operator new(size_t n) { return ::malloc(n); }
+        void operator delete(void *ptr) { ::free(ptr); }
     };
 #endif
 }
@@ -194,8 +194,8 @@ class AssociationsManager {
     static spinlock_t _lock;
     static AssociationsHashMap *_map;               // associative references:  object pointer -> PtrPtrHashMap.
 public:
-    AssociationsManager()   { spinlock_lock(&_lock); }
-    ~AssociationsManager()  { spinlock_unlock(&_lock); }
+    AssociationsManager()   { _lock.lock(); }
+    ~AssociationsManager()  { _lock.unlock(); }
     
     AssociationsHashMap &associations() {
         if (_map == NULL)
@@ -204,7 +204,7 @@ public:
     }
 };
 
-spinlock_t AssociationsManager::_lock = SPINLOCK_INITIALIZER;
+spinlock_t AssociationsManager::_lock;
 AssociationsHashMap *AssociationsManager::_map = NULL;
 
 // expanded policy bits.

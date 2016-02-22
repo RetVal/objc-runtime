@@ -80,7 +80,7 @@ static void grow_refs_and_insert(weak_entry_t *entry,
     entry->mask = new_size - 1;
     
     entry->referrers = (weak_referrer_t *)
-        _calloc_internal(TABLE_SIZE(entry), sizeof(weak_referrer_t));
+        calloc(TABLE_SIZE(entry), sizeof(weak_referrer_t));
     entry->num_refs = 0;
     entry->max_hash_displacement = 0;
     
@@ -92,7 +92,7 @@ static void grow_refs_and_insert(weak_entry_t *entry,
     }
     // Insert
     append_referrer(entry, new_referrer);
-    if (old_refs) _free_internal(old_refs);
+    if (old_refs) free(old_refs);
 }
 
 /** 
@@ -116,7 +116,7 @@ static void append_referrer(weak_entry_t *entry, objc_object **new_referrer)
 
         // Couldn't insert inline. Allocate out of line.
         weak_referrer_t *new_referrers = (weak_referrer_t *)
-            _calloc_internal(WEAK_INLINE_COUNT, sizeof(weak_referrer_t));
+            calloc(WEAK_INLINE_COUNT, sizeof(weak_referrer_t));
         // This constructed table is invalid, but grow_refs_and_insert
         // will fix it and rehash it.
         for (size_t i = 0; i < WEAK_INLINE_COUNT; i++) {
@@ -225,7 +225,7 @@ static void weak_resize(weak_table_t *weak_table, size_t new_size)
 
     weak_entry_t *old_entries = weak_table->weak_entries;
     weak_entry_t *new_entries = (weak_entry_t *)
-        _calloc_internal(new_size, sizeof(weak_entry_t));
+        calloc(new_size, sizeof(weak_entry_t));
 
     weak_table->mask = new_size - 1;
     weak_table->weak_entries = new_entries;
@@ -240,7 +240,7 @@ static void weak_resize(weak_table_t *weak_table, size_t new_size)
                 weak_entry_insert(weak_table, entry);
             }
         }
-        _free_internal(old_entries);
+        free(old_entries);
     }
 }
 
@@ -274,7 +274,7 @@ static void weak_compact_maybe(weak_table_t *weak_table)
 static void weak_entry_remove(weak_table_t *weak_table, weak_entry_t *entry)
 {
     // remove entry
-    if (entry->out_of_line) _free_internal(entry->referrers);
+    if (entry->out_of_line) free(entry->referrers);
     bzero(entry, sizeof(*entry));
 
     weak_table->num_entries--;
@@ -374,7 +374,8 @@ weak_unregister_no_lock(weak_table_t *weak_table, id referent_id,
  * @param referrer The weak pointer address.
  */
 id 
-weak_register_no_lock(weak_table_t *weak_table, id referent_id, id *referrer_id)
+weak_register_no_lock(weak_table_t *weak_table, id referent_id, 
+                      id *referrer_id, bool crashIfDeallocating)
 {
     objc_object *referent = (objc_object *)referent_id;
     objc_object **referrer = (objc_object **)referrer_id;
@@ -399,10 +400,14 @@ weak_register_no_lock(weak_table_t *weak_table, id referent_id, id *referrer_id)
     }
 
     if (deallocating) {
-        _objc_fatal("Cannot form weak reference to instance (%p) of "
-                    "class %s. It is possible that this object was "
-                    "over-released, or is in the process of deallocation.",
-                    (void*)referent, object_getClassName((id)referent));
+        if (crashIfDeallocating) {
+            _objc_fatal("Cannot form weak reference to instance (%p) of "
+                        "class %s. It is possible that this object was "
+                        "over-released, or is in the process of deallocation.",
+                        (void*)referent, object_getClassName((id)referent));
+        } else {
+            return nil;
+        }
     }
 
     // now remember it and where it is being stored
@@ -430,7 +435,7 @@ weak_register_no_lock(weak_table_t *weak_table, id referent_id, id *referrer_id)
 }
 
 
-#if !NDEBUG
+#if DEBUG
 bool
 weak_is_registered_no_lock(weak_table_t *weak_table, id referent_id) 
 {

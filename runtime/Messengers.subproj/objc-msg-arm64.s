@@ -31,11 +31,14 @@
 #include <arm/arch.h>
 
 
+.data
+
 // _objc_entryPoints and _objc_exitPoints are used by method dispatch
 // caching code to figure out whether any threads are actively 
 // in the cache for dispatching.  The labels surround the asm code
 // that do cache lookups.  The tables are zero-terminated.
-.data
+
+.align 4
 .private_extern _objc_entryPoints
 _objc_entryPoints:
 	.quad   _cache_getImp
@@ -44,7 +47,6 @@ _objc_entryPoints:
 	.quad   _objc_msgSendSuper2
 	.quad   0
 
-.data
 .private_extern _objc_exitPoints
 _objc_exitPoints:
 	.quad   LExit_cache_getImp
@@ -191,6 +193,14 @@ LExit$0:
 .endif
 .endmacro
 
+.macro JumpMiss
+.if $0 == NORMAL
+	b	__objc_msgSend_uncached_impcache
+.else
+	b	LGetImpMiss
+.endif
+.endmacro
+
 .macro CacheLookup
 	// x1 = SEL, x9 = isa
 	ldp	x10, x11, [x9, #CACHE]	// x10 = buckets, x11 = occupied|mask
@@ -212,7 +222,8 @@ LExit$0:
 3:	// wrap: x12 = first bucket, w11 = mask
 	add	x12, x12, w11, UXTW #4	// x12 = buckets+(mask<<4)
 
-	// clone scanning loop to crash instead of hang when cache is corrupt
+	// Clone scanning loop to miss instead of hang when cache is corrupt.
+	// The slow path may detect any corruption and halt later.
 
 	ldp	x16, x17, [x12]		// {x16, x17} = *bucket
 1:	cmp	x16, x1			// if (bucket->sel != _cmd)
@@ -226,18 +237,9 @@ LExit$0:
 	ldp	x16, x17, [x12, #-16]!	// {x16, x17} = *--bucket
 	b	1b			// loop
 
-3:	// double wrap - busted
-					// x0 = receiver
-					// x1 = SEL
-	mov	x2, x9			// x2 = isa
-
-.if $0 == GETIMP
-	mov	x0, #0
-	b	_cache_getImp_corrupt_cache_error
-.else
-	b	_objc_msgSend_corrupt_cache_error
-.endif
-
+3:	// double wrap
+	JumpMiss $0
+	
 .endmacro
 
 

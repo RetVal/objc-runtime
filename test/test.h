@@ -1,4 +1,4 @@
-// test.h
+// test.h 
 // Common definitions for trivial test harness
 
 
@@ -6,6 +6,7 @@
 #define TEST_H
 
 #include <stdio.h>
+#include <dlfcn.h>
 #include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
@@ -15,6 +16,7 @@
 #include <sys/param.h>
 #include <malloc/malloc.h>
 #include <mach/mach.h>
+#include <mach/vm_param.h>
 #include <mach/mach_time.h>
 #include <objc/objc.h>
 #include <objc/runtime.h>
@@ -23,6 +25,26 @@
 #include <objc/objc-auto.h>
 #include <objc/objc-internal.h>
 #include <TargetConditionals.h>
+
+#if TARGET_OS_EMBEDDED  ||  TARGET_IPHONE_SIMULATOR
+static OBJC_INLINE malloc_zone_t *objc_collectableZone(void) { return nil; }
+#endif
+
+
+// Configuration macros
+
+#if !__LP64__ || TARGET_OS_WIN32 || __OBJC_GC__ || TARGET_IPHONE_SIMULATOR
+#   define SUPPORT_NONPOINTER_ISA 0
+#elif __x86_64__
+#   define SUPPORT_NONPOINTER_ISA 1
+#elif __arm64__
+#   define SUPPORT_NONPOINTER_ISA 1
+#else
+#   error unknown architecture
+#endif
+
+
+// Test output
 
 static inline void succeed(const char *name)  __attribute__((noreturn));
 static inline void succeed(const char *name)
@@ -77,7 +99,11 @@ static inline void fail(const char *msg, ...)
 
 static inline void testprintf(const char *msg, ...)
 {
-    if (msg  &&  getenv("VERBOSE")) {
+    static int verbose = -1;
+    if (verbose < 0) verbose = atoi(getenv("VERBOSE") ?: "0");
+
+    // VERBOSE=1 prints test harness info only
+    if (msg  &&  verbose >= 2) {
         char *msg2;
         asprintf(&msg2, "VERBOSE: %s", msg);
         va_list v;
@@ -165,6 +191,16 @@ static inline void *_testthread(void *arg __unused)
 }
 static inline void testonthread(__unsafe_unretained testblock_t code) 
 {
+    // GC crashes without Foundation because the block object classes 
+    // are insufficiently initialized.
+    if (objc_collectingEnabled()) {
+        static bool foundationified = false;
+        if (!foundationified) {
+            dlopen("/System/Library/Frameworks/Foundation.framework/Foundation", RTLD_LAZY);
+            foundationified = true;
+        }
+    }
+
     pthread_t th;
     testcodehack = code;  // force GC not-thread-local, avoid ARC void* casts
     pthread_create(&th, NULL, _testthread, NULL);
@@ -176,6 +212,8 @@ static inline void testonthread(__unsafe_unretained testblock_t code)
    `#define TEST_CALLS_OPERATOR_NEW` before including test.h.
  */
 #if __cplusplus  &&  !defined(TEST_CALLS_OPERATOR_NEW)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Winline-new-delete"
 #import <new>
 inline void* operator new(std::size_t) throw (std::bad_alloc) { fail("called global operator new"); }
 inline void* operator new[](std::size_t) throw (std::bad_alloc) { fail("called global operator new[]"); }
@@ -185,6 +223,7 @@ inline void operator delete(void*) throw() { fail("called global operator delete
 inline void operator delete[](void*) throw() { fail("called global operator delete[]"); }
 inline void operator delete(void*, const std::nothrow_t&) throw() { fail("called global operator delete(nothrow)"); }
 inline void operator delete[](void*, const std::nothrow_t&) throw() { fail("called global operator delete[](nothrow)"); }
+#pragma clang diagnostic pop
 #endif
 
 
@@ -212,7 +251,12 @@ static inline size_t leak_inuse(void)
         malloc_zone_t *zone = (malloc_zone_t *)zones[i];
         if (!zone->introspect || !zone->introspect->enumerator) continue;
 
+        // skip DispatchContinuations because it sometimes claims to be 
+        // using lots of memory that then goes away later
+        if (0 == strcmp(zone->zone_name, "DispatchContinuations")) continue;
+
         zone->introspect->enumerator(mach_task_self(), &inuse, MALLOC_PTR_IN_USE_RANGE_TYPE, (vm_address_t)zone, NULL, leak_recorder);
+        // fprintf(stderr, "%zu in use for zone %s\n", inuse, zone->zone_name);
         total += inuse;
     }
 
@@ -325,6 +369,7 @@ static id self_fn(id x) { return x; }
 
 /* General purpose root class */
 
+OBJC_ROOT_CLASS
 @interface TestRoot {
  @public
     Class isa;
@@ -389,6 +434,11 @@ struct stret {
     int c;
     int d;
     int e;
+    int f;
+    int g;
+    int h;
+    int i;
+    int j;
 };
 
 static inline BOOL stret_equal(struct stret a, struct stret b)
@@ -397,9 +447,29 @@ static inline BOOL stret_equal(struct stret a, struct stret b)
             a.b == b.b  &&  
             a.c == b.c  &&  
             a.d == b.d  &&  
-            a.e == b.e);
+            a.e == b.e  &&  
+            a.f == b.f  &&  
+            a.g == b.g  &&  
+            a.h == b.h  &&  
+            a.i == b.i  &&  
+            a.j == b.j);
 }
 
-static struct stret STRET_RESULT __attribute__((used)) = {1, 2, 3, 4, 5};
+static struct stret STRET_RESULT __attribute__((used)) = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+
+
+#if TARGET_IPHONE_SIMULATOR
+// Force cwd to executable's directory during launch.
+// sim used to do this but simctl does not.
+#include <crt_externs.h>
+ __attribute__((constructor)) 
+static void hack_cwd(void)
+{
+    if (!getenv("HACKED_CWD")) {
+        chdir(dirname((*_NSGetArgv())[0]));
+        setenv("HACKED_CWD", "1", 1);
+    }
+}
+#endif
 
 #endif

@@ -1,5 +1,5 @@
 // for OBJC2 mac only
-/* TEST_CONFIG SDK=macos ARCH=x86_64
+/* TEST_CONFIG OS=macosx ARCH=x86_64
    TEST_CRASHES
 
 TEST_RUN_OUTPUT

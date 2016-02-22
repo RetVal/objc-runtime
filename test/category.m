@@ -23,7 +23,7 @@ static int state = 0;
 }
 -(void)instancemethod { 
     testprintf("in [Super(Category) instancemethod]\n"); 
-    testassert(self->isa == [Super class]);
+    testassert(object_getClass(self) == [Super class]);
     testassert(state == 1);
     state = 2;
 }

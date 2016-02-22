@@ -32,9 +32,9 @@
 
 typedef struct SyncData {
     struct SyncData* nextData;
-    id               object;
-    int              threadCount;  // number of THREADS using this block
-    recursive_mutex_t        mutex;
+    DisguisedPtr<objc_object> object;
+    int32_t threadCount;  // number of THREADS using this block
+    recursive_mutex_t mutex;
 } SyncData;
 
 typedef struct {
@@ -56,25 +56,22 @@ typedef struct SyncCache {
   SYNC_COUNT_DIRECT_KEY == SyncCacheItem.lockCount
  */
 
-typedef struct {
+struct SyncList {
     SyncData *data;
     spinlock_t lock;
 
-    char align[64 - sizeof (spinlock_t) - sizeof (SyncData *)];
-} SyncList __attribute__((aligned(64)));
-// aligned to put locks on separate cache lines
+    SyncList() : data(nil) { }
+};
 
 // Use multiple parallel lists to decrease contention among unrelated objects.
-#define COUNT 16
-#define HASH(obj) ((((uintptr_t)(obj)) >> 5) & (COUNT - 1))
-#define LOCK_FOR_OBJ(obj) sDataLists[HASH(obj)].lock
-#define LIST_FOR_OBJ(obj) sDataLists[HASH(obj)].data
-static SyncList sDataLists[COUNT];
+#define LOCK_FOR_OBJ(obj) sDataLists[obj].lock
+#define LIST_FOR_OBJ(obj) sDataLists[obj].data
+static StripedMap<SyncList> sDataLists;
 
 
 enum usage { ACQUIRE, RELEASE, CHECK };
 
-static SyncCache *fetch_cache(BOOL create)
+static SyncCache *fetch_cache(bool create)
 {
     _objc_pthread_data *data;
     
@@ -118,7 +115,7 @@ static SyncData* id2data(id object, enum usage why)
 
 #if SUPPORT_DIRECT_THREAD_KEYS
     // Check per-thread single-entry fast cache for matching object
-    BOOL fastCacheOccupied = NO;
+    bool fastCacheOccupied = NO;
     SyncData *data = (SyncData *)tls_get_direct(SYNC_DATA_DIRECT_KEY);
     if (data) {
         fastCacheOccupied = YES;
@@ -129,10 +126,9 @@ static SyncData* id2data(id object, enum usage why)
 
             result = data;
             lockCount = (uintptr_t)tls_get_direct(SYNC_COUNT_DIRECT_KEY);
-            require_action_string(result->threadCount > 0, fastcache_done, 
-                                  result = NULL, "id2data fastcache is buggy");
-            require_action_string(lockCount > 0, fastcache_done, 
-                                  result = NULL, "id2data fastcache is buggy");
+            if (result->threadCount <= 0  ||  lockCount <= 0) {
+                _objc_fatal("id2data fastcache is buggy");
+            }
 
             switch(why) {
             case ACQUIRE: {
@@ -155,8 +151,7 @@ static SyncData* id2data(id object, enum usage why)
                 break;
             }
 
-        fastcache_done:     
-            return result;            
+            return result;
         }
     }
 #endif
@@ -171,10 +166,9 @@ static SyncData* id2data(id object, enum usage why)
 
             // Found a match.
             result = item->data;
-            require_action_string(result->threadCount > 0, cache_done, 
-                                  result = NULL, "id2data cache is buggy");
-            require_action_string(item->lockCount > 0, cache_done, 
-                                  result = NULL, "id2data cache is buggy");
+            if (result->threadCount <= 0  ||  item->lockCount <= 0) {
+                _objc_fatal("id2data cache is buggy");
+            }
                 
             switch(why) {
             case ACQUIRE:
@@ -194,7 +188,6 @@ static SyncData* id2data(id object, enum usage why)
                 break;
             }
 
-        cache_done:
             return result;
         }
     }
@@ -206,7 +199,7 @@ static SyncData* id2data(id object, enum usage why)
     // We could keep the nodes in some hash table if we find that there are
     // more than 20 or so distinct locks active, but we don't do that now.
     
-    spinlock_lock(lockp);
+    lockp->lock();
 
     {
         SyncData* p;
@@ -229,35 +222,36 @@ static SyncData* id2data(id object, enum usage why)
         // an unused one was found, use it
         if ( firstUnused != NULL ) {
             result = firstUnused;
-            result->object = object;
+            result->object = (objc_object *)object;
             result->threadCount = 1;
             goto done;
         }
     }
-                            
+
     // malloc a new SyncData and add to list.
     // XXX calling malloc with a global lock held is bad practice,
     // might be worth releasing the lock, mallocing, and searching again.
     // But since we never free these guys we won't be stuck in malloc very often.
     result = (SyncData*)calloc(sizeof(SyncData), 1);
-    result->object = object;
+    result->object = (objc_object *)object;
     result->threadCount = 1;
-    recursive_mutex_init(&result->mutex);
+    new (&result->mutex) recursive_mutex_t();
     result->nextData = *listp;
     *listp = result;
     
  done:
-    spinlock_unlock(lockp);
+    lockp->unlock();
     if (result) {
         // Only new ACQUIRE should get here.
         // All RELEASE and CHECK and recursive ACQUIRE are 
         // handled by the per-thread caches above.
-        
-        require_string(result != NULL, really_done, "id2data is buggy");
-        require_action_string(why == ACQUIRE, really_done, 
-                              result = NULL, "id2data is buggy");
-        require_action_string(result->object == object, really_done, 
-                              result = NULL, "id2data is buggy");
+        if (why == RELEASE) {
+            // Probably some thread is incorrectly exiting 
+            // while the object is held by another thread.
+            return nil;
+        }
+        if (why != ACQUIRE) _objc_fatal("id2data is buggy");
+        if (result->object != object) _objc_fatal("id2data is buggy");
 
 #if SUPPORT_DIRECT_THREAD_KEYS
         if (!fastCacheOccupied) {
@@ -275,7 +269,6 @@ static SyncData* id2data(id object, enum usage why)
         }
     }
 
- really_done:
     return result;
 }
 
@@ -294,10 +287,8 @@ int objc_sync_enter(id obj)
 
     if (obj) {
         SyncData* data = id2data(obj, ACQUIRE);
-        require_action_string(data != NULL, done, result = OBJC_SYNC_NOT_INITIALIZED, "id2data failed");
-	
-        result = recursive_mutex_lock(&data->mutex);
-        require_noerr_string(result, done, "mutex_lock failed");
+        assert(data);
+        data->mutex.lock();
     } else {
         // @synchronized(nil) does nothing
         if (DebugNilSync) {
@@ -306,7 +297,6 @@ int objc_sync_enter(id obj)
         objc_sync_nil();
     }
 
-done: 
     return result;
 }
 
@@ -319,17 +309,18 @@ int objc_sync_exit(id obj)
     
     if (obj) {
         SyncData* data = id2data(obj, RELEASE); 
-        require_action_string(data != NULL, done, result = OBJC_SYNC_NOT_OWNING_THREAD_ERROR, "id2data failed");
-        
-        result = recursive_mutex_unlock(&data->mutex);
-        require_noerr_string(result, done, "mutex_unlock failed");
+        if (!data) {
+            result = OBJC_SYNC_NOT_OWNING_THREAD_ERROR;
+        } else {
+            bool okay = data->mutex.tryUnlock();
+            if (!okay) {
+                result = OBJC_SYNC_NOT_OWNING_THREAD_ERROR;
+            }
+        }
     } else {
         // @synchronized(nil) does nothing
     }
 	
-done:
-    if ( result == RECURSIVE_MUTEX_NOT_LOCKED )
-         result = OBJC_SYNC_NOT_OWNING_THREAD_ERROR;
 
     return result;
 }

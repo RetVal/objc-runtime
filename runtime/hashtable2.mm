@@ -48,8 +48,6 @@ typedef struct	{
  *	
  *************************************************************************/
 
-static unsigned log2u (unsigned x) { return (x<2) ? 0 : log2u (x>>1)+1; };
-
 #define	PTRSIZE		sizeof(void *)
 
 #if !SUPPORT_ZONES
@@ -78,8 +76,7 @@ static unsigned log2u (unsigned x) { return (x<2) ? 0 : log2u (x>>1)+1; };
 #else
     /* iff necessary this modulo can be optimized since the nbBuckets is of the form 2**n-1 */
 #   define	BUCKETOF(table, data) (((HashBucket *)table->buckets)+((*table->prototype->hash)(table->info, data) % table->nbBuckets))
-    static unsigned exp2m1 (unsigned x) { return (1 << x) - 1; };
-#   define GOOD_CAPACITY(c) (exp2m1 (log2u (c)+1))
+#   define GOOD_CAPACITY(c) (exp2m1u (log2u (c)+1))
 #   define MORE_CAPACITY(b) (b*2+1)
 #endif
 
@@ -565,7 +562,7 @@ static int accessUniqueString = 0;
 
 static char		*z = NULL;
 static size_t	zSize = 0;
-static mutex_t		lock = MUTEX_INITIALIZER;
+static mutex_t		uniquerLock;
 
 static const char *CopyIntoReadOnly (const char *str) {
     size_t	len = strlen (str) + 1;
@@ -577,7 +574,7 @@ static const char *CopyIntoReadOnly (const char *str) {
 	return result;
     }
 
-    mutex_lock (&lock);
+    mutex_locker_t lock(uniquerLock);
     if (zSize < len) {
 	zSize = CHUNK_SIZE *((len + CHUNK_SIZE - 1) / CHUNK_SIZE);
 	/* not enough room, we try to allocate.  If no room left, too bad */
@@ -588,7 +585,6 @@ static const char *CopyIntoReadOnly (const char *str) {
     bcopy (str, result, len);
     z += len;
     zSize -= len;
-    mutex_unlock (&lock);
     return result;
     };
     

@@ -8,6 +8,7 @@
 
 static int state = 0;
 
+OBJC_ROOT_CLASS
 @interface Super { id isa; } @end
 @implementation Super 
 +(id)class { return self; }
@@ -28,16 +29,19 @@ static int state = 0;
 @interface Sub2 : Super @end
 @implementation Sub2 @end
 
+OBJC_ROOT_CLASS
 @interface Empty { id isa; } @end
 @implementation Empty
 +(id)class { return self; }
 +(void)initialize { }
-+(id)forward:(SEL)sel :(marg_list)margs { 
-    (void)sel; (void)margs; 
-    state = 1; 
-    return nil; 
-} 
 @end
+
+void *forward_handler(id obj, SEL _cmd) {
+    testassert(obj == [Empty class]);
+    testassert(_cmd == @selector(ordinary));
+    state = 1;
+    return nil;
+}
 
 @interface Empty (Unimplemented)
 +(id)ordinary;
@@ -203,6 +207,8 @@ void cycle(Class cls)
 int main()
 {
     Class cls;
+
+    objc_setForwardHandler((void*)&forward_handler, nil);
 
     // Test selector API
 

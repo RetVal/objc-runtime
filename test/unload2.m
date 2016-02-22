@@ -1,6 +1,6 @@
 #include "unload.h"
 #include "testroot.i"
-
+#import <objc/objc-api.h>
 
 @implementation SmallClass : TestRoot
 -(void)unload2_instance_method { }
@@ -8,15 +8,19 @@
 
 
 @implementation BigClass : TestRoot
-+(void) forward:(void *) __unused sel :(void*) __unused args { }
--(void) forward:(void *) __unused sel :(void*) __unused args { }
 @end
 
-
+OBJC_ROOT_CLASS
 @interface UnusedClass { id isa; } @end
 @implementation UnusedClass @end
 
 
-@implementation SmallClass (Category) 
+@protocol SmallProtocol
+-(void)unload2_category_method;
+@end
+
+@interface SmallClass (Category) <SmallProtocol> @end
+
+@implementation SmallClass (Category)
 -(void)unload2_category_method { }
 @end

@@ -2,6 +2,7 @@
 #error -DN=n missing
 #endif
 
+#import <objc/objc-api.h>
 #include <stdio.h>
 #include <sched.h>
 #include <unistd.h>
@@ -9,6 +10,7 @@
 extern int state;
 
 #define CLASS0(n,nn)                                                    \
+    OBJC_ROOT_CLASS                                                     \
     @interface C_##n##_##nn @end                                        \
     @implementation C_##n##_##nn                                        \
     +(void)load { OSAtomicIncrement32(&state); usleep(10); }            \
