@@ -815,10 +815,7 @@ void _objc_init(void)
     static bool initialized = false;
     if (initialized) return;
     initialized = true;
-//    int err = pthread_rwlock_wrlock(&runtimeLock.mLock);
-//    if (err) _objc_fatal("pthread_rwlock_wrlock failed (%d)", err);
-//    
-//    pthread_rwlock_unlock(&runtimeLock.mLock);
+
     // fixme defer initialization until an objc-using image is found?
     environ_init();
     tls_init();
