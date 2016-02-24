@@ -1052,10 +1052,12 @@ static inline void qosEndOverride() { }
 
 template <bool Debug>
 class rwlock_tt : nocopy_t {
-    pthread_rwlock_t mLock;
+    pthread_rwlock_t mLock = PTHREAD_RWLOCK_INITIALIZER;
 
   public:
-    rwlock_tt() : mLock((pthread_rwlock_t)PTHREAD_RWLOCK_INITIALIZER) { }
+    
+    rwlock_tt() {
+    }
     
     void read() 
     {

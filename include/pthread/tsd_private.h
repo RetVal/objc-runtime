@@ -2,14 +2,14 @@
  * Copyright (c) 2003-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
  * compliance with the License. Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this
  * file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -17,28 +17,28 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_LICENSE_HEADER_END@
  */
 /*
- * Copyright 1996 1995 by Open Software Foundation, Inc. 1997 1996 1995 1994 1993 1992 1991  
- *              All Rights Reserved 
- *  
- * Permission to use, copy, modify, and distribute this software and 
- * its documentation for any purpose and without fee is hereby granted, 
- * provided that the above copyright notice appears in all copies and 
- * that both the copyright notice and this permission notice appear in 
- * supporting documentation. 
- *  
- * OSF DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE 
- * INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS 
- * FOR A PARTICULAR PURPOSE. 
- *  
- * IN NO EVENT SHALL OSF BE LIABLE FOR ANY SPECIAL, INDIRECT, OR 
- * CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM 
- * LOSS OF USE, DATA OR PROFITS, WHETHER IN ACTION OF CONTRACT, 
- * NEGLIGENCE, OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION 
- * WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. 
+ * Copyright 1996 1995 by Open Software Foundation, Inc. 1997 1996 1995 1994 1993 1992 1991
+ *              All Rights Reserved
+ *
+ * Permission to use, copy, modify, and distribute this software and
+ * its documentation for any purpose and without fee is hereby granted,
+ * provided that the above copyright notice appears in all copies and
+ * that both the copyright notice and this permission notice appear in
+ * supporting documentation.
+ *
+ * OSF DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE
+ * INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+ * FOR A PARTICULAR PURPOSE.
+ *
+ * IN NO EVENT SHALL OSF BE LIABLE FOR ANY SPECIAL, INDIRECT, OR
+ * CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+ * LOSS OF USE, DATA OR PROFITS, WHETHER IN ACTION OF CONTRACT,
+ * NEGLIGENCE, OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION
+ * WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 /*
  * MkLinux
@@ -73,7 +73,7 @@
 #define _PTHREAD_TSD_SLOT_PTHREAD_QOS_CLASS	__TSD_THREAD_QOS_CLASS
 //#define _PTHREAD_TSD_SLOT_SEMAPHORE_CACHE__TSD_SEMAPHORE_CACHE
 
-#define _PTHREAD_TSD_RESERVED_SLOT_COUNT _PTHREAD_TSD_RESERVED_SLOT_COUNT
+//#define _PTHREAD_TSD_RESERVED_SLOT_COUNT _PTHREAD_TSD_RESERVED_SLOT_COUNT
 
 /* Keys 10 - 29 are for Libc/Libsystem internal usage */
 /* used as __pthread_tsd_first + Num  */
@@ -217,14 +217,14 @@ extern int pthread_key_init_np(int, void (*)(void *));
 
 __OSX_AVAILABLE_STARTING(__MAC_10_10,__IPHONE_8_0)
 extern const struct pthread_layout_offsets_s {
-	// always add new fields at the end
-	const uint16_t plo_version;
-	// either of the next two fields may be 0; use whichever is set
-	// bytes from pthread_t to base of tsd
-	const uint16_t plo_pthread_tsd_base_offset;
-	// bytes from pthread_t to a pointer to base of tsd
-	const uint16_t plo_pthread_tsd_base_address_offset;
-	const uint16_t plo_pthread_tsd_entry_size;
+    // always add new fields at the end
+    const uint16_t plo_version;
+    // either of the next two fields may be 0; use whichever is set
+    // bytes from pthread_t to base of tsd
+    const uint16_t plo_pthread_tsd_base_offset;
+    // bytes from pthread_t to a pointer to base of tsd
+    const uint16_t plo_pthread_tsd_base_address_offset;
+    const uint16_t plo_pthread_tsd_entry_size;
 } pthread_layout_offsets;
 
 #endif // PTHREAD_LAYOUT_SPI
@@ -235,7 +235,7 @@ __END_DECLS
 __header_always_inline int
 _pthread_has_direct_tsd(void)
 {
-	return 0;
+    return 0;
 }
 
 #define _pthread_getspecific_direct(key) pthread_getspecific((key))
@@ -246,21 +246,21 @@ _pthread_has_direct_tsd(void)
 __header_always_inline int
 _pthread_has_direct_tsd(void)
 {
-	return 1;
+    return 1;
 }
 
 /* To be used with static constant keys only */
 __header_always_inline void *
 _pthread_getspecific_direct(unsigned long slot)
 {
-	return _os_tsd_get_direct(slot);
+    return _os_tsd_get_direct(slot);
 }
 
 /* To be used with static constant keys only */
 __header_always_inline int
 _pthread_setspecific_direct(unsigned long slot, void * val)
 {
-	return _os_tsd_set_direct(slot, val);
+    return _os_tsd_set_direct(slot, val);
 }
 
 #endif /* TARGET_IPHONE_SIMULATOR */

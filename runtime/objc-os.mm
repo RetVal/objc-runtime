@@ -815,14 +815,17 @@ void _objc_init(void)
     static bool initialized = false;
     if (initialized) return;
     initialized = true;
-    
+//    int err = pthread_rwlock_wrlock(&runtimeLock.mLock);
+//    if (err) _objc_fatal("pthread_rwlock_wrlock failed (%d)", err);
+//    
+//    pthread_rwlock_unlock(&runtimeLock.mLock);
     // fixme defer initialization until an objc-using image is found?
     environ_init();
     tls_init();
     static_init();
     lock_init();
     exception_init();
-        
+    
     // Register for unmap first, in case some +load unmaps something
     _dyld_register_func_for_remove_image(&unmap_image);
     dyld_register_image_state_change_handler(dyld_image_state_bound,
