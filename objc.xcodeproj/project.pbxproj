@@ -1382,7 +1382,7 @@
 				1DEB914C08733D8E0010E9CD /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
+			defaultConfigurationName = Debug;
 		};
 		1DEB914E08733D8E0010E9CD /* Build configuration list for PBXProject "objc" */ = {
 			isa = XCConfigurationList;
@@ -1391,7 +1391,7 @@
 				1DEB915008733D8E0010E9CD /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
+			defaultConfigurationName = Debug;
 		};
 		305B27571C7D9E96005AC125 /* Build configuration list for PBXNativeTarget "debug-objc" */ = {
 			isa = XCConfigurationList;
@@ -1400,6 +1400,7 @@
 				305B27591C7D9E96005AC125 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
 		};
 		830F2AAE0D7394D600392440 /* Build configuration list for PBXNativeTarget "markgc" */ = {
 			isa = XCConfigurationList;
@@ -1408,7 +1409,7 @@
 				830F2AAC0D7394D100392440 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
+			defaultConfigurationName = Debug;
 		};
 		83E50D270FF19E8200D74C19 /* Build configuration list for PBXNativeTarget "objc-simulator" */ = {
 			isa = XCConfigurationList;
@@ -1417,7 +1418,7 @@
 				83E50D290FF19E8200D74C19 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
+			defaultConfigurationName = Debug;
 		};
 /* End XCConfigurationList section */
 	};

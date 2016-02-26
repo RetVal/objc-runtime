@@ -821,6 +821,8 @@ void _objc_init(void)
     tls_init();
     static_init();
     lock_init();
+    rwlock_t t;
+    memcpy(&runtimeLock, &t, sizeof(__typeof(t)));
     exception_init();
     
     // Register for unmap first, in case some +load unmaps something
