@@ -1,15 +1,15 @@
 /*
  * Copyright (c) 2007-2009 Apple Inc.  All Rights Reserved.
- * 
+ *
  * @APPLE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
  * compliance with the License. Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this
  * file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -17,7 +17,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_LICENSE_HEADER_END@
  */
 
@@ -28,427 +28,577 @@
 #include <stdbool.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/errno.h>
 #include <mach-o/fat.h>
 #include <mach-o/arch.h>
 #include <mach-o/loader.h>
 
 // from "objc-private.h"
 // masks for objc_image_info.flags
-#define OBJC_IMAGE_IS_REPLACEMENT (1<<0)
 #define OBJC_IMAGE_SUPPORTS_GC (1<<1)
-#define OBJC_IMAGE_REQUIRES_GC (1<<2)
-#define OBJC_IMAGE_OPTIMIZED_BY_DYLD (1<<3)
 
-bool debug;
-bool verbose;
-bool quiet;
-bool rrOnly;
-bool patch = true;
-bool unpatch = false;
+// Some OS X SDKs don't define these.
+#ifndef CPU_TYPE_ARM
+#define CPU_TYPE_ARM            ((cpu_type_t) 12)
+#endif
+#ifndef CPU_ARCH_ABI64
+#define CPU_ARCH_ABI64  0x01000000              /* 64 bit ABI */
+#endif
+#ifndef CPU_TYPE_ARM64
+#define CPU_TYPE_ARM64          (CPU_TYPE_ARM | CPU_ARCH_ABI64)
+#endif
 
-struct gcinfo {
-        bool hasObjC;
-        bool hasInfo;
-        uint32_t flags;
-        char *arch;
-} GCInfo[4];
+// File abstraction taken from ld64/FileAbstraction.hpp
+// and ld64/MachOFileAbstraction.hpp.
 
-void dumpinfo(char *filename);
+#ifdef __OPTIMIZE__
+#define INLINE	__attribute__((always_inline))
+#else
+#define INLINE
+#endif
 
-int Errors = 0;
-char *FileBase;
-size_t FileSize;
-const char *FileName;
+//
+// This abstraction layer is for use with file formats that have 64-bit/32-bit and Big-Endian/Little-Endian variants
+//
+// For example: to make a utility that handles 32-bit little enidan files use:  Pointer32<LittleEndian>
+//
+//
+//		get16()			read a 16-bit number from an E endian struct
+//		set16()			write a 16-bit number to an E endian struct
+//		get32()			read a 32-bit number from an E endian struct
+//		set32()			write a 32-bit number to an E endian struct
+//		get64()			read a 64-bit number from an E endian struct
+//		set64()			write a 64-bit number to an E endian struct
+//
+//		getBits()		read a bit field from an E endian struct (bitCount=number of bits in field, firstBit=bit index of field)
+//		setBits()		write a bit field to an E endian struct (bitCount=number of bits in field, firstBit=bit index of field)
+//
+//		getBitsRaw()	read a bit field from a struct with native endianness
+//		setBitsRaw()	write a bit field from a struct with native endianness
+//
 
-int main(int argc, char *argv[]) {
-    //NSAutoreleasePool *pool = [NSAutoreleasePool new];
-    int i;
-    //dumpinfo("/System/Library/Frameworks/AppKit.framework/AppKit");
-    if (argc == 1) {
-        printf("Usage: markgc [-v] [-r] [--] library_or_executable_image [image2 ...]\n");
-        printf(" changes Garbage Collection readiness of named images, ignoring those without ObjC segments\n");
-        printf("  -p        - patch RR binary to (apparently) support GC (default)\n");
-        printf("  -u        - unpatch GC binary to RR only\n");
-        printf("\nAuthor: blaine@apple.com\n");
-        exit(0);
+class BigEndian
+{
+public:
+    static uint16_t	get16(const uint16_t& from)				INLINE { return OSReadBigInt16(&from, 0); }
+    static void		set16(uint16_t& into, uint16_t value)	INLINE { OSWriteBigInt16(&into, 0, value); }
+    
+    static uint32_t	get32(const uint32_t& from)				INLINE { return OSReadBigInt32(&from, 0); }
+    static void		set32(uint32_t& into, uint32_t value)	INLINE { OSWriteBigInt32(&into, 0, value); }
+    
+    static uint64_t get64(const uint64_t& from)				INLINE { return OSReadBigInt64(&from, 0); }
+    static void		set64(uint64_t& into, uint64_t value)	INLINE { OSWriteBigInt64(&into, 0, value); }
+    
+    static uint32_t	getBits(const uint32_t& from,
+                            uint8_t firstBit, uint8_t bitCount)	INLINE { return getBitsRaw(get32(from), firstBit, bitCount); }
+    static void		setBits(uint32_t& into, uint32_t value,
+                            uint8_t firstBit, uint8_t bitCount)	INLINE { uint32_t temp = get32(into); setBitsRaw(temp, value, firstBit, bitCount); set32(into, temp); }
+    
+    static uint32_t	getBitsRaw(const uint32_t& from,
+                               uint8_t firstBit, uint8_t bitCount)	INLINE { return ((from >> (32-firstBit-bitCount)) & ((1<<bitCount)-1)); }
+    static void		setBitsRaw(uint32_t& into, uint32_t value,
+                               uint8_t firstBit, uint8_t bitCount)	INLINE { uint32_t temp = into;
+        const uint32_t mask = ((1<<bitCount)-1);
+        temp &= ~(mask << (32-firstBit-bitCount));
+        temp |= ((value & mask) << (32-firstBit-bitCount));
+        into = temp; }
+    enum { little_endian = 0 };
+};
+
+
+class LittleEndian
+{
+public:
+    static uint16_t	get16(const uint16_t& from)				INLINE { return OSReadLittleInt16(&from, 0); }
+    static void		set16(uint16_t& into, uint16_t value)	INLINE { OSWriteLittleInt16(&into, 0, value); }
+    
+    static uint32_t	get32(const uint32_t& from)				INLINE { return OSReadLittleInt32(&from, 0); }
+    static void		set32(uint32_t& into, uint32_t value)	INLINE { OSWriteLittleInt32(&into, 0, value); }
+    
+    static uint64_t get64(const uint64_t& from)				INLINE { return OSReadLittleInt64(&from, 0); }
+    static void		set64(uint64_t& into, uint64_t value)	INLINE { OSWriteLittleInt64(&into, 0, value); }
+    
+    static uint32_t	getBits(const uint32_t& from,
+                            uint8_t firstBit, uint8_t bitCount)	INLINE { return getBitsRaw(get32(from), firstBit, bitCount); }
+    static void		setBits(uint32_t& into, uint32_t value,
+                            uint8_t firstBit, uint8_t bitCount)	INLINE { uint32_t temp = get32(into); setBitsRaw(temp, value, firstBit, bitCount); set32(into, temp); }
+    
+    static uint32_t	getBitsRaw(const uint32_t& from,
+                               uint8_t firstBit, uint8_t bitCount)	INLINE { return ((from >> firstBit) & ((1<<bitCount)-1)); }
+    static void		setBitsRaw(uint32_t& into, uint32_t value,
+                               uint8_t firstBit, uint8_t bitCount)	INLINE {  uint32_t temp = into;
+        const uint32_t mask = ((1<<bitCount)-1);
+        temp &= ~(mask << firstBit);
+        temp |= ((value & mask) << firstBit);
+        into = temp; }
+    enum { little_endian = 1 };
+};
+
+#if __BIG_ENDIAN__
+typedef BigEndian CurrentEndian;
+typedef LittleEndian OtherEndian;
+#elif __LITTLE_ENDIAN__
+typedef LittleEndian CurrentEndian;
+typedef BigEndian OtherEndian;
+#else
+#error unknown endianness
+#endif
+
+
+template <typename _E>
+class Pointer32
+{
+public:
+    typedef uint32_t	uint_t;
+    typedef int32_t		sint_t;
+    typedef _E			E;
+    
+    static uint64_t	getP(const uint_t& from)				INLINE { return _E::get32(from); }
+    static void		setP(uint_t& into, uint64_t value)		INLINE { _E::set32(into, value); }
+};
+
+
+template <typename _E>
+class Pointer64
+{
+public:
+    typedef uint64_t	uint_t;
+    typedef int64_t		sint_t;
+    typedef _E			E;
+    
+    static uint64_t	getP(const uint_t& from)				INLINE { return _E::get64(from); }
+    static void		setP(uint_t& into, uint64_t value)		INLINE { _E::set64(into, value); }
+};
+
+
+//
+// mach-o file header
+//
+template <typename P> struct macho_header_content {};
+template <> struct macho_header_content<Pointer32<BigEndian> >    { mach_header		fields; };
+template <> struct macho_header_content<Pointer64<BigEndian> >	  { mach_header_64	fields; };
+template <> struct macho_header_content<Pointer32<LittleEndian> > { mach_header		fields; };
+template <> struct macho_header_content<Pointer64<LittleEndian> > { mach_header_64	fields; };
+
+template <typename P>
+class macho_header {
+public:
+    uint32_t		magic() const					INLINE { return E::get32(header.fields.magic); }
+    void			set_magic(uint32_t value)		INLINE { E::set32(header.fields.magic, value); }
+    
+    uint32_t		cputype() const					INLINE { return E::get32(header.fields.cputype); }
+    void			set_cputype(uint32_t value)		INLINE { E::set32((uint32_t&)header.fields.cputype, value); }
+    
+    uint32_t		cpusubtype() const				INLINE { return E::get32(header.fields.cpusubtype); }
+    void			set_cpusubtype(uint32_t value)	INLINE { E::set32((uint32_t&)header.fields.cpusubtype, value); }
+    
+    uint32_t		filetype() const				INLINE { return E::get32(header.fields.filetype); }
+    void			set_filetype(uint32_t value)	INLINE { E::set32(header.fields.filetype, value); }
+    
+    uint32_t		ncmds() const					INLINE { return E::get32(header.fields.ncmds); }
+    void			set_ncmds(uint32_t value)		INLINE { E::set32(header.fields.ncmds, value); }
+    
+    uint32_t		sizeofcmds() const				INLINE { return E::get32(header.fields.sizeofcmds); }
+    void			set_sizeofcmds(uint32_t value)	INLINE { E::set32(header.fields.sizeofcmds, value); }
+    
+    uint32_t		flags() const					INLINE { return E::get32(header.fields.flags); }
+    void			set_flags(uint32_t value)		INLINE { E::set32(header.fields.flags, value); }
+    
+    uint32_t		reserved() const				INLINE { return E::get32(header.fields.reserved); }
+    void			set_reserved(uint32_t value)	INLINE { E::set32(header.fields.reserved, value); }
+    
+    typedef typename P::E		E;
+private:
+    macho_header_content<P>	header;
+};
+
+
+//
+// mach-o load command
+//
+template <typename P>
+class macho_load_command {
+public:
+    uint32_t		cmd() const						INLINE { return E::get32(command.cmd); }
+    void			set_cmd(uint32_t value)			INLINE { E::set32(command.cmd, value); }
+    
+    uint32_t		cmdsize() const					INLINE { return E::get32(command.cmdsize); }
+    void			set_cmdsize(uint32_t value)		INLINE { E::set32(command.cmdsize, value); }
+    
+    typedef typename P::E		E;
+private:
+    load_command	command;
+};
+
+
+
+
+//
+// mach-o segment load command
+//
+template <typename P> struct macho_segment_content {};
+template <> struct macho_segment_content<Pointer32<BigEndian> >    { segment_command	fields; enum { CMD = LC_SEGMENT		}; };
+template <> struct macho_segment_content<Pointer64<BigEndian> >	   { segment_command_64	fields; enum { CMD = LC_SEGMENT_64	}; };
+template <> struct macho_segment_content<Pointer32<LittleEndian> > { segment_command	fields; enum { CMD = LC_SEGMENT		}; };
+template <> struct macho_segment_content<Pointer64<LittleEndian> > { segment_command_64	fields; enum { CMD = LC_SEGMENT_64	}; };
+
+template <typename P>
+class macho_segment_command {
+public:
+    uint32_t		cmd() const						INLINE { return E::get32(segment.fields.cmd); }
+    void			set_cmd(uint32_t value)			INLINE { E::set32(segment.fields.cmd, value); }
+    
+    uint32_t		cmdsize() const					INLINE { return E::get32(segment.fields.cmdsize); }
+    void			set_cmdsize(uint32_t value)		INLINE { E::set32(segment.fields.cmdsize, value); }
+    
+    const char*		segname() const					INLINE { return segment.fields.segname; }
+    void			set_segname(const char* value)	INLINE { strncpy(segment.fields.segname, value, 16); }
+    
+    uint64_t		vmaddr() const					INLINE { return P::getP(segment.fields.vmaddr); }
+    void			set_vmaddr(uint64_t value)		INLINE { P::setP(segment.fields.vmaddr, value); }
+    
+    uint64_t		vmsize() const					INLINE { return P::getP(segment.fields.vmsize); }
+    void			set_vmsize(uint64_t value)		INLINE { P::setP(segment.fields.vmsize, value); }
+    
+    uint64_t		fileoff() const					INLINE { return P::getP(segment.fields.fileoff); }
+    void			set_fileoff(uint64_t value)		INLINE { P::setP(segment.fields.fileoff, value); }
+    
+    uint64_t		filesize() const				INLINE { return P::getP(segment.fields.filesize); }
+    void			set_filesize(uint64_t value)	INLINE { P::setP(segment.fields.filesize, value); }
+    
+    uint32_t		maxprot() const					INLINE { return E::get32(segment.fields.maxprot); }
+    void			set_maxprot(uint32_t value)		INLINE { E::set32((uint32_t&)segment.fields.maxprot, value); }
+    
+    uint32_t		initprot() const				INLINE { return E::get32(segment.fields.initprot); }
+    void			set_initprot(uint32_t value)	INLINE { E::set32((uint32_t&)segment.fields.initprot, value); }
+    
+    uint32_t		nsects() const					INLINE { return E::get32(segment.fields.nsects); }
+    void			set_nsects(uint32_t value)		INLINE { E::set32(segment.fields.nsects, value); }
+    
+    uint32_t		flags() const					INLINE { return E::get32(segment.fields.flags); }
+    void			set_flags(uint32_t value)		INLINE { E::set32(segment.fields.flags, value); }
+    
+    enum {
+        CMD = macho_segment_content<P>::CMD
+    };
+    
+    typedef typename P::E		E;
+private:
+    macho_segment_content<P>	segment;
+};
+
+
+//
+// mach-o section
+//
+template <typename P> struct macho_section_content {};
+template <> struct macho_section_content<Pointer32<BigEndian> >    { section	fields; };
+template <> struct macho_section_content<Pointer64<BigEndian> >	   { section_64	fields; };
+template <> struct macho_section_content<Pointer32<LittleEndian> > { section	fields; };
+template <> struct macho_section_content<Pointer64<LittleEndian> > { section_64	fields; };
+
+template <typename P>
+class macho_section {
+public:
+    const char*		sectname() const				INLINE { return section.fields.sectname; }
+    void			set_sectname(const char* value)	INLINE { strncpy(section.fields.sectname, value, 16); }
+    
+    const char*		segname() const					INLINE { return section.fields.segname; }
+    void			set_segname(const char* value)	INLINE { strncpy(section.fields.segname, value, 16); }
+    
+    uint64_t		addr() const					INLINE { return P::getP(section.fields.addr); }
+    void			set_addr(uint64_t value)		INLINE { P::setP(section.fields.addr, value); }
+    
+    uint64_t		size() const					INLINE { return P::getP(section.fields.size); }
+    void			set_size(uint64_t value)		INLINE { P::setP(section.fields.size, value); }
+    
+    uint32_t		offset() const					INLINE { return E::get32(section.fields.offset); }
+    void			set_offset(uint32_t value)		INLINE { E::set32(section.fields.offset, value); }
+    
+    uint32_t		align() const					INLINE { return E::get32(section.fields.align); }
+    void			set_align(uint32_t value)		INLINE { E::set32(section.fields.align, value); }
+    
+    uint32_t		reloff() const					INLINE { return E::get32(section.fields.reloff); }
+    void			set_reloff(uint32_t value)		INLINE { E::set32(section.fields.reloff, value); }
+    
+    uint32_t		nreloc() const					INLINE { return E::get32(section.fields.nreloc); }
+    void			set_nreloc(uint32_t value)		INLINE { E::set32(section.fields.nreloc, value); }
+    
+    uint32_t		flags() const					INLINE { return E::get32(section.fields.flags); }
+    void			set_flags(uint32_t value)		INLINE { E::set32(section.fields.flags, value); }
+    
+    uint32_t		reserved1() const				INLINE { return E::get32(section.fields.reserved1); }
+    void			set_reserved1(uint32_t value)	INLINE { E::set32(section.fields.reserved1, value); }
+    
+    uint32_t		reserved2() const				INLINE { return E::get32(section.fields.reserved2); }
+    void			set_reserved2(uint32_t value)	INLINE { E::set32(section.fields.reserved2, value); }
+    
+    typedef typename P::E		E;
+private:
+    macho_section_content<P>	section;
+};
+
+
+
+
+static bool debug = true;
+
+bool processFile(const char *filename);
+
+int main(int argc, const char *argv[]) {
+    for (int i = 1; i < argc; ++i) {
+        if (!processFile(argv[i])) return 1;
     }
-    for (i = 1; i < argc; ++i) {
-        if (!strcmp(argv[i], "-v")) {
-            verbose = true;
-            continue;
-        }
-        if (!strcmp(argv[i], "-d")) {
-            debug = true;
-            continue;
-        }
-        if (!strcmp(argv[i], "-q")) {
-            quiet = true;
-            continue;
-        }
-        if (!strcmp(argv[i], "-p")) {
-            patch = true;
-            continue;
-        }
-        if (!strcmp(argv[i], "-u")) {
-            unpatch = true;
-            patch = false;
-            continue;
-        }
-        dumpinfo(argv[i]);
-    }
-    return Errors;
+    return 0;
 }
 
-struct imageInfo {
+struct imageinfo {
     uint32_t version;
     uint32_t flags;
 };
 
-void patchFile(uint32_t value, size_t offset) {
-    int fd = open(FileName, 1);
-    off_t lresult = lseek(fd, offset, SEEK_SET);
-    if (lresult == -1) {
-        printf("couldn't seek to 0x%lx position on fd %d\n", offset, fd);
-        ++Errors;
-        return;
-    }
-    size_t wresult = write(fd, &value, 4);
-    if (wresult != 4) {
-        ++Errors;
-        printf("didn't write new value\n");
-    }
-    else {
-        printf("patched %s at offset 0x%lx\n", FileName, offset);
-    }
-    close(fd);
+
+// Segment and section names are 16 bytes and may be un-terminated.
+bool segnameEquals(const char *lhs, const char *rhs)
+{
+    return 0 == strncmp(lhs, rhs, 16);
 }
 
-uint32_t iiflags(struct imageInfo *ii, size_t size, bool needsFlip) {
-    if (needsFlip) {
-        ii->flags = OSSwapInt32(ii->flags);
-    }
-    if (debug) printf("flags->%x, nitems %lu\n", ii->flags, size/sizeof(struct imageInfo));
-    uint32_t support_mask = OBJC_IMAGE_SUPPORTS_GC;
-    uint32_t flags = ii->flags;
-    if (patch && (flags & support_mask) != support_mask) {
-        //printf("will patch %s at offset %p\n", FileName, (char*)(&ii->flags) - FileBase);
-        uint32_t newvalue = flags | support_mask;
-        if (needsFlip) newvalue = OSSwapInt32(newvalue);
-        patchFile(newvalue, (char*)(&ii->flags) - FileBase);
-    }
-    if (unpatch && (flags & support_mask) == support_mask) {
-        uint32_t newvalue = flags & ~support_mask;
-        if (needsFlip) newvalue = OSSwapInt32(newvalue);
-        patchFile(newvalue, (char*)(&ii->flags) - FileBase);
-    }
-    for(unsigned niis = 1; niis < size/sizeof(struct imageInfo); ++niis) {
-        if (needsFlip) ii[niis].flags = OSSwapInt32(ii[niis].flags);
-        if (ii[niis].flags != flags) {
-            // uh, oh.
-            printf("XXX ii[%d].flags %x != ii[0].flags %x\n", niis, ii[niis].flags, flags);
-            ++Errors;
+bool segnameStartsWith(const char *segname, const char *prefix)
+{
+    return 0 == strncmp(segname, prefix, strlen(prefix));
+}
+
+bool sectnameEquals(const char *lhs, const char *rhs)
+{
+    return segnameEquals(lhs, rhs);
+}
+
+
+template <typename P>
+void dosect(uint8_t *start, macho_section<P> *sect, bool isOldABI, bool isOSX)
+{
+    if (debug) printf("section %.16s from segment %.16s\n",
+                      sect->sectname(), sect->segname());
+    
+    if (isOSX) {
+        // Add "supports GC" flag to objc image info
+        if ((segnameStartsWith(sect->segname(),  "__DATA")  &&
+             sectnameEquals(sect->sectname(), "__objc_imageinfo"))  ||
+            (segnameEquals(sect->segname(),  "__OBJC")  &&
+             sectnameEquals(sect->sectname(), "__image_info")))
+        {
+            imageinfo *ii = (imageinfo*)(start + sect->offset());
+            P::E::set32(ii->flags, P::E::get32(ii->flags) | OBJC_IMAGE_SUPPORTS_GC);
+            if (debug) printf("added GC support flag\n");
         }
-    }
-    return flags;
-}
-
-void printflags(uint32_t flags) {
-    if (flags & 0x1) printf(" F&C");
-    if (flags & 0x2) printf(" GC");
-    if (flags & 0x4) printf(" GC-only");
-    else printf(" RR");
-}
-
-/*
-void doimageinfo(struct imageInfo *ii, uint32_t size, bool needsFlip) {
-    uint32_t flags = iiflags(ii, size, needsFlip);
-    printflags(flags);
-}
-*/
-
-
-void dosect32(void *start, struct section *sect, bool needsFlip, struct gcinfo *gcip) {
-    if (debug) printf("section %s from segment %s\n", sect->sectname, sect->segname);
-    if (strcmp(sect->segname, "__OBJC")) return;
-    gcip->hasObjC = true;
-    if (strcmp(sect->sectname, "__image_info")) return;
-    gcip->hasInfo = true;
-    if (needsFlip) {
-        sect->offset = OSSwapInt32(sect->offset);
-        sect->size = OSSwapInt32(sect->size);
-    }
-    // these guys aren't inline - they point elsewhere
-    gcip->flags = iiflags(start + sect->offset, sect->size, needsFlip);
-}
-
-void dosect64(void *start, struct section_64 *sect, bool needsFlip, struct gcinfo *gcip) {
-    if (debug) printf("section %s from segment %s\n", sect->sectname, sect->segname);
-    if (strcmp(sect->segname, "__OBJC") && strcmp(sect->segname, "__DATA")) return;
-    if (strcmp(sect->sectname, "__image_info") && strncmp(sect->sectname, "__objc_imageinfo", 16)) return;
-    gcip->hasObjC = true;
-    gcip->hasInfo = true;
-    if (needsFlip) {
-        sect->offset = OSSwapInt32(sect->offset);
-        sect->size = OSSwapInt64(sect->size);
-    }
-    // these guys aren't inline - they point elsewhere
-    gcip->flags = iiflags(start + sect->offset, (size_t)sect->size, needsFlip);
-}
-
-void doseg32(void *start, struct segment_command *seg, bool needsFlip, struct gcinfo *gcip) {
-    // lets do sections
-    if (needsFlip) {
-        seg->fileoff = OSSwapInt32(seg->fileoff);
-        seg->nsects = OSSwapInt32(seg->nsects);
-    }
-    if (debug) printf("segment name: %s, nsects %d\n", seg->segname, seg->nsects);
-    if (seg->segname[0]) {
-        if (strcmp("__OBJC", seg->segname)) return;
-    }
-    struct section *sect = (struct section *)(seg + 1);
-    for (uint32_t nsects = 0; nsects < seg->nsects; ++nsects) {
-        // sections directly follow
-        
-        dosect32(start, sect + nsects, needsFlip, gcip);
-    }
-}
-void doseg64(void *start, struct segment_command_64 *seg, bool needsFlip, struct gcinfo *gcip) {
-    if (debug) printf("segment name: %s\n", seg->segname);
-    if (seg->segname[0] && strcmp("__OBJC", seg->segname) && strcmp("__DATA", seg->segname)) return;
-    gcip->hasObjC = true;
-    // lets do sections
-    if (needsFlip) {
-        seg->fileoff = OSSwapInt64(seg->fileoff);
-        seg->nsects = OSSwapInt32(seg->nsects);
-    }
-    struct section_64 *sect = (struct section_64 *)(seg + 1);
-    for (uint32_t nsects = 0; nsects < seg->nsects; ++nsects) {
-        // sections directly follow
-        
-        dosect64(start, sect + nsects, needsFlip, gcip);
-    }
-}
-
-#if 0
-/*
- * A variable length string in a load command is represented by an lc_str
- * union.  The strings are stored just after the load command structure and
- * the offset is from the start of the load command structure.  The size
- * of the string is reflected in the cmdsize field of the load command.
- * Once again any padded bytes to bring the cmdsize field to a multiple
- * of 4 bytes must be zero.
- */
-union lc_str {
-	uint32_t	offset;	/* offset to the string */
-#ifndef __LP64__
-	char		*ptr;	/* pointer to the string */
-#endif 
-};
-
-struct dylib {
-    union lc_str  name;			/* library's path name */
-    uint32_t timestamp;			/* library's build time stamp */
-    uint32_t current_version;		/* library's current version number */
-    uint32_t compatibility_version;	/* library's compatibility vers number*/
-};
-
- * A dynamically linked shared library (filetype == MH_DYLIB in the mach header)
- * contains a dylib_command (cmd == LC_ID_DYLIB) to identify the library.
- * An object that uses a dynamically linked shared library also contains a
- * dylib_command (cmd == LC_LOAD_DYLIB, LC_LOAD_WEAK_DYLIB, or
- * LC_REEXPORT_DYLIB) for each library it uses.
-
-struct dylib_command {
-	uint32_t	cmd;		/* LC_ID_DYLIB, LC_LOAD_{,WEAK_}DYLIB,
-					   LC_REEXPORT_DYLIB */
-	uint32_t	cmdsize;	/* includes pathname string */
-	struct dylib	dylib;		/* the library identification */
-};
-#endif
-
-void dodylib(void *start, struct dylib_command *dylibCmd, bool needsFlip) {
-    if (!verbose) return;
-    if (needsFlip) {
-    }
-    size_t count = dylibCmd->cmdsize - sizeof(struct dylib_command);
-    //printf("offset is %d, count is %d\n", dylibCmd->dylib.name.offset, count);
-    if (dylibCmd->dylib.name.offset > count) return;
-    //printf("-->%.*s<---", count, ((void *)dylibCmd)+dylibCmd->dylib.name.offset);
-    if (verbose) printf("load %s\n", ((char *)dylibCmd)+dylibCmd->dylib.name.offset);
-}
-
-struct load_command *doloadcommand(void *start, struct load_command *lc, bool needsFlip, bool is32, struct gcinfo *gcip) {
-    if (needsFlip) {
-        lc->cmd = OSSwapInt32(lc->cmd);
-        lc->cmdsize = OSSwapInt32(lc->cmdsize);
-    }
-
-    switch(lc->cmd) {
-    case LC_SEGMENT_64:
-	if (debug) printf("...segment64\n");
-        if (is32) printf("XXX we have a 64-bit segment in a 32-bit mach-o\n");
-        doseg64(start, (struct segment_command_64 *)lc, needsFlip, gcip);
-        break;
-    case LC_SEGMENT:
-	if (debug) printf("...segment32\n");
-        doseg32(start, (struct segment_command *)lc, needsFlip, gcip);
-        break;
-    case LC_SYMTAB: if (debug) printf("...dynamic symtab\n"); break;
-    case LC_DYSYMTAB: if (debug) printf("...symtab\n"); break;
-    case LC_LOAD_DYLIB:
-        dodylib(start, (struct dylib_command *)lc, needsFlip);
-        break;
-    case LC_SUB_UMBRELLA: if (debug) printf("...load subumbrella\n"); break;
-    default:    if (debug) printf("cmd is %x\n", lc->cmd); break;
     }
     
-    return (struct load_command *)((void *)lc + lc->cmdsize);
-}
-
-void doofile(void *start, size_t size, struct gcinfo *gcip) {
-    struct mach_header *mh = (struct mach_header *)start;
-    bool isFlipped = false;
-    if (mh->magic == MH_CIGAM || mh->magic == MH_CIGAM_64) {
-        if (debug) printf("(flipping)\n");
-        mh->magic = OSSwapInt32(mh->magic);
-        mh->cputype = OSSwapInt32(mh->cputype);
-        mh->cpusubtype = OSSwapInt32(mh->cpusubtype);
-        mh->filetype = OSSwapInt32(mh->filetype);
-        mh->ncmds = OSSwapInt32(mh->ncmds);
-        mh->sizeofcmds = OSSwapInt32(mh->sizeofcmds);
-        mh->flags = OSSwapInt32(mh->flags);
-        isFlipped = true;
-    }
-    if (rrOnly && mh->filetype != MH_DYLIB) return; // ignore executables
-    NXArchInfo *info = (NXArchInfo *)NXGetArchInfoFromCpuType(mh->cputype, mh->cpusubtype);
-    //printf("%s:", info->description);
-    gcip->arch = (char *)info->description;
-    //if (debug) printf("...description is %s\n", info->description);
-    bool is32 = !(mh->cputype & CPU_ARCH_ABI64);
-    if (debug) printf("is 32? %d\n", is32);
-    if (debug) printf("filetype -> %d\n", mh->filetype);
-    if (debug) printf("ncmds -> %d\n", mh->ncmds);
-    struct load_command *lc = (is32 ? (struct load_command *)(mh + 1) : (struct load_command *)((struct mach_header_64 *)start + 1));
-    unsigned ncmds;
-    for (ncmds = 0; ncmds < mh->ncmds; ++ncmds) {
-        lc = doloadcommand(start, lc, isFlipped, is32, gcip);
-    }
-    //printf("\n");
-}
-
-void initGCInfo() {
-    bzero((void *)GCInfo, sizeof(GCInfo));
-}
-
-void printGCInfo(char *filename) {
-    if (!GCInfo[0].hasObjC) return; // don't bother
-    // verify that flags are all the same
-    uint32_t flags = GCInfo[0].flags;
-    bool allSame = true;
-    for (int i = 1; i < 4 && GCInfo[i].arch; ++i) {
-        if (flags != GCInfo[i].flags) {
-            allSame = false;
+    if (isOldABI) {
+        // Keep init funcs because libSystem doesn't call _objc_init().
+    } else {
+        // Strip S_MOD_INIT/TERM_FUNC_POINTERS. We don't want dyld to call
+        // our init funcs because it is too late, and we don't want anyone to
+        // call our term funcs ever.
+        if (segnameStartsWith(sect->segname(), "__DATA")  &&
+            sectnameEquals(sect->sectname(), "__mod_init_func"))
+        {
+            // section type 0 is S_REGULAR
+            sect->set_flags(sect->flags() & ~SECTION_TYPE);
+            sect->set_sectname("__objc_init_func");
+            if (debug) printf("disabled __mod_init_func section\n");
+        }
+        if (segnameStartsWith(sect->segname(), "__DATA")  &&
+            sectnameEquals(sect->sectname(), "__mod_term_func"))
+        {
+            // section type 0 is S_REGULAR
+            sect->set_flags(sect->flags() & ~SECTION_TYPE);
+            sect->set_sectname("__objc_term_func");
+            if (debug) printf("disabled __mod_term_func section\n");
         }
     }
-    if (rrOnly) {
-        if (allSame && (flags & 0x2))
-            return;
-        printf("*** not all GC in %s:\n", filename);
-    }
-    if (allSame && !verbose) {
-        printf("%s:", filename);
-        printflags(flags);
-        printf("\n");
-    }
-    else {
-        printf("%s:\n", filename);
-        for (int i = 0; i < 4 && GCInfo[i].arch; ++i) {
-            printf("%s:", GCInfo[i].arch);
-            printflags(GCInfo[i].flags);
-            printf("\n");
-        }
-        printf("\n");
+}
+
+template <typename P>
+void doseg(uint8_t *start, macho_segment_command<P> *seg,
+           bool isOldABI, bool isOSX)
+{
+    if (debug) printf("segment name: %.16s, nsects %u\n",
+                      seg->segname(), seg->nsects());
+    macho_section<P> *sect = (macho_section<P> *)(seg + 1);
+    for (uint32_t i = 0; i < seg->nsects(); ++i) {
+        dosect(start, &sect[i], isOldABI, isOSX);
     }
 }
 
-void dofat(void *start) {
-    struct fat_header *fh = start;
-    bool needsFlip = false;
-    if (fh->magic == FAT_CIGAM) {
-        fh->nfat_arch = OSSwapInt32(fh->nfat_arch);
-        needsFlip = true;
-    }
-    if (debug) printf("%d architectures\n", fh->nfat_arch);
-    unsigned narchs;
-    struct fat_arch *arch_ptr = (struct fat_arch *)(fh + 1);
-    for (narchs = 0; narchs < fh->nfat_arch; ++narchs) {
-        if (debug) printf("doing arch %d\n", narchs);
-        if (needsFlip) {
-            arch_ptr->offset = OSSwapInt32(arch_ptr->offset);
-            arch_ptr->size = OSSwapInt32(arch_ptr->size);
-        }
-        doofile(start+arch_ptr->offset, arch_ptr->size, &GCInfo[narchs]);
-        arch_ptr++;
-    }
-}
 
-bool openFile(const char *filename) {
-    FileName = filename;
-    // get size
-    struct stat statb;
-    int fd = open(filename, 0);
-    if (fd < 0) {
-        printf("couldn't open %s for reading\n", filename);
-        return false;
+template<typename P>
+bool parse_macho(uint8_t *buffer)
+{
+    macho_header<P>* mh = (macho_header<P>*)buffer;
+    uint8_t *cmds;
+    
+    bool isOldABI = false;
+    bool isOSX = false;
+    cmds = (uint8_t *)(mh + 1);
+    for (uint32_t c = 0; c < mh->ncmds(); c++) {
+        macho_load_command<P>* cmd = (macho_load_command<P>*)cmds;
+        cmds += cmd->cmdsize();
+        if (cmd->cmd() == LC_SEGMENT  ||  cmd->cmd() == LC_SEGMENT_64) {
+            macho_segment_command<P>* seg = (macho_segment_command<P>*)cmd;
+            if (segnameEquals(seg->segname(), "__OBJC")) isOldABI = true;
+        }
+        else if (cmd->cmd() == LC_VERSION_MIN_MACOSX) {
+            isOSX = true;
+        }
     }
-    int osresult = fstat(fd, &statb);
-    if (osresult != 0) {
-        printf("couldn't get size of %s\n", filename);
-        close(fd);
-        return false;
+    
+    if (debug) printf("ABI=%s, OS=%s\n",
+                      isOldABI ? "old" : "new", isOSX ? "osx" : "ios");
+    
+    cmds = (uint8_t *)(mh + 1);
+    for (uint32_t c = 0; c < mh->ncmds(); c++) {
+        macho_load_command<P>* cmd = (macho_load_command<P>*)cmds;
+        cmds += cmd->cmdsize();
+        if (cmd->cmd() == LC_SEGMENT  ||  cmd->cmd() == LC_SEGMENT_64) {
+            doseg(buffer, (macho_segment_command<P>*)cmd, isOldABI, isOSX);
+        }
     }
-	if ((sizeof(size_t) == 4) && ((size_t)statb.st_size > SIZE_T_MAX)) {
-        printf("couldn't malloc %llu bytes\n", statb.st_size);
-        close(fd);
-        return false;
-	}
-    FileSize = (size_t)statb.st_size;
-    FileBase = malloc(FileSize);
-    if (!FileBase) {
-        printf("couldn't malloc %lu bytes\n", FileSize);
-        close(fd);
-        return false;
-    }
-    ssize_t readsize = read(fd, FileBase, FileSize);
-    if ((readsize == -1) || ((size_t)readsize != FileSize)) {
-        printf("read %ld bytes, wanted %ld\n", (size_t)readsize, FileSize);
-        close(fd);
-        return false;
-    }
-    close(fd);
+    
     return true;
 }
 
-void closeFile() {
-    free(FileBase);
+
+bool parse_macho(uint8_t *buffer)
+{
+    uint32_t magic = *(uint32_t *)buffer;
+    
+    switch (magic) {
+        case MH_MAGIC_64:
+            return parse_macho<Pointer64<CurrentEndian>>(buffer);
+        case MH_MAGIC:
+            return parse_macho<Pointer32<CurrentEndian>>(buffer);
+        case MH_CIGAM_64:
+            return parse_macho<Pointer64<OtherEndian>>(buffer);
+        case MH_CIGAM:
+            return parse_macho<Pointer32<OtherEndian>>(buffer);
+        default:
+            printf("file is not mach-o (magic %x)\n", magic);
+            return false;
+    }
 }
 
-void dumpinfo(char *filename) {
-    initGCInfo();
-    if (!openFile(filename)) exit(1);
-    struct fat_header *fh = (struct fat_header *)FileBase;
-    if (fh->magic == FAT_MAGIC || fh->magic == FAT_CIGAM) {
-        dofat((void *)FileBase);
-        //printGCInfo(filename);
-    }
-    else if (fh->magic == MH_MAGIC || fh->magic == MH_CIGAM || fh->magic == MH_MAGIC_64 || fh->magic == MH_CIGAM_64) {
-        doofile((void *)FileBase, FileSize, &GCInfo[0]);
-        //printGCInfo(filename);
-    }
-    else if (!quiet) {
-        printf("don't understand %s!\n", filename);
-    }
-    closeFile();
- }
 
+bool parse_fat(uint8_t *buffer, size_t size)
+{
+    uint32_t magic;
+    
+    if (size < sizeof(magic)) {
+        printf("file is too small\n");
+        return false;
+    }
+    
+    magic = *(uint32_t *)buffer;
+    if (magic != FAT_MAGIC && magic != FAT_CIGAM) {
+        /* Not a fat file */
+        return parse_macho(buffer);
+    } else {
+        struct fat_header *fh;
+        uint32_t fat_magic, fat_nfat_arch;
+        struct fat_arch *archs;
+        
+        if (size < sizeof(struct fat_header)) {
+            printf("file is too small\n");
+            return false;
+        }
+        
+        fh = (struct fat_header *)buffer;
+        fat_magic = OSSwapBigToHostInt32(fh->magic);
+        fat_nfat_arch = OSSwapBigToHostInt32(fh->nfat_arch);
+        
+        if (size < (sizeof(struct fat_header) + fat_nfat_arch * sizeof(struct fat_arch))) {
+            printf("file is too small\n");
+            return false;
+        }
+        
+        archs = (struct fat_arch *)(buffer + sizeof(struct fat_header));
+        
+        /* Special case hidden CPU_TYPE_ARM64 */
+        if (size >= (sizeof(struct fat_header) + (fat_nfat_arch + 1) * sizeof(struct fat_arch))) {
+            if (fat_nfat_arch > 0
+                && OSSwapBigToHostInt32(archs[fat_nfat_arch].cputype) == CPU_TYPE_ARM64) {
+                fat_nfat_arch++;
+            }
+        }
+        /* End special case hidden CPU_TYPE_ARM64 */
+        
+        if (debug) printf("%d fat architectures\n",
+                          fat_nfat_arch);
+        
+        for (uint32_t i = 0; i < fat_nfat_arch; i++) {
+            uint32_t arch_cputype = OSSwapBigToHostInt32(archs[i].cputype);
+            uint32_t arch_cpusubtype = OSSwapBigToHostInt32(archs[i].cpusubtype);
+            uint32_t arch_offset = OSSwapBigToHostInt32(archs[i].offset);
+            uint32_t arch_size = OSSwapBigToHostInt32(archs[i].size);
+            
+            if (debug) printf("cputype %d cpusubtype %d\n",
+                              arch_cputype, arch_cpusubtype);
+            
+            /* Check that slice data is after all fat headers and archs */
+            if (arch_offset < (sizeof(struct fat_header) + fat_nfat_arch * sizeof(struct fat_arch))) {
+                printf("file is badly formed\n");
+                return false;
+            }
+            
+            /* Check that the slice ends before the file does */
+            if (arch_offset > size) {
+                printf("file is badly formed\n");
+                return false;
+            }
+            
+            if (arch_size > size) {
+                printf("file is badly formed\n");
+                return false;
+            }
+            
+            if (arch_offset > (size - arch_size)) {
+                printf("file is badly formed\n");
+                return false;
+            }
+            
+            bool ok = parse_macho(buffer + arch_offset);
+            if (!ok) return false;
+        }
+        return true;
+    }
+}
+
+bool processFile(const char *filename)
+{
+    if (debug) printf("file %s\n", filename);
+    int fd = open(filename, O_RDWR);
+    if (fd < 0) {
+        printf("open %s: %s\n", filename, strerror(errno));
+        return false;
+    }
+    
+    struct stat st;
+    if (fstat(fd, &st) < 0) {
+        printf("fstat %s: %s\n", filename, strerror(errno));
+        return false;
+    }
+    
+    void *buffer = mmap(NULL, (size_t)st.st_size, PROT_READ|PROT_WRITE, 
+                        MAP_FILE|MAP_SHARED, fd, 0);
+    if (buffer == MAP_FAILED) {
+        printf("mmap %s: %s\n", filename, strerror(errno));
+        return false;
+    }
+    
+    bool result = parse_fat((uint8_t *)buffer, (size_t)st.st_size);
+    munmap(buffer, (size_t)st.st_size);
+    close(fd);
+    return result;
+}
