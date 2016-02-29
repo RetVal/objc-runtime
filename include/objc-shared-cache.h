@@ -536,7 +536,7 @@ struct objc_headeropt_t;
 struct objc_clsopt_t;
 
 // Edit objc-sel-table.s if you change this value.
-enum { VERSION = 12 };
+enum { VERSION = 13 };
 
 // Top-level optimization structure.
 // Edit objc-sel-table.s and OPT_INITIALIZER if you change this structure.

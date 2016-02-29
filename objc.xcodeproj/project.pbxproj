@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		00396A861C81654B00667CB8 /* libobjc.A.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = D2AAC0630554660B00DB518D /* libobjc.A.dylib */; };
 		305B27561C7D9E96005AC125 /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = 305B27551C7D9E96005AC125 /* main.m */; };
 		307ED08F1C78839C000D10DC /* objc-accessors.mm in Sources */ = {isa = PBXBuildFile; fileRef = 307ED08E1C78839C000D10DC /* objc-accessors.mm */; };
 		307ED0911C7883B3000D10DC /* objc-accessors.h in Headers */ = {isa = PBXBuildFile; fileRef = 307ED0901C7883B3000D10DC /* objc-accessors.h */; };
@@ -30,7 +31,6 @@
 		830F2A750D737FB900392440 /* objc-msg-i386.s in Sources */ = {isa = PBXBuildFile; fileRef = 830F2A6A0D737FB800392440 /* objc-msg-i386.s */; };
 		830F2A7D0D737FBB00392440 /* objc-msg-x86_64.s in Sources */ = {isa = PBXBuildFile; fileRef = 830F2A720D737FB800392440 /* objc-msg-x86_64.s */; };
 		830F2A980D738DC200392440 /* hashtable.h in Headers */ = {isa = PBXBuildFile; fileRef = 830F2A970D738DC200392440 /* hashtable.h */; settings = {ATTRIBUTES = (Public, ); }; };
-		830F2AB10D73962200392440 /* markgc.c in Sources */ = {isa = PBXBuildFile; fileRef = 830F2AA50D7394C200392440 /* markgc.c */; };
 		83112ED40F00599600A5FBAF /* objc-internal.h in Headers */ = {isa = PBXBuildFile; fileRef = 83112ED30F00599600A5FBAF /* objc-internal.h */; settings = {ATTRIBUTES = (Private, ); }; };
 		831C85D50E10CF850066E64C /* objc-os.h in Headers */ = {isa = PBXBuildFile; fileRef = 831C85D30E10CF850066E64C /* objc-os.h */; };
 		831C85D60E10CF850066E64C /* objc-os.mm in Sources */ = {isa = PBXBuildFile; fileRef = 831C85D40E10CF850066E64C /* objc-os.mm */; };
@@ -172,13 +172,6 @@
 			remoteGlobalIDString = D2AAC0620554660B00DB518D;
 			remoteInfo = objc;
 		};
-		835720F50F8BF8EE00BD4FAD /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 08FB7793FE84155DC02AAC07 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 830F2AA80D7394D000392440;
-			remoteInfo = markgc;
-		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -265,7 +258,6 @@
 		830F2A720D737FB800392440 /* objc-msg-x86_64.s */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.asm; name = "objc-msg-x86_64.s"; path = "runtime/Messengers.subproj/objc-msg-x86_64.s"; sourceTree = "<group>"; tabWidth = 8; usesTabs = 1; };
 		830F2A970D738DC200392440 /* hashtable.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = hashtable.h; path = runtime/hashtable.h; sourceTree = "<group>"; };
 		830F2AA50D7394C200392440 /* markgc.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = markgc.c; sourceTree = "<group>"; };
-		830F2AA90D7394D000392440 /* markgc */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = markgc; sourceTree = BUILT_PRODUCTS_DIR; };
 		83112ED30F00599600A5FBAF /* objc-internal.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = "objc-internal.h"; path = "runtime/objc-internal.h"; sourceTree = "<group>"; };
 		831C85D30E10CF850066E64C /* objc-os.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = "objc-os.h"; path = "runtime/objc-os.h"; sourceTree = "<group>"; };
 		831C85D40E10CF850066E64C /* objc-os.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; name = "objc-os.mm"; path = "runtime/objc-os.mm"; sourceTree = "<group>"; };
@@ -341,13 +333,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		830F2AA70D7394D000392440 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
+				00396A861C81654B00667CB8 /* libobjc.A.dylib in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -443,7 +429,6 @@
 			isa = PBXGroup;
 			children = (
 				D2AAC0630554660B00DB518D /* libobjc.A.dylib */,
-				830F2AA90D7394D000392440 /* markgc */,
 				83E50D2A0FF19E8200D74C19 /* libobjc.A.dylib */,
 				305B27531C7D9E96005AC125 /* debug-objc */,
 			);
@@ -770,22 +755,6 @@
 			productReference = 305B27531C7D9E96005AC125 /* debug-objc */;
 			productType = "com.apple.product-type.tool";
 		};
-		830F2AA80D7394D000392440 /* markgc */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = 830F2AAE0D7394D600392440 /* Build configuration list for PBXNativeTarget "markgc" */;
-			buildPhases = (
-				830F2AA60D7394D000392440 /* Sources */,
-				830F2AA70D7394D000392440 /* Frameworks */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-			);
-			name = markgc;
-			productName = markgc;
-			productReference = 830F2AA90D7394D000392440 /* markgc */;
-			productType = "com.apple.product-type.tool";
-		};
 		83E50CD70FF19E8200D74C19 /* objc-simulator */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 83E50D270FF19E8200D74C19 /* Build configuration list for PBXNativeTarget "objc-simulator" */;
@@ -817,7 +786,6 @@
 			buildRules = (
 			);
 			dependencies = (
-				835720F60F8BF8EE00BD4FAD /* PBXTargetDependency */,
 			);
 			name = objc;
 			productName = objc;
@@ -853,7 +821,6 @@
 			projectRoot = "";
 			targets = (
 				D2AAC0620554660B00DB518D /* objc */,
-				830F2AA80D7394D000392440 /* markgc */,
 				83E50CD70FF19E8200D74C19 /* objc-simulator */,
 				305B27521C7D9E96005AC125 /* debug-objc */,
 			);
@@ -874,7 +841,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "if [ ${NATIVE_ARCH} = ${NATIVE_ARCH_32_BIT}  -o  ${NATIVE_ARCH} = ${NATIVE_ARCH_64_BIT}  -o  ${NATIVE_ARCH} = ${NATIVE_ARCH_ACTUAL} ]; then\n    \"${BUILT_PRODUCTS_DIR}/markgc\" -p \"${BUILT_PRODUCTS_DIR}/libobjc.A.dylib\"\nelse\n    echo \"Skipping markgc for cross compile.\"\nfi";
+			shellScript = "set -x\n/usr/bin/xcrun -toolchain XcodeDefault -sdk macosx clang++ -Wall -mmacosx-version-min=10.9 -arch x86_64 -std=c++11 \"${SRCROOT}/markgc.cpp\" -o \"${BUILT_PRODUCTS_DIR}/markgc\"\n\"${BUILT_PRODUCTS_DIR}/markgc\" \"${BUILT_PRODUCTS_DIR}/libobjc.A.dylib\"";
 		};
 		830F2AFA0D73BC5800392440 /* Run Script (symlink) */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -912,14 +879,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				305B27561C7D9E96005AC125 /* main.m in Sources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		830F2AA60D7394D000392440 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				830F2AB10D73962200392440 /* markgc.c in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1032,11 +991,6 @@
 			isa = PBXTargetDependency;
 			target = D2AAC0620554660B00DB518D /* objc */;
 			targetProxy = 305B275A1C7DA178005AC125 /* PBXContainerItemProxy */;
-		};
-		835720F60F8BF8EE00BD4FAD /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = 830F2AA80D7394D000392440 /* markgc */;
-			targetProxy = 835720F50F8BF8EE00BD4FAD /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -1278,36 +1232,6 @@
 			};
 			name = Release;
 		};
-		830F2AAB0D7394D100392440 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ALWAYS_SEARCH_USER_PATHS = NO;
-				COPY_PHASE_STRIP = NO;
-				GCC_C_LANGUAGE_STANDARD = gnu99;
-				GCC_DYNAMIC_NO_PIC = NO;
-				GCC_MODEL_TUNING = G5;
-				GCC_OPTIMIZATION_LEVEL = 0;
-				INSTALL_PATH = /usr/local/bin;
-				PRODUCT_NAME = markgc;
-				SKIP_INSTALL = YES;
-			};
-			name = Debug;
-		};
-		830F2AAC0D7394D100392440 /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ALWAYS_SEARCH_USER_PATHS = NO;
-				COPY_PHASE_STRIP = YES;
-				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				GCC_C_LANGUAGE_STANDARD = gnu99;
-				GCC_DYNAMIC_NO_PIC = NO;
-				GCC_MODEL_TUNING = G5;
-				INSTALL_PATH = /usr/local/bin;
-				PRODUCT_NAME = markgc;
-				SKIP_INSTALL = YES;
-			};
-			name = Release;
-		};
 		83E50D280FF19E8200D74C19 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 83E50D2B0FF19E9E00D74C19 /* IndigoSDK.xcconfig */;
@@ -1398,15 +1322,6 @@
 			buildConfigurations = (
 				305B27581C7D9E96005AC125 /* Debug */,
 				305B27591C7D9E96005AC125 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Debug;
-		};
-		830F2AAE0D7394D600392440 /* Build configuration list for PBXNativeTarget "markgc" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				830F2AAB0D7394D100392440 /* Debug */,
-				830F2AAC0D7394D100392440 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
