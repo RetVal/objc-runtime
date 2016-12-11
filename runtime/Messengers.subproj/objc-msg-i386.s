@@ -22,7 +22,7 @@
  */
 
 #include <TargetConditionals.h>
-#if defined(__i386__)  &&  !TARGET_IPHONE_SIMULATOR
+#if defined(__i386__)  &&  !TARGET_OS_SIMULATOR
 
 /********************************************************************
  ********************************************************************
@@ -31,9 +31,6 @@
  **
  ********************************************************************
  ********************************************************************/
-
-// for kIgnore
-#include "objc-config.h"
 
 
 /********************************************************************
@@ -603,10 +600,6 @@ LGetImpExit:
 	movl    selector(%esp), %ecx
 	movl	self(%esp), %eax
 
-// check whether selector is ignored
-	cmpl    $ kIgnore, %ecx
-	je      LMsgSendDone		// return self from %eax
-
 // check whether receiver is nil 
 	testl	%eax, %eax
 	je	LMsgSendNilSelf
@@ -661,10 +654,6 @@ LMsgSendExit:
 	movl	super(%esp), %eax	// struct objc_super
 	movl    selector(%esp), %ecx
 	movl	class(%eax), %edx	// struct objc_super->class
-
-// check whether selector is ignored
-	cmpl    $ kIgnore, %ecx
-	je      LMsgSendSuperIgnored	// return self from %eax
 
 // search the cache (class in %edx)
 	CacheLookup WORD_RETURN, MSG_SENDSUPER, LMsgSendSuperCacheMiss
@@ -753,10 +742,6 @@ LMsgSendvArgsOK:
 // load receiver and selector
 	movl    selector(%esp), %ecx
 	movl	self(%esp), %eax
-
-// check whether selector is ignored
-	cmpl    $ kIgnore, %ecx
-	je      LMsgSendFpretDone	// return self from %eax
 
 // check whether receiver is nil 
 	testl	%eax, %eax
@@ -1171,14 +1156,6 @@ LMsgForwardStretError:
 	
 	END_ENTRY _method_invoke_stret
 
-	
-	STATIC_ENTRY __objc_ignored_method
-	
-	movl	self(%esp), %eax
-	ret
-	
-	END_ENTRY __objc_ignored_method
-	
 
 .section __DATA,__objc_msg_break
 .long 0

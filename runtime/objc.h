@@ -93,13 +93,22 @@ typedef signed char BOOL;
 # endif
 #endif
 
-#if ! (defined(__OBJC_GC__)  ||  __has_feature(objc_arc))
-#define __strong /* empty */
+#ifndef __strong
+# if !__has_feature(objc_arc)
+#   define __strong /* empty */
+# endif
 #endif
 
-#if !__has_feature(objc_arc)
-#define __unsafe_unretained /* empty */
-#define __autoreleasing /* empty */
+#ifndef __unsafe_unretained
+# if !__has_feature(objc_arc)
+#   define __unsafe_unretained /* empty */
+# endif
+#endif
+
+#ifndef __autoreleasing
+# if !__has_feature(objc_arc)
+#   define __autoreleasing /* empty */
+# endif
 #endif
 
 
@@ -111,7 +120,7 @@ typedef signed char BOOL;
  * @return A C string indicating the name of the selector.
  */
 OBJC_EXPORT const char *sel_getName(SEL sel)
-    __OSX_AVAILABLE_STARTING(__MAC_10_0, __IPHONE_2_0);
+    OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0);
 
 /** 
  * Registers a method with the Objective-C runtime system, maps the method 
@@ -126,7 +135,7 @@ OBJC_EXPORT const char *sel_getName(SEL sel)
  *  has already been registered, this function simply returns the selector.
  */
 OBJC_EXPORT SEL sel_registerName(const char *str)
-    __OSX_AVAILABLE_STARTING(__MAC_10_0, __IPHONE_2_0);
+    OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0);
 
 /** 
  * Returns the class name of a given object.
@@ -136,7 +145,7 @@ OBJC_EXPORT SEL sel_registerName(const char *str)
  * @return The name of the class of which \e obj is an instance.
  */
 OBJC_EXPORT const char *object_getClassName(id obj)
-    __OSX_AVAILABLE_STARTING(__MAC_10_0, __IPHONE_2_0);
+    OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0);
 
 /** 
  * Returns a pointer to any extra bytes allocated with an instance given object.
@@ -155,7 +164,7 @@ OBJC_EXPORT const char *object_getClassName(id obj)
  * @note In a garbage-collected environment, the memory is scanned conservatively.
  */
 OBJC_EXPORT void *object_getIndexedIvars(id obj)
-    __OSX_AVAILABLE_STARTING(__MAC_10_0, __IPHONE_2_0);
+    OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0);
 
 /** 
  * Identifies a selector as being valid or invalid.
@@ -168,7 +177,7 @@ OBJC_EXPORT void *object_getIndexedIvars(id obj)
  *  a crash. 
  */
 OBJC_EXPORT BOOL sel_isMapped(SEL sel)
-    __OSX_AVAILABLE_STARTING(__MAC_10_0, __IPHONE_2_0);
+    OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0);
 
 /** 
  * Registers a method name with the Objective-C runtime system.
@@ -183,23 +192,19 @@ OBJC_EXPORT BOOL sel_isMapped(SEL sel)
  *  observed that many of the callers of this function did not check the return value for \c NULL.
  */
 OBJC_EXPORT SEL sel_getUid(const char *str)
-    __OSX_AVAILABLE_STARTING(__MAC_10_0, __IPHONE_2_0);
-
-
-// Obsolete ARC conversions. Deprecation forthcoming.
-// Use CFBridgingRetain, CFBridgingRelease, and __bridge casts instead.
+    OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0);
 
 typedef const void* objc_objectptr_t;
 
-#if __has_feature(objc_arc)
-#   define objc_retainedObject(o) ((__bridge_transfer id)(objc_objectptr_t)(o))
-#   define objc_unretainedObject(o) ((__bridge id)(objc_objectptr_t)(o))
-#   define objc_unretainedPointer(o) ((__bridge objc_objectptr_t)(id)(o))
-#else
-#   define objc_retainedObject(o) ((id)(objc_objectptr_t)(o))
-#   define objc_unretainedObject(o) ((id)(objc_objectptr_t)(o))
-#   define objc_unretainedPointer(o) ((objc_objectptr_t)(id)(o))
-#endif
+
+// Obsolete ARC conversions.
+
+OBJC_EXPORT id objc_retainedObject(objc_objectptr_t obj)
+    OBJC_UNAVAILABLE("use CFBridgingRelease() or a (__bridge_transfer id) cast instead");
+OBJC_EXPORT id objc_unretainedObject(objc_objectptr_t obj)
+    OBJC_UNAVAILABLE("use a (__bridge id) cast instead");
+OBJC_EXPORT objc_objectptr_t objc_unretainedPointer(id obj)
+    OBJC_UNAVAILABLE("use a __bridge cast instead");
 
 
 #if !__OBJC2__

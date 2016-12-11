@@ -69,21 +69,26 @@ _getObjcClassNames(const header_info *hi, size_t *size)
 
 #else
 
-#define GETSECT(name, type, sectname)                                   \
-    type *name(const header_info *hi, size_t *outCount)  \
+#define GETSECT(name, type, segname, sectname)                          \
+    type *name(const headerType *mhdr, size_t *outCount)                \
     {                                                                   \
         unsigned long byteCount = 0;                                    \
         type *data = (type *)                                           \
-            getsectiondata(hi->mhdr, SEG_OBJC, sectname, &byteCount);   \
+            getsectiondata(mhdr, segname, sectname, &byteCount);        \
         *outCount = byteCount / sizeof(type);                           \
         return data;                                                    \
+    }                                                                   \
+    type *name(const header_info *hi, size_t *outCount)                 \
+    {                                                                   \
+        return name(hi->mhdr(), outCount);                                \
     }
 
-GETSECT(_getObjcModules,      struct objc_module, "__module_info");
-GETSECT(_getObjcSelectorRefs, SEL,                "__message_refs");
-GETSECT(_getObjcClassRefs,    Class, "__cls_refs");
-GETSECT(_getObjcClassNames,   const char,         "__class_names");
+GETSECT(_getObjcModules,        objc_module, "__OBJC", "__module_info");
+GETSECT(_getObjcSelectorRefs,   SEL,         "__OBJC", "__message_refs");
+GETSECT(_getObjcClassRefs,      Class,       "__OBJC", "__cls_refs");
+GETSECT(_getObjcClassNames,     const char,  "__OBJC", "__class_names");
 // __OBJC,__class_names section only emitted by CodeWarrior  rdar://4951638
+GETSECT(getLibobjcInitializers, Initializer, "__DATA", "__objc_init_func");
 
 
 objc_image_info *
@@ -102,7 +107,7 @@ _getObjcProtocols(const header_info *hi, size_t *nprotos)
 {
     unsigned long size = 0;
     struct old_protocol *protos = (struct old_protocol *)
-        getsectiondata(hi->mhdr, SEG_OBJC, "__protocol", &size);
+        getsectiondata(hi->mhdr(), SEG_OBJC, "__protocol", &size);
     *nprotos = size / sizeof(struct old_protocol);
     
     if (!hi->proto_refs  &&  *nprotos) {
@@ -141,7 +146,7 @@ bool
 _hasObjcContents(const header_info *hi)
 {
     // Look for an __OBJC,* section other than __OBJC,__image_info
-    const segmentType *seg = getsegbynamefromheader(hi->mhdr, "__OBJC");
+    const segmentType *seg = getsegbynamefromheader(hi->mhdr(), "__OBJC");
     const sectionType *sect;
     uint32_t i;
     for (i = 0; i < seg->nsects; i++) {

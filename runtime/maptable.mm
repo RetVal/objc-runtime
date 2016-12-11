@@ -339,7 +339,7 @@ void *NXMapKeyCopyingInsert(NXMapTable *table, const void *key, const void *valu
         // key DOES exist in table - use table's key for insertion
     } else {
         // key DOES NOT exist in table - copy the new key before insertion
-        realKey = (void *)strdup((char *)key);
+        realKey = (void *)strdupIfMutable((char *)key);
     }
     return NXMapInsert(table, realKey, value);
 }
@@ -358,7 +358,8 @@ void *NXMapKeyFreeingRemove(NXMapTable *table, const void *key)
     if ((realKey = NXMapMember(table, key, &realValue)) != NX_MAPNOTAKEY) {
         // key DOES exist in table - remove pair and free key
         realValue = NXMapRemove(table, realKey);
-        free(realKey); // the key from the table, not necessarily the one given
+        // free the key from the table, not necessarily the one given
+        freeIfMutable((char *)realKey); 
         return realValue;
     } else {
         // key DOES NOT exist in table - nothing to do

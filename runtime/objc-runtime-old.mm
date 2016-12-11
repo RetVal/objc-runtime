@@ -861,67 +861,6 @@ static void really_connect_class(Class cls,
     // Connect superclass pointers.
     set_superclass(cls, supercls, YES);
 
-    // Update GC layouts
-    // For paranoia, this is a conservative update: 
-    // only non-strong -> strong and weak -> strong are corrected.
-    if (UseGC  &&  supercls  &&  
-        (cls->info & CLS_EXT)  &&  (supercls->info & CLS_EXT)) 
-    {
-        bool layoutChanged;
-        layout_bitmap ivarBitmap = 
-            layout_bitmap_create(cls->ivar_layout, 
-                                 cls->instance_size, 
-                                 cls->instance_size, NO);
-
-        layout_bitmap superBitmap = 
-            layout_bitmap_create(supercls->ivar_layout, 
-                                 supercls->instance_size, 
-                                 supercls->instance_size, NO);
-
-        // non-strong -> strong: bits set in super should be set in sub
-        layoutChanged = layout_bitmap_or(ivarBitmap, superBitmap, cls->name);
-        layout_bitmap_free(superBitmap);
-        
-        if (layoutChanged) {
-            layout_bitmap weakBitmap = {};
-            bool weakLayoutChanged = NO;
-
-            if (cls->ext  &&  cls->ext->weak_ivar_layout) {
-                // weak -> strong: strong bits should be cleared in weak layout
-                // This is a subset of non-strong -> strong
-                weakBitmap = 
-                    layout_bitmap_create(cls->ext->weak_ivar_layout, 
-                                         cls->instance_size, 
-                                         cls->instance_size, YES);
-
-                weakLayoutChanged = 
-                    layout_bitmap_clear(weakBitmap, ivarBitmap, cls->name);
-            } else {
-                // no existing weak ivars, so no weak -> strong changes
-            }
-
-            // Rebuild layout strings. 
-            if (PrintIvars) {
-                _objc_inform("IVARS: gc layout changed "
-                             "for class %s (super %s)",
-                             cls->name, supercls->name);
-                if (weakLayoutChanged) {
-                    _objc_inform("IVARS: gc weak layout changed "
-                                 "for class %s (super %s)",
-                                 cls->name, supercls->name);
-                }
-            }
-            cls->ivar_layout = layout_string_create(ivarBitmap);
-            if (weakLayoutChanged) {
-                cls->ext->weak_ivar_layout = layout_string_create(weakBitmap);
-            }
-
-            layout_bitmap_free(weakBitmap);
-        }
-        
-        layout_bitmap_free(ivarBitmap);
-    }
-
     // Done!
     cls->info |= CLS_CONNECTED;
 
@@ -931,7 +870,6 @@ static void really_connect_class(Class cls,
         // Update hash tables. 
         NXHashRemove(unconnected_class_hash, cls);
         oldCls = (Class)NXHashInsert(class_hash, cls);
-        objc_addRegisteredClass(cls);
         
         // Delete unconnected_class_hash if it is now empty.
         if (NXCountHashTable(unconnected_class_hash) == 0) {
@@ -949,16 +887,6 @@ static void really_connect_class(Class cls,
 
     // Connect newly-connectable subclasses
     resolve_subclasses_of_class(cls);
-
-    // GC debugging: make sure all classes with -dealloc also have -finalize
-    if (DebugFinalizers) {
-        extern IMP findIMPInClass(Class cls, SEL sel);
-        if (findIMPInClass(cls, sel_getUid("dealloc"))  &&  
-            ! findIMPInClass(cls, sel_getUid("finalize")))
-        {
-            _objc_inform("GC: class '%s' implements -dealloc but not -finalize", cls->name);
-        }
-    }
 
     // Debugging: if this class has ivars, make sure this class's ivars don't 
     // overlap with its super's. This catches some broken fragile base classes.
@@ -1080,11 +1008,10 @@ static bool _objc_read_categories_from_image (header_info *  hi)
     size_t	midx;
     bool needFlush = NO;
 
-    if (_objcHeaderIsReplacement(hi)) {
+    if (hi->info()->isReplacement()) {
         // Ignore any categories in this image
         return NO;
     }
-
 
     // Major loop - process all modules in the header
     mods = hi->mod_ptr;
@@ -1133,7 +1060,7 @@ static void _objc_read_classes_from_image(header_info *hi)
     Module		mods;
     int 		isBundle = headerIsBundle(hi);
 
-    if (_objcHeaderIsReplacement(hi)) {
+    if (hi->info()->isReplacement()) {
         // Ignore any classes in this image
         return;
     }
@@ -1144,7 +1071,7 @@ static void _objc_read_classes_from_image(header_info *hi)
     // to add lots of classes.
     {
         mutex_locker_t lock(classLock);
-        if (hi->mhdr != libobjc_header && _NXHashCapacity(class_hash) < 1024) {
+        if (hi->mhdr() != libobjc_header && _NXHashCapacity(class_hash) < 1024) {
             _NXHashRehashToCapacity(class_hash, 1024);
         }
     }
@@ -1258,7 +1185,7 @@ static void _objc_connect_classes_from_image(header_info *hi)
     unsigned int index;
     unsigned int midx;
     Module mods;
-    bool replacement = _objcHeaderIsReplacement(hi);
+    bool replacement = hi->info()->isReplacement();
 
     // Major loop - process all modules in the image
     mods = hi->mod_ptr;
@@ -1627,8 +1554,9 @@ protocol_copyMethodDescriptionList(Protocol *p,
 }
 
 
-objc_property_t protocol_getProperty(Protocol *p, const char *name, 
-                              BOOL isRequiredProperty, BOOL isInstanceProperty)
+objc_property_t 
+protocol_getProperty(Protocol *p, const char *name, 
+                     BOOL isRequiredProperty, BOOL isInstanceProperty)
 {
     old_protocol *proto = oldprotocol(p);
     old_protocol_ext *ext;
@@ -1636,14 +1564,18 @@ objc_property_t protocol_getProperty(Protocol *p, const char *name,
 
     if (!proto  ||  !name) return nil;
     
-    if (!isRequiredProperty  ||  !isInstanceProperty) {
-        // Only required instance properties are currently supported
+    if (!isRequiredProperty) {
+        // Only required properties are currently supported
         return nil;
     }
 
     if ((ext = ext_for_protocol(proto))) {
         old_property_list *plist;
-        if ((plist = ext->instance_properties)) {
+        if (isInstanceProperty) plist = ext->instance_properties;
+        else if (ext->hasClassPropertiesField()) plist = ext->class_properties;
+        else plist = nil;
+
+        if (plist) {
             uint32_t i;
             for (i = 0; i < plist->count; i++) {
                 old_property *prop = property_list_nth(plist, i);
@@ -1668,22 +1600,33 @@ objc_property_t protocol_getProperty(Protocol *p, const char *name,
 }
 
 
-objc_property_t *protocol_copyPropertyList(Protocol *p, unsigned int *outCount)
+objc_property_t *
+protocol_copyPropertyList2(Protocol *p, unsigned int *outCount,
+                           BOOL isRequiredProperty, BOOL isInstanceProperty)
 {
     old_property **result = nil;
     old_protocol_ext *ext;
     old_property_list *plist;
     
     old_protocol *proto = oldprotocol(p);
-    if (! (ext = ext_for_protocol(proto))) {
+    if (! (ext = ext_for_protocol(proto))  ||  !isRequiredProperty) {
+        // Only required properties are currently supported.
         if (outCount) *outCount = 0;
         return nil;
     }
 
-    plist = ext->instance_properties;
+    if (isInstanceProperty) plist = ext->instance_properties;
+    else if (ext->hasClassPropertiesField()) plist = ext->class_properties;
+    else plist = nil;
+
     result = copyPropertyList(plist, outCount);
     
     return (objc_property_t *)result;
+}
+
+objc_property_t *protocol_copyPropertyList(Protocol *p, unsigned int *outCount)
+{
+    return protocol_copyPropertyList2(p, outCount, YES, YES);
 }
 
 
@@ -1841,6 +1784,7 @@ Protocol *
 objc_allocateProtocol(const char *name)
 {
     Class cls = objc_getClass("__IncompleteProtocol");
+    assert(cls);
 
     mutex_locker_t lock(classLock);
 
@@ -2048,11 +1992,13 @@ protocol_addProperty(Protocol *proto_gen, const char *name,
     if (isRequiredProperty  &&  isInstanceProperty) {
         _protocol_addProperty(&ext->instance_properties, name, attrs, count);
     }
-    //else if (isRequiredProperty  &&  !isInstanceProperty) {
-    //    _protocol_addProperty(&ext->class_properties, name, attrs, count);
-    //} else if (!isRequiredProperty  &&  isInstanceProperty) {
+    else if (isRequiredProperty  &&  !isInstanceProperty) {
+        _protocol_addProperty(&ext->class_properties, name, attrs, count);
+    }
+    // else if (!isRequiredProperty  &&  isInstanceProperty) {
     //    _protocol_addProperty(&ext->optional_instance_properties, name, attrs, count);
-    //} else /*  !isRequiredProperty  &&  !isInstanceProperty) */ {
+    //} 
+    // else /*  !isRequiredProperty  &&  !isInstanceProperty) */ {
     //    _protocol_addProperty(&ext->optional_class_properties, name, attrs, count);
     //}
 }
@@ -2163,19 +2109,15 @@ static void _objc_fixup_selector_refs   (const header_info *hi)
     SEL *sels;
 
     bool preoptimized = hi->isPreoptimized();
-# if SUPPORT_IGNORED_SELECTOR_CONSTANT
-    // shared cache can't fix constant ignored selectors
-    if (UseGC) preoptimized = NO;
-# endif
 
     if (PrintPreopt) {
         if (preoptimized) {
             _objc_inform("PREOPTIMIZATION: honoring preoptimized selectors in %s", 
-                         hi->fname);
+                         hi->fname());
         }
-        else if (_objcHeaderOptimizedByDyld(hi)) {
+        else if (hi->info()->optimizedByDyld()) {
             _objc_inform("PREOPTIMIZATION: IGNORING preoptimized selectors in %s", 
-                         hi->fname);
+                         hi->fname());
         }
     }
 
@@ -2202,7 +2144,7 @@ static inline bool _is_threaded() {
 *   dyld_priv.h says even for 64-bit.
 **********************************************************************/
 void 
-unmap_image(const struct mach_header *mh, intptr_t vmaddr_slide)
+unmap_image(const char *path __unused, const struct mach_header *mh)
 {
     recursive_mutex_locker_t lock(loadMethodLock);
     unmap_image_nolock(mh);
@@ -2214,39 +2156,33 @@ unmap_image(const struct mach_header *mh, intptr_t vmaddr_slide)
 * Process the given images which are being mapped in by dyld.
 * Calls ABI-agnostic code after taking ABI-specific locks.
 **********************************************************************/
-const char *
-map_2_images(enum dyld_image_states state, uint32_t infoCount,
-             const struct dyld_image_info infoList[])
+void
+map_2_images(unsigned count, const char * const paths[],
+             const struct mach_header * const mhdrs[])
 {
     recursive_mutex_locker_t lock(loadMethodLock);
-    return map_images_nolock(state, infoCount, infoList);
+    map_images_nolock(count, paths, mhdrs);
 }
 
 
 /***********************************************************************
 * load_images
 * Process +load in the given images which are being mapped in by dyld.
-* Calls ABI-agnostic code after taking ABI-specific locks.
 *
 * Locking: acquires classLock and loadMethodLock
 **********************************************************************/
-const char *
-load_images(enum dyld_image_states state, uint32_t infoCount,
-           const struct dyld_image_info infoList[])
-{
-    bool found;
+extern void prepare_load_methods(const headerType *mhdr);
 
+void
+load_images(const char *path __unused, const struct mach_header *mh)
+{
     recursive_mutex_locker_t lock(loadMethodLock);
 
     // Discover +load methods
-    found = load_images_nolock(state, infoCount, infoList);
+    prepare_load_methods((const headerType *)mh);
 
     // Call +load methods (without classLock - re-entrant)
-    if (found) {
-        call_load_methods();
-    }
-
-    return nil;
+    call_load_methods();
 }
 #endif
 
@@ -2255,7 +2191,7 @@ load_images(enum dyld_image_states state, uint32_t infoCount,
 * _read_images
 * Perform metadata processing for hCount images starting with firstNewHeader
 **********************************************************************/
-void _read_images(header_info **hList, uint32_t hCount)
+void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int unoptimizedTotalClass)
 {
     uint32_t i;
     bool categoriesLoaded = NO;
@@ -2323,23 +2259,18 @@ static void schedule_class_load(Class cls)
     cls->info |= CLS_LOADED;
 }
 
-bool hasLoadMethods(const headerType *mhdr)
-{
-    return true;
-}
-
 void prepare_load_methods(const headerType *mhdr)
 {
     Module mods;
     unsigned int midx;
 
     header_info *hi;
-    for (hi = FirstHeader; hi; hi = hi->next) {
-        if (mhdr == hi->mhdr) break;
+    for (hi = FirstHeader; hi; hi = hi->getNext()) {
+        if (mhdr == hi->mhdr()) break;
     }
     if (!hi) return;
 
-    if (_objcHeaderIsReplacement(hi)) {
+    if (hi->info()->isReplacement()) {
         // Ignore any classes in this image
         return;
     }
@@ -2600,7 +2531,6 @@ static void _objc_remove_classes_in_image(header_info *hi)
             
             // Remove from class_hash
             NXHashRemove(class_hash, cls);
-            objc_removeRegisteredClass(cls);
 
             // Free heap memory pointed to by the class
             unload_class(cls->ISA());
@@ -2615,10 +2545,10 @@ static void _objc_remove_classes_in_image(header_info *hi)
     // Get the location of the dying image's __OBJC segment
     uintptr_t seg;
     unsigned long seg_size;
-    seg = (uintptr_t)getsegmentdata(hi->mhdr, "__OBJC", &seg_size);
+    seg = (uintptr_t)getsegmentdata(hi->mhdr(), "__OBJC", &seg_size);
 
     header_info *other_hi;
-    for (other_hi = FirstHeader; other_hi != nil; other_hi = other_hi->next) {
+    for (other_hi = FirstHeader; other_hi != nil; other_hi = other_hi->getNext()) {
         Class *other_refs;
         size_t count;
         if (other_hi == hi) continue;  // skip the image being unloaded
@@ -2691,10 +2621,10 @@ static void unload_paranoia(header_info *hi)
     // Get the location of the dying image's __OBJC segment
     uintptr_t seg;
     unsigned long seg_size;
-    seg = (uintptr_t)getsegmentdata(hi->mhdr, "__OBJC", &seg_size);
+    seg = (uintptr_t)getsegmentdata(hi->mhdr(), "__OBJC", &seg_size);
 
     _objc_inform("UNLOAD DEBUG: unloading image '%s' [%p..%p]", 
-                 hi->fname, (void *)seg, (void*)(seg+seg_size));
+                 hi->fname(), (void *)seg, (void*)(seg+seg_size));
 
     mutex_locker_t lock(classLock);
 
@@ -2772,7 +2702,8 @@ void _unload_image(header_info *hi)
     _objc_remove_classes_in_image(hi);
     _objc_remove_categories_in_image(hi);
     _objc_remove_pending_class_refs_in_image(hi);
-    
+    if (hi->proto_refs) try_free(hi->proto_refs);
+
     // Perform various debugging checks if requested.
     if (DebugUnload) unload_paranoia(hi);
 }
@@ -2814,7 +2745,6 @@ void		objc_addClass		(Class cls)
 
     // Add the class to the table
     (void) NXHashInsert (class_hash, cls);
-    objc_addRegisteredClass(cls);
 
     // Superclass is no longer a leaf for cache flushing
     if (cls->superclass && (cls->superclass->info & CLS_LEAF)) {
@@ -3016,12 +2946,24 @@ static inline void _objc_add_category(Class cls, old_category *category, int ver
         }
     }
 
-    // Augment properties
+    // Augment instance properties
     if (version >= 7  &&  category->instance_properties) {
         if (cls->ISA()->version >= 6) {
             _class_addProperties(cls, category->instance_properties);
         } else {
-            _objc_inform ("unable to add properties from category %s...\n", category->category_name);
+            _objc_inform ("unable to add instance properties from category %s...\n", category->category_name);
+            _objc_inform ("class `%s' must be recompiled\n", category->class_name);
+        }
+    }
+
+    // Augment class properties
+    if (version >= 7  &&  category->hasClassPropertiesField()  &&  
+        category->class_properties) 
+    {
+        if (cls->ISA()->version >= 6) {
+            _class_addProperties(cls->ISA(), category->class_properties);
+        } else {
+            _objc_inform ("unable to add class properties from category %s...\n", category->category_name);
             _objc_inform ("class `%s' must be recompiled\n", category->class_name);
         }
     }

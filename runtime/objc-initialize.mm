@@ -122,7 +122,7 @@ typedef struct _objc_initializing_classes {
 * If create == YES, create the list when no classes are being initialized by this thread.
 * If create == NO, return nil when no classes are being initialized by this thread.
 **********************************************************************/
-static _objc_initializing_classes *_fetchInitializingClassList(BOOL create)
+static _objc_initializing_classes *_fetchInitializingClassList(bool create)
 {
     _objc_pthread_data *data;
     _objc_initializing_classes *list;
@@ -178,7 +178,7 @@ void _destroyInitializingClassList(struct _objc_initializing_classes *list)
 * _thisThreadIsInitializingClass
 * Return TRUE if this thread is currently initializing the given class.
 **********************************************************************/
-static BOOL _thisThreadIsInitializingClass(Class cls)
+bool _thisThreadIsInitializingClass(Class cls)
 {
     int i;
 
@@ -284,11 +284,6 @@ static void _finishInitializing(Class cls, Class supercls)
                      cls->nameForLogging());
     }
 
-    // propagate finalization affinity.
-    if (UseGC && supercls && supercls->shouldFinalizeOnMainThread()) {
-        cls->setShouldFinalizeOnMainThread();
-    }
-
     // mark this class as fully +initialized
     cls->setInitialized();
     classInitLock.notifyAll();
@@ -346,6 +341,32 @@ static void _finishInitializingAfter(Class cls, Class supercls)
 }
 
 
+// Provide helpful messages in stack traces.
+OBJC_EXTERN __attribute__((noinline, used, visibility("hidden")))
+void waitForInitializeToComplete(Class cls)
+    asm("_WAITING_FOR_ANOTHER_THREAD_TO_FINISH_CALLING_+initialize");
+OBJC_EXTERN __attribute__((noinline, used, visibility("hidden")))
+void callInitialize(Class cls)
+    asm("_CALLING_SOME_+initialize_METHOD");
+
+
+void waitForInitializeToComplete(Class cls)
+{
+    monitor_locker_t lock(classInitLock);
+    while (!cls->isInitialized()) {
+        classInitLock.wait();
+    }
+    asm("");
+}
+
+
+void callInitialize(Class cls)
+{
+    ((void(*)(Class, SEL))objc_msgSend)(cls, SEL_initialize);
+    asm("");
+}
+
+
 /***********************************************************************
 * class_initialize.  Send the '+initialize' message on demand to any
 * uninitialized class. Force initialization of superclasses first.
@@ -355,7 +376,7 @@ void _class_initialize(Class cls)
     assert(!cls->isMetaClass());
 
     Class supercls;
-    BOOL reallyInitialize = NO;
+    bool reallyInitialize = NO;
 
     // Make sure super is done initializing BEFORE beginning to initialize cls.
     // See note about deadlock above.
@@ -387,23 +408,35 @@ void _class_initialize(Class cls)
                          cls->nameForLogging());
         }
 
-        ((void(*)(Class, SEL))objc_msgSend)(cls, SEL_initialize);
+        // Exceptions: A +initialize call that throws an exception 
+        // is deemed to be a complete and successful +initialize.
+        @try {
+            callInitialize(cls);
 
-        if (PrintInitializing) {
-            _objc_inform("INITIALIZE: finished +[%s initialize]",
-                         cls->nameForLogging());
-        }        
-        
-        // Done initializing. 
-        // If the superclass is also done initializing, then update 
-        //   the info bits and notify waiting threads.
-        // If not, update them later. (This can happen if this +initialize 
-        //   was itself triggered from inside a superclass +initialize.)
-        monitor_locker_t lock(classInitLock);
-        if (!supercls  ||  supercls->isInitialized()) {
-            _finishInitializing(cls, supercls);
-        } else {
-            _finishInitializingAfter(cls, supercls);
+            if (PrintInitializing) {
+                _objc_inform("INITIALIZE: finished +[%s initialize]",
+                             cls->nameForLogging());
+            }
+        }
+        @catch (...) {
+            if (PrintInitializing) {
+                _objc_inform("INITIALIZE: +[%s initialize] threw an exception",
+                             cls->nameForLogging());
+            }
+            @throw;
+        }
+        @finally {
+            // Done initializing. 
+            // If the superclass is also done initializing, then update 
+            //   the info bits and notify waiting threads.
+            // If not, update them later. (This can happen if this +initialize 
+            //   was itself triggered from inside a superclass +initialize.)
+            monitor_locker_t lock(classInitLock);
+            if (!supercls  ||  supercls->isInitialized()) {
+                _finishInitializing(cls, supercls);
+            } else {
+                _finishInitializingAfter(cls, supercls);
+            }
         }
         return;
     }
@@ -418,10 +451,7 @@ void _class_initialize(Class cls)
         if (_thisThreadIsInitializingClass(cls)) {
             return;
         } else {
-            monitor_locker_t lock(classInitLock);
-            while (!cls->isInitialized()) {
-                classInitLock.wait();
-            }
+            waitForInitializeToComplete(cls);
             return;
         }
     }

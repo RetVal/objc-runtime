@@ -53,10 +53,6 @@ static SEL _objc_search_builtins(const char *key)
 #endif
 
     if (!key) return (SEL)0;
-#if SUPPORT_IGNORED_SELECTOR_CONSTANT
-    if ((uintptr_t)key == kIgnore) return (SEL)kIgnore;
-    if (ignoreSelectorNamed(key)) return (SEL)kIgnore;
-#endif
     if ('\0' == *key) return (SEL)_objc_empty_selector;
 
 #if SUPPORT_PREOPT
@@ -68,9 +64,6 @@ static SEL _objc_search_builtins(const char *key)
 
 
 const char *sel_getName(SEL sel) {
-#if SUPPORT_IGNORED_SELECTOR_CONSTANT
-    if ((uintptr_t)sel == kIgnore) return "<ignored selector>";
-#endif
     return sel ? (const char *)sel : "<null selector>";
 }
 
@@ -80,9 +73,6 @@ BOOL sel_isMapped(SEL name)
     SEL sel;
     
     if (!name) return NO;
-#if SUPPORT_IGNORED_SELECTOR_CONSTANT
-    if ((uintptr_t)name == kIgnore) return YES;
-#endif
 
     sel = _objc_search_builtins((const char *)name);
     if (sel) return YES;
@@ -174,7 +164,7 @@ BOOL sel_isEqual(SEL lhs, SEL rhs)
 * sel_init
 * Initialize selector tables and register selectors used internally.
 **********************************************************************/
-void sel_init(bool wantsGC, size_t selrefCount)
+void sel_init(size_t selrefCount)
 {
     // save this value for later
     SelrefCount = selrefCount;
@@ -184,12 +174,6 @@ void sel_init(bool wantsGC, size_t selrefCount)
 #endif
 
     // Register selectors used by libobjc
-
-    if (wantsGC) {
-        // Registering retain/release/autorelease requires GC decision first.
-        // sel_init doesn't actually need the wantsGC parameter, it just 
-        // helps enforce the initialization order.
-    }
 
 #define s(x) SEL_##x = sel_registerNameNoLock(#x, NO)
 #define t(x,y) SEL_##y = sel_registerNameNoLock(#x, NO)
@@ -211,7 +195,6 @@ void sel_init(bool wantsGC, size_t selrefCount)
     s(dealloc);
     s(copy);
     s(new);
-    s(finalize);
     t(forwardInvocation:, forwardInvocation);
     t(_tryRetain, tryRetain);
     t(_isDeallocating, isDeallocating);

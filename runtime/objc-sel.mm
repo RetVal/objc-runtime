@@ -30,10 +30,6 @@
 static const objc_selopt_t *builtins = NULL;
 #endif
 
-#if SUPPORT_IGNORED_SELECTOR_CONSTANT
-#error sorry
-#endif
-
 
 static size_t SelrefCount = 0;
 
@@ -46,7 +42,7 @@ static SEL search_builtins(const char *key);
 * sel_init
 * Initialize selector tables and register selectors used internally.
 **********************************************************************/
-void sel_init(bool wantsGC, size_t selrefCount)
+void sel_init(size_t selrefCount)
 {
     // save this value for later
     SelrefCount = selrefCount;
@@ -68,12 +64,6 @@ void sel_init(bool wantsGC, size_t selrefCount)
 
     // Register selectors used by libobjc
 
-    if (wantsGC) {
-        // Registering retain/release/autorelease requires GC decision first.
-        // sel_init doesn't actually need the wantsGC parameter, it just 
-        // helps enforce the initialization order.
-    }
-
 #define s(x) SEL_##x = sel_registerNameNoLock(#x, NO)
 #define t(x,y) SEL_##y = sel_registerNameNoLock(#x, NO)
 
@@ -94,7 +84,6 @@ void sel_init(bool wantsGC, size_t selrefCount)
     s(dealloc);
     s(copy);
     s(new);
-    s(finalize);
     t(forwardInvocation:, forwardInvocation);
     t(_tryRetain, tryRetain);
     t(_isDeallocating, isDeallocating);
@@ -111,7 +100,7 @@ void sel_init(bool wantsGC, size_t selrefCount)
 static SEL sel_alloc(const char *name, bool copy)
 {
     selLock.assertWriting();
-    return (SEL)(copy ? strdup(name) : name);    
+    return (SEL)(copy ? strdupIfMutable(name) : name);    
 }
 
 

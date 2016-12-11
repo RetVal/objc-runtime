@@ -35,10 +35,6 @@
 #include <mach-o/arch.h>
 #include <mach-o/loader.h>
 
-// from "objc-private.h"
-// masks for objc_image_info.flags
-#define OBJC_IMAGE_SUPPORTS_GC (1<<1)
-
 // Some OS X SDKs don't define these.
 #ifndef CPU_TYPE_ARM
 #define CPU_TYPE_ARM            ((cpu_type_t) 12)
@@ -378,58 +374,40 @@ bool sectnameEquals(const char *lhs, const char *rhs)
 
 
 template <typename P>
-void dosect(uint8_t *start, macho_section<P> *sect, bool isOldABI, bool isOSX)
+void dosect(uint8_t *start, macho_section<P> *sect)
 {
     if (debug) printf("section %.16s from segment %.16s\n",
                       sect->sectname(), sect->segname());
 
-    if (isOSX) {
-        // Add "supports GC" flag to objc image info
-        if ((segnameStartsWith(sect->segname(),  "__DATA")  &&
-             sectnameEquals(sect->sectname(), "__objc_imageinfo"))  ||
-            (segnameEquals(sect->segname(),  "__OBJC")  &&
-             sectnameEquals(sect->sectname(), "__image_info")))
-        {
-            imageinfo *ii = (imageinfo*)(start + sect->offset());
-            P::E::set32(ii->flags, P::E::get32(ii->flags) | OBJC_IMAGE_SUPPORTS_GC);
-            if (debug) printf("added GC support flag\n");
-        }
+    // Strip S_MOD_INIT/TERM_FUNC_POINTERS. We don't want dyld to call 
+    // our init funcs because it is too late, and we don't want anyone to 
+    // call our term funcs ever.
+    if (segnameStartsWith(sect->segname(), "__DATA")  &&  
+        sectnameEquals(sect->sectname(), "__mod_init_func"))
+    {
+        // section type 0 is S_REGULAR
+        sect->set_flags(sect->flags() & ~SECTION_TYPE);
+        sect->set_sectname("__objc_init_func");
+        if (debug) printf("disabled __mod_init_func section\n");
     }
-
-    if (isOldABI) {
-        // Keep init funcs because libSystem doesn't call _objc_init().
-    } else {
-        // Strip S_MOD_INIT/TERM_FUNC_POINTERS. We don't want dyld to call 
-        // our init funcs because it is too late, and we don't want anyone to 
-        // call our term funcs ever.
-        if (segnameStartsWith(sect->segname(), "__DATA")  &&  
-            sectnameEquals(sect->sectname(), "__mod_init_func"))
-        {
-            // section type 0 is S_REGULAR
-            sect->set_flags(sect->flags() & ~SECTION_TYPE);
-            sect->set_sectname("__objc_init_func");
-            if (debug) printf("disabled __mod_init_func section\n");
-        }
-        if (segnameStartsWith(sect->segname(), "__DATA")  &&  
-            sectnameEquals(sect->sectname(), "__mod_term_func"))
-        {
-            // section type 0 is S_REGULAR
-            sect->set_flags(sect->flags() & ~SECTION_TYPE);
-            sect->set_sectname("__objc_term_func");
-            if (debug) printf("disabled __mod_term_func section\n");
-        }
+    if (segnameStartsWith(sect->segname(), "__DATA")  &&  
+        sectnameEquals(sect->sectname(), "__mod_term_func"))
+    {
+        // section type 0 is S_REGULAR
+        sect->set_flags(sect->flags() & ~SECTION_TYPE);
+        sect->set_sectname("__objc_term_func");
+        if (debug) printf("disabled __mod_term_func section\n");
     }
 }
 
 template <typename P>
-void doseg(uint8_t *start, macho_segment_command<P> *seg, 
-           bool isOldABI, bool isOSX) 
+void doseg(uint8_t *start, macho_segment_command<P> *seg)
 {
     if (debug) printf("segment name: %.16s, nsects %u\n",
                       seg->segname(), seg->nsects());
     macho_section<P> *sect = (macho_section<P> *)(seg + 1);
     for (uint32_t i = 0; i < seg->nsects(); ++i) {
-        dosect(start, &sect[i], isOldABI, isOSX);
+        dosect(start, &sect[i]);
     }
 }
 
@@ -438,32 +416,12 @@ template<typename P>
 bool parse_macho(uint8_t *buffer)
 {
     macho_header<P>* mh = (macho_header<P>*)buffer;
-    uint8_t *cmds;
-
-    bool isOldABI = false;
-    bool isOSX = false;
-    cmds = (uint8_t *)(mh + 1);
+    uint8_t *cmds = (uint8_t *)(mh + 1);
     for (uint32_t c = 0; c < mh->ncmds(); c++) {
         macho_load_command<P>* cmd = (macho_load_command<P>*)cmds;
         cmds += cmd->cmdsize();
         if (cmd->cmd() == LC_SEGMENT  ||  cmd->cmd() == LC_SEGMENT_64) {
-            macho_segment_command<P>* seg = (macho_segment_command<P>*)cmd;
-            if (segnameEquals(seg->segname(), "__OBJC")) isOldABI = true;
-        }
-        else if (cmd->cmd() == LC_VERSION_MIN_MACOSX) {
-            isOSX = true;
-        }
-    }
-
-    if (debug) printf("ABI=%s, OS=%s\n",
-                      isOldABI ? "old" : "new", isOSX ? "osx" : "ios");
-
-    cmds = (uint8_t *)(mh + 1);
-    for (uint32_t c = 0; c < mh->ncmds(); c++) {
-        macho_load_command<P>* cmd = (macho_load_command<P>*)cmds;
-        cmds += cmd->cmdsize();
-        if (cmd->cmd() == LC_SEGMENT  ||  cmd->cmd() == LC_SEGMENT_64) {
-            doseg(buffer, (macho_segment_command<P>*)cmd, isOldABI, isOSX);
+            doseg(buffer, (macho_segment_command<P>*)cmd);
         }
     }
 

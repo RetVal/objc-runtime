@@ -63,6 +63,8 @@ class nocopy_t {
 
 #if TARGET_OS_MAC
 
+#   define OS_UNFAIR_LOCK_INLINE 1
+
 #   ifndef __STDC_LIMIT_MACROS
 #       define __STDC_LIMIT_MACROS
 #   endif
@@ -89,6 +91,7 @@ class nocopy_t {
 #   include <sys/time.h>
 #   include <sys/stat.h>
 #   include <sys/param.h>
+#   include <sys/reason.h>
 #   include <mach/mach.h>
 #   include <mach/vm_param.h>
 #   include <mach/mach_time.h>
@@ -99,6 +102,7 @@ class nocopy_t {
 #   include <mach-o/dyld_priv.h>
 #   include <malloc/malloc.h>
 //#   include <os/lock_private.h>
+#   include <os/lock.h>
 #   include <libkern/OSAtomic.h>
 #   include <libkern/OSCacheControl.h>
 #   include <System/pthread_machdep.h>
@@ -113,6 +117,8 @@ void vsyslog(int, const char *, va_list) UNAVAILABLE_ATTRIBUTE;
 #define ALWAYS_INLINE inline __attribute__((always_inline))
 #define NEVER_INLINE inline __attribute__((noinline))
 
+#define fastpath(x) (__builtin_expect(bool(x), 1))
+#define slowpath(x) (__builtin_expect(bool(x), 0))
 
 #include <libkern/OSAtomic.h>
 
@@ -181,6 +187,14 @@ StoreReleaseExclusive(uintptr_t *dst, uintptr_t oldvalue __unused, uintptr_t val
     return !result;
 }
 
+static ALWAYS_INLINE
+void 
+ClearExclusive(uintptr_t *dst)
+{
+    // pretend it writes to *dst for instruction ordering purposes
+    asm("clrex" : "=m" (*dst));
+}
+
 
 #elif __arm__  
 
@@ -205,6 +219,12 @@ StoreReleaseExclusive(uintptr_t *dst, uintptr_t oldvalue, uintptr_t value)
 {
     return OSAtomicCompareAndSwapPtrBarrier((void *)oldvalue, (void *)value, 
                                             (void **)dst);
+}
+
+static ALWAYS_INLINE
+void 
+ClearExclusive(uintptr_t *dst __unused)
+{
 }
 
 
@@ -232,38 +252,16 @@ StoreReleaseExclusive(uintptr_t *dst, uintptr_t oldvalue, uintptr_t value)
     return StoreExclusive(dst, oldvalue, value);
 }
 
+static ALWAYS_INLINE
+void 
+ClearExclusive(uintptr_t *dst __unused)
+{
+}
+
+
 #else 
 #   error unknown architecture
 #endif
-
-
-class spinlock_t {
-    os_lock_handoff_s mLock;
- public:
-    spinlock_t() : mLock(OS_LOCK_HANDOFF_INIT) { }
-    
-    void lock() { os_lock_lock(&mLock); }
-    void unlock() { os_lock_unlock(&mLock); }
-    bool trylock() { return os_lock_trylock(&mLock); }
-
-
-    // Address-ordered lock discipline for a pair of locks.
-
-    static void lockTwo(spinlock_t *lock1, spinlock_t *lock2) {
-        if (lock1 > lock2) {
-            lock1->lock();
-            lock2->lock();
-        } else {
-            lock2->lock();
-            if (lock2 != lock1) lock1->lock(); 
-        }
-    }
-
-    static void unlockTwo(spinlock_t *lock1, spinlock_t *lock2) {
-        lock1->unlock();
-        if (lock2 != lock1) lock2->unlock();
-    }
-};
 
 
 #if !TARGET_OS_IPHONE
@@ -350,7 +348,11 @@ class spinlock_t {
 #include <objc/objc.h>
 #include <objc/objc-api.h>
 
-extern void _objc_fatal(const char *fmt, ...) __attribute__((noreturn, format (printf, 1, 2)));
+extern void _objc_fatal(const char *fmt, ...) 
+    __attribute__((noreturn, format (printf, 1, 2)));
+extern void _objc_fatal_with_reason(uint64_t reason, uint64_t flags, 
+                                    const char *fmt, ...) 
+    __attribute__((noreturn, format (printf, 3, 4)));
 
 #define INIT_ONCE_PTR(var, create, delete)                              \
     do {                                                                \
@@ -812,44 +814,50 @@ template <bool Debug> class monitor_tt;
 template <bool Debug> class rwlock_tt;
 template <bool Debug> class recursive_mutex_tt;
 
+using spinlock_t = mutex_tt<DEBUG>;
+using mutex_t = mutex_tt<DEBUG>;
+using monitor_t = monitor_tt<DEBUG>;
+using rwlock_t = rwlock_tt<DEBUG>;
+using recursive_mutex_t = recursive_mutex_tt<DEBUG>;
+
 #include "objc-lockdebug.h"
+
+extern "C" void os_unfair_lock_unlock(os_unfair_lock *);
+extern "C" void os_unfair_lock_lock_with_options(os_unfair_lock *, uint32_t options);
+
+inline void os_unfair_lock_lock_with_options_inline(os_unfair_lock *unfair_lock, uint32_t options) {
+    os_unfair_lock_lock_with_options(unfair_lock, options);
+}
+
+inline void os_unfair_lock_unlock_inline(os_unfair_lock *unfair_lock) {
+    os_unfair_lock_unlock(unfair_lock);
+}
+
+extern "C" void os_unfair_lock_assert_owner(os_unfair_lock *);
+extern "C" void os_unfair_lock_assert_not_owner(os_unfair_lock *);
+
+#ifndef OS_UNFAIR_LOCK_DATA_SYNCHRONIZATION
+#define OS_UNFAIR_LOCK_DATA_SYNCHRONIZATION 0x10000
+#endif
 
 template <bool Debug>
 class mutex_tt : nocopy_t {
-    pthread_mutex_t mLock;
+    os_unfair_lock mLock;
+ public:
+    mutex_tt() : mLock(OS_UNFAIR_LOCK_INIT) { }
 
-  public:
-    mutex_tt() : mLock((pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER) { }
-
-    void lock()
-    {
+    void lock() {
         lockdebug_mutex_lock(this);
 
-        int err = pthread_mutex_lock(&mLock);
-        if (err) _objc_fatal("pthread_mutex_lock failed (%d)", err);
+        os_unfair_lock_lock_with_options_inline
+            (&mLock, OS_UNFAIR_LOCK_DATA_SYNCHRONIZATION);
     }
 
-    bool tryLock()
-    {
-        int err = pthread_mutex_trylock(&mLock);
-        if (err == 0) {
-            lockdebug_mutex_try_lock_success(this);
-            return true;
-        } else if (err == EBUSY) {
-            return false;
-        } else {
-            _objc_fatal("pthread_mutex_trylock failed (%d)", err);
-        }
-    }
-
-    void unlock()
-    {
+    void unlock() {
         lockdebug_mutex_unlock(this);
 
-        int err = pthread_mutex_unlock(&mLock);
-        if (err) _objc_fatal("pthread_mutex_unlock failed (%d)", err);
+        os_unfair_lock_unlock_inline(&mLock);
     }
-
 
     void assertLocked() {
         lockdebug_mutex_assert_locked(this);
@@ -858,9 +866,25 @@ class mutex_tt : nocopy_t {
     void assertUnlocked() {
         lockdebug_mutex_assert_unlocked(this);
     }
-};
 
-using mutex_t = mutex_tt<DEBUG>;
+
+    // Address-ordered lock discipline for a pair of locks.
+
+    static void lockTwo(mutex_tt *lock1, mutex_tt *lock2) {
+        if (lock1 > lock2) {
+            lock1->lock();
+            lock2->lock();
+        } else {
+            lock2->lock();
+            if (lock2 != lock1) lock1->lock(); 
+        }
+    }
+
+    static void unlockTwo(mutex_tt *lock1, mutex_tt *lock2) {
+        lock1->unlock();
+        if (lock2 != lock1) lock2->unlock();
+    }
+};
 
 
 template <bool Debug>
@@ -868,7 +892,7 @@ class recursive_mutex_tt : nocopy_t {
     pthread_mutex_t mLock;
 
   public:
-    recursive_mutex_tt() : mLock((pthread_mutex_t)PTHREAD_RECURSIVE_MUTEX_INITIALIZER) { }
+    recursive_mutex_tt() : mLock(PTHREAD_RECURSIVE_MUTEX_INITIALIZER) { }
 
     void lock()
     {
@@ -877,20 +901,6 @@ class recursive_mutex_tt : nocopy_t {
         int err = pthread_mutex_lock(&mLock);
         if (err) _objc_fatal("pthread_mutex_lock failed (%d)", err);
     }
-
-    bool tryLock()
-    {
-        int err = pthread_mutex_trylock(&mLock);
-        if (err == 0) {
-            lockdebug_recursive_mutex_lock(this);
-            return true;
-        } else if (err == EBUSY) {
-            return false;
-        } else {
-            _objc_fatal("pthread_mutex_trylock failed (%d)", err);
-        }
-    }
-
 
     void unlock()
     {
@@ -923,8 +933,6 @@ class recursive_mutex_tt : nocopy_t {
     }
 };
 
-using recursive_mutex_t = recursive_mutex_tt<DEBUG>;
-
 
 template <bool Debug>
 class monitor_tt {
@@ -933,7 +941,7 @@ class monitor_tt {
 
   public:
     monitor_tt() 
-        : mutex((pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER), cond((pthread_cond_t)PTHREAD_COND_INITIALIZER) { }
+        : mutex(PTHREAD_MUTEX_INITIALIZER), cond(PTHREAD_COND_INITIALIZER) { }
 
     void enter() 
     {
@@ -981,8 +989,6 @@ class monitor_tt {
         lockdebug_monitor_assert_unlocked(this);
     }
 };
-
-using monitor_t = monitor_tt<DEBUG>;
 
 
 // semaphore_create formatted for INIT_ONCE use
@@ -1055,8 +1061,8 @@ class rwlock_tt : nocopy_t {
     pthread_rwlock_t mLock = PTHREAD_RWLOCK_INITIALIZER;
 
   public:
-    
-    rwlock_tt() {
+    rwlock_tt() : mLock(PTHREAD_RWLOCK_INITIALIZER) {
+        pthread_rwlock_init(&mLock, nullptr);
     }
     
     void read() 
@@ -1143,8 +1149,6 @@ class rwlock_tt : nocopy_t {
     }
 };
 
-using rwlock_t = rwlock_tt<DEBUG>;
-
 
 #ifndef __LP64__
 typedef struct mach_header headerType;
@@ -1155,7 +1159,7 @@ typedef struct mach_header_64 headerType;
 typedef struct segment_command_64 segmentType;
 typedef struct section_64 sectionType;
 #endif
-#define headerIsBundle(hi) (hi->mhdr->filetype == MH_BUNDLE)
+#define headerIsBundle(hi) (hi->mhdr()->filetype == MH_BUNDLE)
 #define libobjc_header ((headerType *)&_mh_dylib_header)
 
 // Prototypes
@@ -1181,19 +1185,28 @@ memdup(const void *mem, size_t len)
     return dup;
 }
 
-// unsigned strdup
-static inline uint8_t *
-ustrdup(const uint8_t *str)
+// strdup that doesn't copy read-only memory
+static inline char *
+strdupIfMutable(const char *str)
 {
-    return (uint8_t *)strdup((char *)str);
+    size_t size = strlen(str) + 1;
+    if (_dyld_is_memory_immutable(str, size)) {
+        return (char *)str;
+    } else {
+        return (char *)memdup(str, size);
+    }
 }
 
-// nil-checking strdup
-static inline uint8_t *
-strdupMaybeNil(const uint8_t *str)
+// free strdupIfMutable() result
+static inline void
+freeIfMutable(char *str)
 {
-    if (!str) return nil;
-    return (uint8_t *)strdup((char *)str);
+    size_t size = strlen(str) + 1;
+    if (_dyld_is_memory_immutable(str, size)) {
+        // nothing
+    } else {
+        free(str);
+    }
 }
 
 // nil-checking unsigned strdup
@@ -1201,7 +1214,57 @@ static inline uint8_t *
 ustrdupMaybeNil(const uint8_t *str)
 {
     if (!str) return nil;
-    return (uint8_t *)strdup((char *)str);
+    return (uint8_t *)strdupIfMutable((char *)str);
 }
+
+// OS version checking:
+//
+// sdkVersion()
+// DYLD_OS_VERSION(mac, ios, tv, watch)
+// sdkIsOlderThan(mac, ios, tv, watch)
+// sdkIsAtLeast(mac, ios, tv, watch)
+// 
+// This version order matches OBJC_AVAILABLE.
+
+#if TARGET_OS_OSX
+#   define DYLD_OS_VERSION(x, i, t, w) DYLD_MACOSX_VERSION_##x
+#   define sdkVersion() dyld_get_program_sdk_version()
+
+#elif TARGET_OS_IOS
+#   define DYLD_OS_VERSION(x, i, t, w) DYLD_IOS_VERSION_##i
+#   define sdkVersion() dyld_get_program_sdk_version()
+
+#elif TARGET_OS_TV
+    // dyld does not currently have distinct constants for tvOS
+#   define DYLD_OS_VERSION(x, i, t, w) DYLD_IOS_VERSION_##t
+#   define sdkVersion() dyld_get_program_sdk_version()
+
+#elif TARGET_OS_WATCH
+#   define DYLD_OS_VERSION(x, i, t, w) DYLD_WATCHOS_VERSION_##w
+    // watchOS has its own API for compatibility reasons
+#   define sdkVersion() dyld_get_program_sdk_watch_os_version()
+
+#else
+#   error unknown OS
+#endif
+
+
+#define sdkIsOlderThan(x, i, t, w) \
+            (sdkVersion() < DYLD_OS_VERSION(x, i, t, w))
+#define sdkIsAtLeast(x, i, t, w) \
+            (sdkVersion() >= DYLD_OS_VERSION(x, i, t, w))
+
+// Allow bare 0 to be used in DYLD_OS_VERSION() and sdkIsOlderThan()
+#define DYLD_MACOSX_VERSION_0 0
+#define DYLD_IOS_VERSION_0 0
+#define DYLD_TVOS_VERSION_0 0
+#define DYLD_WATCHOS_VERSION_0 0
+
+// Pretty-print a DYLD_*_VERSION_* constant.
+#define SDK_FORMAT "%hu.%hhu.%hhu"
+#define FORMAT_SDK(v) \
+    (unsigned short)(((uint32_t)(v))>>16),  \
+    (unsigned  char)(((uint32_t)(v))>>8),   \
+    (unsigned  char)(((uint32_t)(v))>>0)
 
 #endif

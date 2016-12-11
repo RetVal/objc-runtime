@@ -27,9 +27,7 @@
 #include <libkern/OSAtomic.h>
 
 #include "objc-private.h"
-#include "objc-auto.h"
 #include "runtime.h"
-#include "objc-accessors.h"
 
 // stub interface declarations to make compiler happy.
 
@@ -41,11 +39,14 @@
 - (id)mutableCopyWithZone:(void *)zone;
 @end
 
+// These locks must not be at function scope.
 static StripedMap<spinlock_t> PropertyLocks;
+static StripedMap<spinlock_t> StructLocks;
+static StripedMap<spinlock_t> CppObjectLocks;
 
 #define MUTABLE_COPY 2
 
-id objc_getProperty_non_gc(id self, SEL _cmd, ptrdiff_t offset, BOOL atomic) {
+id objc_getProperty(id self, SEL _cmd, ptrdiff_t offset, BOOL atomic) {
     if (offset == 0) {
         return object_getClass(self);
     }
@@ -100,7 +101,7 @@ static inline void reallySetProperty(id self, SEL _cmd, id newValue, ptrdiff_t o
     objc_release(oldValue);
 }
 
-void objc_setProperty_non_gc(id self, SEL _cmd, ptrdiff_t offset, id newValue, BOOL atomic, signed char shouldCopy) 
+void objc_setProperty(id self, SEL _cmd, ptrdiff_t offset, id newValue, BOOL atomic, signed char shouldCopy) 
 {
     bool copy = (shouldCopy && shouldCopy != MUTABLE_COPY);
     bool mutableCopy = (shouldCopy == MUTABLE_COPY);
@@ -129,44 +130,10 @@ void objc_setProperty_nonatomic_copy(id self, SEL _cmd, id newValue, ptrdiff_t o
 }
 
 
-#if SUPPORT_GC
-
-id objc_getProperty_gc(id self, SEL _cmd, ptrdiff_t offset, BOOL atomic) {
-    return *(id*) ((char*)self + offset);
-}
-
-void objc_setProperty_gc(id self, SEL _cmd, ptrdiff_t offset, id newValue, BOOL atomic, signed char shouldCopy) {
-    if (shouldCopy) {
-        newValue = (shouldCopy == MUTABLE_COPY ? [newValue mutableCopyWithZone:nil] : [newValue copyWithZone:nil]);
-    }
-    objc_assign_ivar(newValue, self, offset);
-}
-
-// objc_getProperty and objc_setProperty are resolver functions in objc-auto.mm
-
-#else
-
-id 
-objc_getProperty(id self, SEL _cmd, ptrdiff_t offset, BOOL atomic) 
-{
-    return objc_getProperty_non_gc(self, _cmd, offset, atomic);
-}
-
-void 
-objc_setProperty(id self, SEL _cmd, ptrdiff_t offset, id newValue, 
-                 BOOL atomic, signed char shouldCopy) 
-{
-    objc_setProperty_non_gc(self, _cmd, offset, newValue, atomic, shouldCopy);
-}
-
-#endif
-
-
 // This entry point was designed wrong.  When used as a getter, src needs to be locked so that
 // if simultaneously used for a setter then there would be contention on src.
 // So we need two locks - one of which will be contended.
-void objc_copyStruct(void *dest, const void *src, ptrdiff_t size, BOOL atomic, BOOL hasStrong) {
-    static StripedMap<spinlock_t> StructLocks;
+void objc_copyStruct(void *dest, const void *src, ptrdiff_t size, BOOL atomic, BOOL hasStrong __unused) {
     spinlock_t *srcLock = nil;
     spinlock_t *dstLock = nil;
     if (atomic) {
@@ -174,21 +141,15 @@ void objc_copyStruct(void *dest, const void *src, ptrdiff_t size, BOOL atomic, B
         dstLock = &StructLocks[dest];
         spinlock_t::lockTwo(srcLock, dstLock);
     }
-#if SUPPORT_GC
-    if (UseGC && hasStrong) {
-        auto_zone_write_barrier_memmove(gc_zone, dest, src, size);
-    } else 
-#endif
-    {
-        memmove(dest, src, size);
-    }
+
+    memmove(dest, src, size);
+
     if (atomic) {
         spinlock_t::unlockTwo(srcLock, dstLock);
     }
 }
 
 void objc_copyCppObjectAtomic(void *dest, const void *src, void (*copyHelper) (void *dest, const void *source)) {
-    static StripedMap<spinlock_t> CppObjectLocks;
     spinlock_t *srcLock = &CppObjectLocks[src];
     spinlock_t *dstLock = &CppObjectLocks[dest];
     spinlock_t::lockTwo(srcLock, dstLock);

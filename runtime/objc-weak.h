@@ -43,44 +43,73 @@ see its previous reference.
 So, in the hash table, indexed by the weakly referenced item, is a list of 
 all locations where this address is currently being stored.
  
-For ARR, we also keep track of whether an arbitrary object is being 
+For ARC, we also keep track of whether an arbitrary object is being 
 deallocated by briefly placing it in the table just prior to invoking 
 dealloc, and removing it via objc_clear_deallocating just prior to memory 
 reclamation.
 
 */
 
-/// The address of a __weak object reference
-typedef objc_object ** weak_referrer_t;
+// The address of a __weak variable.
+// These pointers are stored disguised so memory analysis tools
+// don't see lots of interior pointers from the weak table into objects.
+typedef DisguisedPtr<objc_object *> weak_referrer_t;
 
 #if __LP64__
-#define PTR_MINUS_1 63
+#define PTR_MINUS_2 62
 #else
-#define PTR_MINUS_1 31
+#define PTR_MINUS_2 30
 #endif
 
 /**
  * The internal structure stored in the weak references table. 
  * It maintains and stores
  * a hash set of weak references pointing to an object.
- * If out_of_line==0, the set is instead a small inline array.
+ * If out_of_line_ness != REFERRERS_OUT_OF_LINE then the set
+ * is instead a small inline array.
  */
 #define WEAK_INLINE_COUNT 4
+
+// out_of_line_ness field overlaps with the low two bits of inline_referrers[1].
+// inline_referrers[1] is a DisguisedPtr of a pointer-aligned address.
+// The low two bits of a pointer-aligned DisguisedPtr will always be 0b00
+// (disguised nil or 0x80..00) or 0b11 (any other address).
+// Therefore out_of_line_ness == 0b10 is used to mark the out-of-line state.
+#define REFERRERS_OUT_OF_LINE 2
+
 struct weak_entry_t {
     DisguisedPtr<objc_object> referent;
     union {
         struct {
             weak_referrer_t *referrers;
-            uintptr_t        out_of_line : 1;
-            uintptr_t        num_refs : PTR_MINUS_1;
+            uintptr_t        out_of_line_ness : 2;
+            uintptr_t        num_refs : PTR_MINUS_2;
             uintptr_t        mask;
             uintptr_t        max_hash_displacement;
         };
         struct {
-            // out_of_line=0 is LSB of one of these (don't care which)
+            // out_of_line_ness field is low bits of inline_referrers[1]
             weak_referrer_t  inline_referrers[WEAK_INLINE_COUNT];
         };
     };
+
+    bool out_of_line() {
+        return (out_of_line_ness == REFERRERS_OUT_OF_LINE);
+    }
+
+    weak_entry_t& operator=(const weak_entry_t& other) {
+        memcpy(this, &other, sizeof(other));
+        return *this;
+    }
+
+    weak_entry_t(objc_object *newReferent, objc_object **newReferrer)
+        : referent(newReferent)
+    {
+        inline_referrers[0] = newReferrer;
+        for (int i = 1; i < WEAK_INLINE_COUNT; i++) {
+            inline_referrers[i] = nil;
+        }
+    }
 };
 
 /**
@@ -105,9 +134,6 @@ void weak_unregister_no_lock(weak_table_t *weak_table, id referent, id *referrer
 /// Returns true if an object is weakly referenced somewhere.
 bool weak_is_registered_no_lock(weak_table_t *weak_table, id referent);
 #endif
-
-/// Assert a weak pointer is valid and retain the object during its use.
-id weak_read_no_lock(weak_table_t *weak_table, id *referrer);
 
 /// Called on object destruction. Sets all remaining weak pointers to nil.
 void weak_clear_no_lock(weak_table_t *weak_table, id referent);

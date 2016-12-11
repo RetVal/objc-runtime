@@ -45,6 +45,10 @@
 
 __BEGIN_DECLS
 
+// Termination reasons in the OS_REASON_OBJC namespace.
+#define OBJC_EXIT_REASON_UNSPECIFIED 1
+#define OBJC_EXIT_REASON_GC_NOT_SUPPORTED 2
+
 // This is the allocation size required for each of the class and the metaclass 
 // with objc_initializeClassPair() and objc_readClassPair().
 // The runtime's class structure will never grow beyond this.
@@ -56,7 +60,7 @@ __BEGIN_DECLS
 // Returns nil if the superclass is under construction.
 // Call objc_registerClassPair() when you are done.
 OBJC_EXPORT Class objc_initializeClassPair(Class superclass, const char *name, Class cls, Class metacls) 
-    __OSX_AVAILABLE_STARTING(__MAC_10_6, __IPHONE_3_0);
+    OBJC_AVAILABLE(10.6, 3.0, 9.0, 1.0);
 
 // Class and metaclass construction from a compiler-generated memory image.
 // cls and cls->isa must each be OBJC_MAX_CLASS_SIZE bytes. 
@@ -70,38 +74,40 @@ OBJC_EXPORT Class objc_initializeClassPair(Class superclass, const char *name, C
 struct objc_image_info;
 OBJC_EXPORT Class objc_readClassPair(Class cls, 
                                      const struct objc_image_info *info)
-    __OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_8_0);
+    OBJC_AVAILABLE(10.10, 8.0, 9.0, 1.0);
 #endif
 
 // Batch object allocation using malloc_zone_batch_malloc().
 OBJC_EXPORT unsigned class_createInstances(Class cls, size_t extraBytes, 
                                            id *results, unsigned num_requested)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_4_3)
+    OBJC_AVAILABLE(10.7, 4.3, 9.0, 1.0)
     OBJC_ARC_UNAVAILABLE;
 
 // Get the isa pointer written into objects just before being freed.
 OBJC_EXPORT Class _objc_getFreedObjectClass(void)
-    __OSX_AVAILABLE_STARTING(__MAC_10_0, __IPHONE_2_0);
-
-// Return YES if GC is on and `object` is a GC allocation.
-OBJC_EXPORT BOOL objc_isAuto(id object) 
-    __OSX_AVAILABLE_STARTING(__MAC_10_4, __IPHONE_NA);
+    OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0);
 
 // env NSObjCMessageLoggingEnabled
 OBJC_EXPORT void instrumentObjcMessageSends(BOOL flag)
-    __OSX_AVAILABLE_STARTING(__MAC_10_0, __IPHONE_2_0);
+    OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0);
 
 // Initializer called by libSystem
-#if __OBJC2__
 OBJC_EXPORT void _objc_init(void)
-    __OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_6_0);
+#if __OBJC2__
+    OBJC_AVAILABLE(10.8, 6.0, 9.0, 1.0);
+#else
+    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0);
 #endif
 
-#ifndef OBJC_NO_GC
+// Return YES if GC is on and `object` is a GC allocation.
+OBJC_EXPORT BOOL objc_isAuto(id object) 
+    __OSX_DEPRECATED(10.4, 10.8, "it always returns NO") 
+    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+
 // GC startup callback from Foundation
 OBJC_EXPORT malloc_zone_t *objc_collect_init(int (*callback)(void))
-    __OSX_AVAILABLE_STARTING(__MAC_10_4, __IPHONE_NA);
-#endif
+    __OSX_DEPRECATED(10.4, 10.8, "it does nothing") 
+    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
 
 // Plainly-implemented GC barriers. Rosetta used to use these.
 OBJC_EXPORT id objc_assign_strongCast_generic(id value, id *dest)
@@ -113,25 +119,35 @@ OBJC_EXPORT id objc_assign_threadlocal_generic(id value, id *dest)
 OBJC_EXPORT id objc_assign_ivar_generic(id value, id dest, ptrdiff_t offset)
     UNAVAILABLE_ATTRIBUTE;
 
+// GC preflight for an app executable.
+// 1: some slice requires GC
+// 0: no slice requires GC
+// -1: I/O or file format error
+OBJC_EXPORT int objc_appRequiresGC(int fd)
+    __OSX_AVAILABLE(10.11) 
+    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+
 // Install missing-class callback. Used by the late unlamented ZeroLink.
 OBJC_EXPORT void _objc_setClassLoader(BOOL (*newClassLoader)(const char *))  OBJC2_UNAVAILABLE;
 
 // Install handler for allocation failures. 
 // Handler may abort, or throw, or provide an object to return.
 OBJC_EXPORT void _objc_setBadAllocHandler(id (*newHandler)(Class isa))
-     __OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_6_0);
+    OBJC_AVAILABLE(10.8, 6.0, 9.0, 1.0);
 
 // This can go away when AppKit stops calling it (rdar://7811851)
 #if __OBJC2__
 OBJC_EXPORT void objc_setMultithreaded (BOOL flag)
-    __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_0,__MAC_10_5, __IPHONE_NA,__IPHONE_NA);
+    __OSX_DEPRECATED(10.0, 10.5, "multithreading is always available") 
+    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
 #endif
 
 // Used by ExceptionHandling.framework
 #if !__OBJC2__
 OBJC_EXPORT void _objc_error(id rcv, const char *fmt, va_list args)
     __attribute__((noreturn))
-    __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_0,__MAC_10_5, __IPHONE_NA,__IPHONE_NA);
+    __OSX_DEPRECATED(10.0, 10.5, "use other logging facilities instead") 
+    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
 
 #endif
 
@@ -144,18 +160,17 @@ OBJC_EXPORT void _objc_error(id rcv, const char *fmt, va_list args)
 
 #if OBJC_HAVE_TAGGED_POINTERS
 
-// Tagged pointer layout and usage is subject to change 
-// on different OS versions. The current layout is:
-// (MSB)
-// 60 bits  payload
-//  3 bits  tag index
-//  1 bit   1 for tagged pointer objects, 0 for ordinary objects
-// (LSB)
+// Tagged pointer layout and usage is subject to change on different OS versions.
+
+// Tag indexes 0..<7 have a 60-bit payload.
+// Tag index 7 is reserved.
+// Tag indexes 8..<264 have a 52-bit payload.
+// Tag index 264 is reserved.
 
 #if __has_feature(objc_fixed_enum)  ||  __cplusplus >= 201103L
-enum objc_tag_index_t : uint8_t
+enum objc_tag_index_t : uint16_t
 #else
-typedef uint8_t objc_tag_index_t;
+typedef uint16_t objc_tag_index_t;
 enum
 #endif
 {
@@ -166,17 +181,109 @@ enum
     OBJC_TAG_NSIndexPath       = 4, 
     OBJC_TAG_NSManagedObjectID = 5, 
     OBJC_TAG_NSDate            = 6, 
-    OBJC_TAG_7                 = 7
+    OBJC_TAG_RESERVED_7        = 7, 
+
+    OBJC_TAG_First60BitPayload = 0, 
+    OBJC_TAG_Last60BitPayload  = 6, 
+    OBJC_TAG_First52BitPayload = 8, 
+    OBJC_TAG_Last52BitPayload  = 263, 
+
+    OBJC_TAG_RESERVED_264      = 264
 };
 #if __has_feature(objc_fixed_enum)  &&  !defined(__cplusplus)
 typedef enum objc_tag_index_t objc_tag_index_t;
 #endif
 
-OBJC_EXPORT void _objc_registerTaggedPointerClass(objc_tag_index_t tag, Class cls)
-    __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
 
+// Returns true if tagged pointers are enabled.
+// The other functions below must not be called if tagged pointers are disabled.
+static inline bool 
+_objc_taggedPointersEnabled(void);
+
+// Register a class for a tagged pointer tag.
+// Aborts if the tag is invalid or already in use.
+OBJC_EXPORT void _objc_registerTaggedPointerClass(objc_tag_index_t tag, Class cls)
+    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0);
+
+// Returns the registered class for the given tag.
+// Returns nil if the tag is valid but has no registered class.
+// Aborts if the tag is invalid.
 OBJC_EXPORT Class _objc_getClassForTag(objc_tag_index_t tag)
-    __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
+    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0);
+
+// Create a tagged pointer object with the given tag and payload.
+// Assumes the tag is valid.
+// Assumes tagged pointers are enabled.
+// The payload will be silently truncated to fit.
+static inline void *
+_objc_makeTaggedPointer(objc_tag_index_t tag, uintptr_t payload);
+
+// Return true if ptr is a tagged pointer object.
+// Does not check the validity of ptr's class.
+static inline bool 
+_objc_isTaggedPointer(const void *ptr);
+
+// Extract the tag value from the given tagged pointer object.
+// Assumes ptr is a valid tagged pointer object.
+// Does not check the validity of ptr's tag.
+static inline objc_tag_index_t 
+_objc_getTaggedPointerTag(const void *ptr);
+
+// Extract the payload from the given tagged pointer object.
+// Assumes ptr is a valid tagged pointer object.
+// The payload value is zero-extended.
+static inline uintptr_t
+_objc_getTaggedPointerValue(const void *ptr);
+
+// Extract the payload from the given tagged pointer object.
+// Assumes ptr is a valid tagged pointer object.
+// The payload value is sign-extended.
+static inline intptr_t
+_objc_getTaggedPointerSignedValue(const void *ptr);
+
+// Don't use the values below. Use the declarations above.
+
+#if TARGET_OS_OSX && __x86_64__
+    // 64-bit Mac - tag bit is LSB
+#   define OBJC_MSB_TAGGED_POINTERS 0
+#else
+    // Everything else - tag bit is MSB
+#   define OBJC_MSB_TAGGED_POINTERS 1
+#endif
+
+#define _OBJC_TAG_INDEX_MASK 0x7
+// array slot includes the tag bit itself
+#define _OBJC_TAG_SLOT_COUNT 16
+#define _OBJC_TAG_SLOT_MASK 0xf
+
+#define _OBJC_TAG_EXT_INDEX_MASK 0xff
+// array slot has no extra bits
+#define _OBJC_TAG_EXT_SLOT_COUNT 256
+#define _OBJC_TAG_EXT_SLOT_MASK 0xff
+
+#if OBJC_MSB_TAGGED_POINTERS
+#   define _OBJC_TAG_MASK (1ULL<<63)
+#   define _OBJC_TAG_INDEX_SHIFT 60
+#   define _OBJC_TAG_SLOT_SHIFT 60
+#   define _OBJC_TAG_PAYLOAD_LSHIFT 4
+#   define _OBJC_TAG_PAYLOAD_RSHIFT 4
+#   define _OBJC_TAG_EXT_MASK (0xfULL<<60)
+#   define _OBJC_TAG_EXT_INDEX_SHIFT 52
+#   define _OBJC_TAG_EXT_SLOT_SHIFT 52
+#   define _OBJC_TAG_EXT_PAYLOAD_LSHIFT 12
+#   define _OBJC_TAG_EXT_PAYLOAD_RSHIFT 12
+#else
+#   define _OBJC_TAG_MASK 1
+#   define _OBJC_TAG_INDEX_SHIFT 1
+#   define _OBJC_TAG_SLOT_SHIFT 0
+#   define _OBJC_TAG_PAYLOAD_LSHIFT 0
+#   define _OBJC_TAG_PAYLOAD_RSHIFT 4
+#   define _OBJC_TAG_EXT_MASK 0xfULL
+#   define _OBJC_TAG_EXT_INDEX_SHIFT 4
+#   define _OBJC_TAG_EXT_SLOT_SHIFT 4
+#   define _OBJC_TAG_EXT_PAYLOAD_LSHIFT 0
+#   define _OBJC_TAG_EXT_PAYLOAD_RSHIFT 12
+#endif
 
 static inline bool 
 _objc_taggedPointersEnabled(void)
@@ -185,114 +292,76 @@ _objc_taggedPointersEnabled(void)
     return (objc_debug_taggedpointer_mask != 0);
 }
 
-#if TARGET_OS_IPHONE
-// tagged pointer marker is MSB
-
 static inline void *
 _objc_makeTaggedPointer(objc_tag_index_t tag, uintptr_t value)
 {
+    // PAYLOAD_LSHIFT and PAYLOAD_RSHIFT are the payload extraction shifts.
+    // They are reversed here for payload insertion.
+
     // assert(_objc_taggedPointersEnabled());
-    // assert((unsigned int)tag < 8);
-    // assert(((value << 4) >> 4) == value);
-    return (void*)((1UL << 63) | ((uintptr_t)tag << 60) | (value & ~(0xFUL << 60)));
+    if (tag <= OBJC_TAG_Last60BitPayload) {
+        // assert(((value << _OBJC_TAG_PAYLOAD_RSHIFT) >> _OBJC_TAG_PAYLOAD_LSHIFT) == value);
+        return (void*)
+            (_OBJC_TAG_MASK | 
+             ((uintptr_t)tag << _OBJC_TAG_INDEX_SHIFT) | 
+             ((value << _OBJC_TAG_PAYLOAD_RSHIFT) >> _OBJC_TAG_PAYLOAD_LSHIFT));
+    } else {
+        // assert(tag >= OBJC_TAG_First52BitPayload);
+        // assert(tag <= OBJC_TAG_Last52BitPayload);
+        // assert(((value << _OBJC_TAG_EXT_PAYLOAD_RSHIFT) >> _OBJC_TAG_EXT_PAYLOAD_LSHIFT) == value);
+        return (void*)
+            (_OBJC_TAG_EXT_MASK |
+             ((uintptr_t)(tag - OBJC_TAG_First52BitPayload) << _OBJC_TAG_EXT_INDEX_SHIFT) |
+             ((value << _OBJC_TAG_EXT_PAYLOAD_RSHIFT) >> _OBJC_TAG_EXT_PAYLOAD_LSHIFT));
+    }
 }
 
 static inline bool 
 _objc_isTaggedPointer(const void *ptr) 
 {
-    return (intptr_t)ptr < 0;  // a.k.a. ptr & 0x8000000000000000
+    return ((intptr_t)ptr & _OBJC_TAG_MASK) == _OBJC_TAG_MASK;
 }
 
 static inline objc_tag_index_t 
 _objc_getTaggedPointerTag(const void *ptr) 
 {
     // assert(_objc_isTaggedPointer(ptr));
-    return (objc_tag_index_t)(((uintptr_t)ptr >> 60) & 0x7);
+    uintptr_t basicTag = ((uintptr_t)ptr >> _OBJC_TAG_INDEX_SHIFT) & _OBJC_TAG_INDEX_MASK;
+    uintptr_t extTag =   ((uintptr_t)ptr >> _OBJC_TAG_EXT_INDEX_SHIFT) & _OBJC_TAG_EXT_INDEX_MASK;
+    if (basicTag == _OBJC_TAG_INDEX_MASK) {
+        return (objc_tag_index_t)(extTag + OBJC_TAG_First52BitPayload);
+    } else {
+        return (objc_tag_index_t)basicTag;
+    }
 }
 
 static inline uintptr_t
 _objc_getTaggedPointerValue(const void *ptr) 
 {
     // assert(_objc_isTaggedPointer(ptr));
-    return (uintptr_t)ptr & 0x0fffffffffffffff;
+    uintptr_t basicTag = ((uintptr_t)ptr >> _OBJC_TAG_INDEX_SHIFT) & _OBJC_TAG_INDEX_MASK;
+    if (basicTag == _OBJC_TAG_INDEX_MASK) {
+        return ((uintptr_t)ptr << _OBJC_TAG_EXT_PAYLOAD_LSHIFT) >> _OBJC_TAG_EXT_PAYLOAD_RSHIFT;
+    } else {
+        return ((uintptr_t)ptr << _OBJC_TAG_PAYLOAD_LSHIFT) >> _OBJC_TAG_PAYLOAD_RSHIFT;
+    }
 }
 
 static inline intptr_t
 _objc_getTaggedPointerSignedValue(const void *ptr) 
 {
     // assert(_objc_isTaggedPointer(ptr));
-    return ((intptr_t)ptr << 4) >> 4;
+    uintptr_t basicTag = ((uintptr_t)ptr >> _OBJC_TAG_INDEX_SHIFT) & _OBJC_TAG_INDEX_MASK;
+    if (basicTag == _OBJC_TAG_INDEX_MASK) {
+        return ((intptr_t)ptr << _OBJC_TAG_EXT_PAYLOAD_LSHIFT) >> _OBJC_TAG_EXT_PAYLOAD_RSHIFT;
+    } else {
+        return ((intptr_t)ptr << _OBJC_TAG_PAYLOAD_LSHIFT) >> _OBJC_TAG_PAYLOAD_RSHIFT;
+    }
 }
 
-// TARGET_OS_IPHONE
-#else
-// not TARGET_OS_IPHONE
-// tagged pointer marker is LSB
-
-static inline void *
-_objc_makeTaggedPointer(objc_tag_index_t tag, uintptr_t value)
-{
-    // assert(_objc_taggedPointersEnabled());
-    // assert((unsigned int)tag < 8);
-    // assert(((value << 4) >> 4) == value);
-    return (void *)((value << 4) | ((uintptr_t)tag << 1) | 1);
-}
-
-static inline bool 
-_objc_isTaggedPointer(const void *ptr) 
-{
-    return (uintptr_t)ptr & 1;
-}
-
-static inline objc_tag_index_t 
-_objc_getTaggedPointerTag(const void *ptr) 
-{
-    // assert(_objc_isTaggedPointer(ptr));
-    return (objc_tag_index_t)(((uintptr_t)ptr & 0xe) >> 1);
-}
-
-static inline uintptr_t
-_objc_getTaggedPointerValue(const void *ptr) 
-{
-    // assert(_objc_isTaggedPointer(ptr));
-    return (uintptr_t)ptr >> 4;
-}
-
-static inline intptr_t
-_objc_getTaggedPointerSignedValue(const void *ptr) 
-{
-    // assert(_objc_isTaggedPointer(ptr));
-    return (intptr_t)ptr >> 4;
-}
-
-// not TARGET_OS_IPHONE
+// OBJC_HAVE_TAGGED_POINTERS
 #endif
 
-
-OBJC_EXPORT void _objc_insert_tagged_isa(unsigned char slotNumber, Class isa)
-    __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_7,__MAC_10_9, __IPHONE_4_3,__IPHONE_7_0);
-
-#endif
-
-
-// External Reference support. Used to support compaction.
-
-enum {
-    OBJC_XREF_STRONG = 1,
-    OBJC_XREF_WEAK = 2
-};
-typedef uintptr_t objc_xref_type_t;
-typedef uintptr_t objc_xref_t;
-
-OBJC_EXPORT objc_xref_t _object_addExternalReference(id object, objc_xref_type_t type)
-     __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_4_3);
-OBJC_EXPORT void _object_removeExternalReference(objc_xref_t xref)
-     __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_4_3);
-OBJC_EXPORT id _object_readExternalReference(objc_xref_t xref)
-     __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_4_3);
-
-OBJC_EXPORT uintptr_t _object_getExternalHash(id object)
-     __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
 
 /**
  * Returns the method implementation of an object.
@@ -308,197 +377,190 @@ OBJC_EXPORT uintptr_t _object_getExternalHash(id object)
  * class_getMethodImplementation(object_getClass(obj), name);
  */
 OBJC_EXPORT IMP object_getMethodImplementation(id obj, SEL name)
-    __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
+    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0);
 
 OBJC_EXPORT IMP object_getMethodImplementation_stret(id obj, SEL name)
-    __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0)
+    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0)
     OBJC_ARM64_UNAVAILABLE;
 
 
 // Instance-specific instance variable layout.
 
 OBJC_EXPORT void _class_setIvarLayoutAccessor(Class cls_gen, const uint8_t* (*accessor) (id object))
-     __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_NA);
+    __OSX_AVAILABLE(10.7) 
+    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
 OBJC_EXPORT const uint8_t *_object_getIvarLayout(Class cls_gen, id object)
-     __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_NA);
+    __OSX_AVAILABLE(10.7) 
+    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
 
-OBJC_EXPORT BOOL _class_usesAutomaticRetainRelease(Class cls)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+/*
+  "Unknown" includes non-object ivars and non-ARC non-__weak ivars
+  "Strong" includes ARC __strong ivars
+  "Weak" includes ARC and new MRC __weak ivars
+  "Unretained" includes ARC __unsafe_unretained and old GC+MRC __weak ivars
+*/
+typedef enum {
+    objc_ivar_memoryUnknown,     // unknown / unknown
+    objc_ivar_memoryStrong,      // direct access / objc_storeStrong
+    objc_ivar_memoryWeak,        // objc_loadWeak[Retained] / objc_storeWeak
+    objc_ivar_memoryUnretained   // direct access / direct access
+} objc_ivar_memory_management_t;
+
+OBJC_EXPORT objc_ivar_memory_management_t _class_getIvarMemoryManagement(Class cls, Ivar ivar)
+    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0);
 
 OBJC_EXPORT BOOL _class_isFutureClass(Class cls)
-    __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
+    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0);
 
-
-// Obsolete ARC conversions. 
-
-// hack - remove and reinstate objc.h's definitions
-#undef objc_retainedObject
-#undef objc_unretainedObject
-#undef objc_unretainedPointer
-OBJC_EXPORT id objc_retainedObject(objc_objectptr_t pointer)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
-OBJC_EXPORT id objc_unretainedObject(objc_objectptr_t pointer)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
-OBJC_EXPORT objc_objectptr_t objc_unretainedPointer(id object)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
-#if __has_feature(objc_arc)
-#   define objc_retainedObject(o) ((__bridge_transfer id)(objc_objectptr_t)(o))
-#   define objc_unretainedObject(o) ((__bridge id)(objc_objectptr_t)(o))
-#   define objc_unretainedPointer(o) ((__bridge objc_objectptr_t)(id)(o))
-#else
-#   define objc_retainedObject(o) ((id)(objc_objectptr_t)(o))
-#   define objc_unretainedObject(o) ((id)(objc_objectptr_t)(o))
-#   define objc_unretainedPointer(o) ((objc_objectptr_t)(id)(o))
-#endif
 
 // API to only be called by root classes like NSObject or NSProxy
 
 OBJC_EXPORT
 id
 _objc_rootRetain(id obj)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
 OBJC_EXPORT
 void
 _objc_rootRelease(id obj)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
 OBJC_EXPORT
 bool
 _objc_rootReleaseWasZero(id obj)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
 OBJC_EXPORT
 bool
 _objc_rootTryRetain(id obj)
-__OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
 OBJC_EXPORT
 bool
 _objc_rootIsDeallocating(id obj)
-__OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
 OBJC_EXPORT
 id
 _objc_rootAutorelease(id obj)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
 OBJC_EXPORT
 uintptr_t
 _objc_rootRetainCount(id obj)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
 OBJC_EXPORT
 id
 _objc_rootInit(id obj)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
 OBJC_EXPORT
 id
 _objc_rootAllocWithZone(Class cls, malloc_zone_t *zone)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
 OBJC_EXPORT
 id
 _objc_rootAlloc(Class cls)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
 OBJC_EXPORT
 void
 _objc_rootDealloc(id obj)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
 OBJC_EXPORT
 void
 _objc_rootFinalize(id obj)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
 OBJC_EXPORT
 malloc_zone_t *
 _objc_rootZone(id obj)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
 OBJC_EXPORT
 uintptr_t
 _objc_rootHash(id obj)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
 OBJC_EXPORT
 void *
 objc_autoreleasePoolPush(void)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
 OBJC_EXPORT
 void
 objc_autoreleasePoolPop(void *context)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
 
 OBJC_EXPORT id objc_alloc(Class cls)
-    __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
+    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0);
 
 OBJC_EXPORT id objc_allocWithZone(Class cls)
-    __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
+    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0);
 
 OBJC_EXPORT id objc_retain(id obj)
     __asm__("_objc_retain")
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
 OBJC_EXPORT void objc_release(id obj)
     __asm__("_objc_release")
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
 OBJC_EXPORT id objc_autorelease(id obj)
     __asm__("_objc_autorelease")
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
 // Prepare a value at +1 for return through a +0 autoreleasing convention.
 OBJC_EXPORT
 id
 objc_autoreleaseReturnValue(id obj)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
 // Prepare a value at +0 for return through a +0 autoreleasing convention.
 OBJC_EXPORT
 id
 objc_retainAutoreleaseReturnValue(id obj)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
 // Accept a value returned through a +0 autoreleasing convention for use at +1.
 OBJC_EXPORT
 id
 objc_retainAutoreleasedReturnValue(id obj)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
 // Accept a value returned through a +0 autoreleasing convention for use at +0.
 OBJC_EXPORT
 id
 objc_unsafeClaimAutoreleasedReturnValue(id obj)
-    __OSX_AVAILABLE_STARTING(__MAC_10_11, __IPHONE_9_0);
+    OBJC_AVAILABLE(10.11, 9.0, 9.0, 1.0);
 
 OBJC_EXPORT
 void
 objc_storeStrong(id *location, id obj)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
 OBJC_EXPORT
 id
 objc_retainAutorelease(id obj)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
 // obsolete.
 OBJC_EXPORT id objc_retain_autorelease(id obj)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
 OBJC_EXPORT
 id
 objc_loadWeakRetained(id *location)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
 OBJC_EXPORT
 id 
 objc_initWeak(id *location, id val) 
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
 // Like objc_storeWeak, but stores nil if the new object is deallocating 
 // or the new object's class does not support weak references.
@@ -506,7 +568,7 @@ objc_initWeak(id *location, id val)
 OBJC_EXPORT
 id
 objc_storeWeakOrNil(id *location, id obj)
-    __OSX_AVAILABLE_STARTING(__MAC_10_11, __IPHONE_9_0);
+    OBJC_AVAILABLE(10.11, 9.0, 9.0, 1.0);
 
 // Like objc_initWeak, but stores nil if the new object is deallocating 
 // or the new object's class does not support weak references.
@@ -514,34 +576,34 @@ objc_storeWeakOrNil(id *location, id obj)
 OBJC_EXPORT
 id 
 objc_initWeakOrNil(id *location, id val) 
-    __OSX_AVAILABLE_STARTING(__MAC_10_11, __IPHONE_9_0);
+    OBJC_AVAILABLE(10.11, 9.0, 9.0, 1.0);
 
 OBJC_EXPORT
 void 
 objc_destroyWeak(id *location) 
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
 OBJC_EXPORT
 void 
 objc_copyWeak(id *to, id *from)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
 OBJC_EXPORT
 void 
 objc_moveWeak(id *to, id *from) 
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
 
 OBJC_EXPORT
 void
 _objc_autoreleasePoolPrint(void)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
 OBJC_EXPORT BOOL objc_should_deallocate(id object)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
 OBJC_EXPORT void objc_clear_deallocating(id object)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
  
 // to make CF link for now
@@ -549,17 +611,17 @@ OBJC_EXPORT void objc_clear_deallocating(id object)
 OBJC_EXPORT
 void *
 _objc_autoreleasePoolPush(void)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
 OBJC_EXPORT
 void
 _objc_autoreleasePoolPop(void *context)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
 
 // Extra @encode data for XPC, or NULL
 OBJC_EXPORT const char *_protocol_getMethodTypeEncoding(Protocol *p, SEL sel, BOOL isRequiredMethod, BOOL isInstanceMethod)
-    __OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_6_0);
+    OBJC_AVAILABLE(10.8, 6.0, 9.0, 1.0);
 
 
 // API to only be called by classes that provide their own reference count storage
@@ -567,7 +629,7 @@ OBJC_EXPORT const char *_protocol_getMethodTypeEncoding(Protocol *p, SEL sel, BO
 OBJC_EXPORT
 void
 _objc_deallocOnMainThreadHelper(void *context)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
 
 // On async versus sync deallocation and the _dealloc2main flag
 //

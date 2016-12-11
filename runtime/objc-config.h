@@ -33,16 +33,16 @@
 #   define DEBUG 0
 #endif
 
-// Define SUPPORT_GC=1 to enable garbage collection.
-// Be sure to edit OBJC_NO_GC and OBJC_NO_GC_API in objc-api.h as well.
-#if TARGET_OS_EMBEDDED  ||  TARGET_OS_IPHONE  ||  TARGET_OS_WIN32  ||  (TARGET_OS_MAC && __x86_64h__)
-#   define SUPPORT_GC 0
+// Define SUPPORT_GC_COMPAT=1 to enable compatibility where GC once was.
+// OBJC_NO_GC and OBJC_NO_GC_API in objc-api.h mean something else.
+#if !TARGET_OS_OSX
+#   define SUPPORT_GC_COMPAT 0
 #else
-#   define SUPPORT_GC 1
+#   define SUPPORT_GC_COMPAT 1
 #endif
 
 // Define SUPPORT_ZONES=1 to enable malloc zone support in NXHashTable.
-#if TARGET_OS_EMBEDDED  ||  TARGET_OS_IPHONE
+#if !TARGET_OS_OSX
 #   define SUPPORT_ZONES 0
 #else
 #   define SUPPORT_ZONES 1
@@ -56,7 +56,7 @@
 #endif
 
 // Define SUPPORT_PREOPT=1 to enable dyld shared cache optimizations
-#if TARGET_OS_WIN32  ||  TARGET_IPHONE_SIMULATOR
+#if TARGET_OS_WIN32  ||  TARGET_OS_SIMULATOR
 #   define SUPPORT_PREOPT 0
 #else
 #   define SUPPORT_PREOPT 1
@@ -79,8 +79,27 @@
 #   define SUPPORT_MSB_TAGGED_POINTERS 1
 #endif
 
-// Define SUPPORT_NONPOINTER_ISA=1 to enable extra data in the isa field.
-#if !__LP64__  ||  TARGET_OS_WIN32  ||  TARGET_IPHONE_SIMULATOR
+// Define SUPPORT_INDEXED_ISA=1 on platforms that store the class in the isa 
+// field as an index into a class table.
+// Note, keep this in sync with any .s files which also define it.
+// Be sure to edit objc-abi.h as well.
+#if __ARM_ARCH_7K__ >= 2
+#   define SUPPORT_INDEXED_ISA 1
+#else
+#   define SUPPORT_INDEXED_ISA 0
+#endif
+
+// Define SUPPORT_PACKED_ISA=1 on platforms that store the class in the isa 
+// field as a maskable pointer with other data around it.
+#if (!__LP64__  ||  TARGET_OS_WIN32  ||  TARGET_OS_SIMULATOR)
+#   define SUPPORT_PACKED_ISA 0
+#else
+#   define SUPPORT_PACKED_ISA 1
+#endif
+
+// Define SUPPORT_NONPOINTER_ISA=1 on any platform that may store something
+// in the isa field that is not a raw pointer.
+#if !SUPPORT_INDEXED_ISA  &&  !SUPPORT_PACKED_ISA
 #   define SUPPORT_NONPOINTER_ISA 0
 #else
 #   define SUPPORT_NONPOINTER_ISA 1
@@ -89,26 +108,10 @@
 // Define SUPPORT_FIXUP=1 to repair calls sites for fixup dispatch.
 // Fixup messaging itself is no longer supported.
 // Be sure to edit objc-abi.h as well (objc_msgSend*_fixup)
-// Note TARGET_OS_MAC is also set for iOS simulator.
-#if !__x86_64__  ||  !TARGET_OS_MAC
+#if !(defined(__x86_64__) && (TARGET_OS_OSX || TARGET_OS_SIMULATOR))
 #   define SUPPORT_FIXUP 0
 #else
 #   define SUPPORT_FIXUP 1
-#endif
-
-// Define SUPPORT_IGNORED_SELECTOR_CONSTANT to remap GC-ignored selectors.
-// Good: fast ignore in objc_msgSend. Bad: disable shared cache optimizations
-// Now used only for old-ABI GC.
-// This is required for binary compatibility on 32-bit Mac: rdar://13757938
-#if __OBJC2__  ||  !SUPPORT_GC
-#   define SUPPORT_IGNORED_SELECTOR_CONSTANT 0
-#else
-#   define SUPPORT_IGNORED_SELECTOR_CONSTANT 1
-#   if defined(__i386__)
-#       define kIgnore 0xfffeb010
-#   else
-#       error unknown architecture
-#   endif
 #endif
 
 // Define SUPPORT_ZEROCOST_EXCEPTIONS to use "zero-cost" exceptions for OBJC2.
@@ -129,7 +132,7 @@
 #endif
 
 // Define SUPPORT_RETURN_AUTORELEASE to optimize autoreleased return values
-#if !__OBJC2__  ||  TARGET_OS_WIN32
+#if TARGET_OS_WIN32
 #   define SUPPORT_RETURN_AUTORELEASE 0
 #else
 #   define SUPPORT_RETURN_AUTORELEASE 1

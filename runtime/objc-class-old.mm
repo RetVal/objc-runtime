@@ -99,7 +99,6 @@ static void allocateExt(Class cls)
 static inline old_method *_findNamedMethodInList(old_method_list * mlist, const char *meth_name) {
     int i;
     if (!mlist) return nil;
-    if (ignoreSelectorNamed(meth_name)) return nil;
     for (i = 0; i < mlist->method_count; i++) {
         old_method *m = &mlist->method_list[i];
         if (0 == strcmp((const char *)(m->method_name), meth_name)) {
@@ -134,7 +133,6 @@ void disableSharedCacheOptimizations(void)
 /***********************************************************************
 * fixupSelectorsInMethodList
 * Uniques selectors in the given method list.
-* Also replaces imps for GC-ignored selectors
 * The given method list must be non-nil and not already fixed-up.
 * If the class was loaded from a bundle:
 *   fixes up the given list in place with heap-allocated selector strings
@@ -170,10 +168,6 @@ static old_method_list *fixupSelectorsInMethodList(Class cls, old_method_list *m
             method = &mlist->method_list[i];
             method->method_name =
                 sel_registerNameNoLock((const char *)method->method_name, isBundle);  // Always copy selector data from bundles.
-
-            if (ignoreSelector(method->method_name)) {
-                method->method_imp = (IMP)&_objc_ignored_method;
-            }
         }
         sel_unlock();
         mlist->obsolete = fixed_up_method_list;
@@ -312,7 +306,7 @@ static inline old_method * _getMethod(Class cls, SEL sel) {
 }
 
 
-// fixme for gc debugging temporary use
+// called by a debugging check in _objc_insertMethods
 IMP findIMPInClass(Class cls, SEL sel)
 {
     old_method *m = _findMethodInClass(cls, sel);
@@ -414,12 +408,6 @@ IMP lookUpImpOrForward(Class cls, SEL sel, id inst,
  retry:
     methodListLock.lock();
 
-    // Ignore GC selectors
-    if (ignoreSelector(sel)) {
-        methodPC = _cache_addIgnoredEntry(cls, sel);
-        goto done;
-    }
-
     // Try this class's cache.
 
     methodPC = _cache_getImp(cls, sel);
@@ -482,9 +470,6 @@ IMP lookUpImpOrForward(Class cls, SEL sel, id inst,
  done:
     methodListLock.unlock();
 
-    // paranoia: look for ignored selectors with non-ignored implementations
-    assert(!(ignoreSelector(sel)  &&  methodPC != (IMP)&_objc_ignored_method));
-
     return methodPC;
 }
 
@@ -538,10 +523,31 @@ IMP lookupMethodInClassAndLoadCache(Class cls, SEL sel)
 
 
 /***********************************************************************
+* _class_getClassForIvar
+* Given a class and an ivar that is in it or one of its superclasses, 
+* find the actual class that defined the ivar.
+**********************************************************************/
+Class _class_getClassForIvar(Class cls, Ivar ivar)
+{
+    for ( ; cls; cls = cls->superclass) {
+        if (auto ivars = cls->ivars) {
+            if (ivar >= &ivars->ivar_list[0]  &&  
+                ivar < &ivars->ivar_list[ivars->ivar_count]) 
+            {
+                return cls;
+            }
+        }
+    }
+
+    return nil;
+}
+
+
+/***********************************************************************
 * class_getVariable.  Return the named instance variable.
 **********************************************************************/
 
-Ivar _class_getVariable(Class cls, const char *name, Class *memberOf)
+Ivar _class_getVariable(Class cls, const char *name)
 {
     for (; cls != Nil; cls = cls->superclass) {
         int i;
@@ -555,7 +561,6 @@ Ivar _class_getVariable(Class cls, const char *name, Class *memberOf)
             // (e.g. for anonymous bit fields).
             old_ivar *ivar = &cls->ivars->ivar_list[i];
             if (ivar->ivar_name  &&  0 == strcmp(name, ivar->ivar_name)) {
-                if (memberOf) *memberOf = cls;
                 return (Ivar)ivar;
             }
         }
@@ -1065,7 +1070,7 @@ void change_class_references(Class imposter,
 
     // Replace the original with the imposter in all class refs
     // Major loop - process all headers
-    for (hInfo = FirstHeader; hInfo != nil; hInfo = hInfo->next)
+    for (hInfo = FirstHeader; hInfo != nil; hInfo = hInfo->getNext())
     {
         Class *cls_refs;
         size_t	refCount;
@@ -1150,7 +1155,6 @@ Class class_poseAs(Class imposter, Class original)
     NXHashRemove (class_hash, original);
 
     NXHashInsert (class_hash, copy);
-    objc_addRegisteredClass(copy);  // imposter & original will rejoin later, just track the new guy
 
     // Mark the imposter as such
     imposter->setInfo(CLS_POSING);
@@ -1449,17 +1453,6 @@ IMP objc_class::getLoadMethod()
     return nil;
 }
 
-BOOL _class_usesAutomaticRetainRelease(Class cls)
-{
-    return NO;
-}
-
-uint32_t _class_getInstanceStart(Class cls)
-{
-    _objc_fatal("_class_getInstanceStart() unimplemented for fragile instance variables");
-    return 0;   // PCB:  never used just provided for ARR consistency.
-}
-
 ptrdiff_t ivar_getOffset(Ivar ivar)
 {
     return oldivar(ivar)->ivar_offset;
@@ -1519,11 +1512,6 @@ IMP method_setImplementation(Method m_gen, IMP imp)
     old_method *m = oldmethod(m_gen);
     if (!m) return nil;
     if (!imp) return nil;
-    
-    if (ignoreSelector(m->method_name)) {
-        // Ignored methods stay ignored
-        return m->method_imp;
-    }
 
     impLock.lock();
     old = m->method_imp;
@@ -1539,13 +1527,6 @@ void method_exchangeImplementations(Method m1_gen, Method m2_gen)
     old_method *m1 = oldmethod(m1_gen);
     old_method *m2 = oldmethod(m2_gen);
     if (!m1  ||  !m2) return;
-
-    if (ignoreSelector(m1->method_name)  ||  ignoreSelector(m2->method_name)) {
-        // Ignored methods stay ignored. Now they're both ignored.
-        m1->method_imp = (IMP)&_objc_ignored_method;
-        m2->method_imp = (IMP)&_objc_ignored_method;
-        return;
-    }
 
     impLock.lock();
     m1_imp = m1->method_imp;
@@ -1621,11 +1602,7 @@ static IMP _class_addMethod(Class cls, SEL name, IMP imp,
         mlist->method_count = 1;
         mlist->method_list[0].method_name = name;
         mlist->method_list[0].method_types = strdup(types);
-        if (!ignoreSelector(name)) {
-            mlist->method_list[0].method_imp = imp;
-        } else {
-            mlist->method_list[0].method_imp = (IMP)&_objc_ignored_method;
-        }
+        mlist->method_list[0].method_imp = imp;
         
         _objc_insertMethods(cls, mlist, nil);
         if (!(cls->info & CLS_CONSTRUCTING)) {
@@ -2020,12 +1997,7 @@ Method *class_copyMethodList(Class cls, unsigned int *outCount)
         while ((mlist = nextMethodList(cls, &iterator))) {
             int i;
             for (i = 0; i < mlist->method_count; i++) {
-                Method aMethod = (Method)&mlist->method_list[i];
-                if (ignoreSelector(method_getName(aMethod))) {
-                    count--;
-                    continue;
-                }
-                result[m++] = aMethod;
+                result[m++] = (Method)&mlist->method_list[i];
             }
         }
         result[m] = nil;
@@ -2208,59 +2180,6 @@ void objc_registerClassPair(Class cls)
 
     mutex_locker_t lock(classLock);
 
-    // Build ivar layouts
-    if (UseGC) {
-        if (cls->ivar_layout != &UnsetLayout) {
-            // Class builder already called class_setIvarLayout.
-        }
-        else if (!cls->superclass) {
-            // Root class. Scan conservatively (should be isa ivar only).
-            cls->ivar_layout = nil;
-        }
-        else if (cls->ivars == nil) {
-            // No local ivars. Use superclass's layout.
-            cls->ivar_layout = 
-                ustrdupMaybeNil(cls->superclass->ivar_layout);
-        }
-        else {
-            // Has local ivars. Build layout based on superclass.
-            Class supercls = cls->superclass;
-            const uint8_t *superlayout = 
-                class_getIvarLayout(supercls);
-            layout_bitmap bitmap = 
-                layout_bitmap_create(superlayout, supercls->instance_size, 
-                                     cls->instance_size, NO);
-            int i;
-            for (i = 0; i < cls->ivars->ivar_count; i++) {
-                old_ivar *iv = &cls->ivars->ivar_list[i];
-                layout_bitmap_set_ivar(bitmap, iv->ivar_type, iv->ivar_offset);
-            }
-            cls->ivar_layout = layout_string_create(bitmap);
-            layout_bitmap_free(bitmap);
-        }
-
-        if (cls->ext->weak_ivar_layout != &UnsetLayout) {
-            // Class builder already called class_setWeakIvarLayout.
-        }
-        else if (!cls->superclass) {
-            // Root class. No weak ivars (should be isa ivar only)
-            cls->ext->weak_ivar_layout = nil;
-        }
-        else if (cls->ivars == nil) {
-            // No local ivars. Use superclass's layout.
-            const uint8_t *weak = 
-                class_getWeakIvarLayout(cls->superclass);
-            cls->ext->weak_ivar_layout = ustrdupMaybeNil(weak);
-        }
-        else {
-            // Has local ivars. Build layout based on superclass.
-            // No way to add weak ivars yet.
-            const uint8_t *weak = 
-                class_getWeakIvarLayout(cls->superclass);
-            cls->ext->weak_ivar_layout = ustrdupMaybeNil(weak);
-        }
-    }
-
     // Clear "under construction" bit, set "done constructing" bit
     cls->info &= ~CLS_CONSTRUCTING;
     cls->ISA()->info &= ~CLS_CONSTRUCTING;
@@ -2268,8 +2187,6 @@ void objc_registerClassPair(Class cls)
     cls->ISA()->info |= CLS_CONSTRUCTED;
 
     NXHashInsertIfAbsent(class_hash, cls);
-    objc_addRegisteredClass(cls);
-    //objc_addRegisteredClass(cls->ISA());  if we ever allocate classes from GC
 }
 
 
@@ -2323,7 +2240,6 @@ Class objc_duplicateClass(Class original, const char *name, size_t extraBytes)
 
     mutex_locker_t lock(classLock);
     NXHashInsert(class_hash, duplicate);
-    objc_addRegisteredClass(duplicate);
 
     return duplicate;
 }
@@ -2349,7 +2265,6 @@ void objc_disposeClassPair(Class cls)
 
     mutex_locker_t lock(classLock);
     NXHashRemove(class_hash, cls);
-    objc_removeRegisteredClass(cls);
     unload_class(cls->ISA());
     unload_class(cls);
 }
@@ -2402,12 +2317,6 @@ _class_createInstanceFromZone(Class cls, size_t extraBytes, void *zone)
     // CF requires all objects be at least 16 bytes.
     if (size < 16) size = 16;
 
-#if SUPPORT_GC
-    if (UseGC) {
-        bytes = auto_zone_allocate_object(gc_zone, size,
-                                          AUTO_OBJECT_SCANNED, 0, 1);
-    } else 
-#endif
     if (zone) {
         bytes = malloc_zone_calloc((malloc_zone_t *)zone, 1, size);
     } else {
@@ -2440,11 +2349,9 @@ static id _object_copyFromZone(id oldObj, size_t extraBytes, void *zone)
     size = oldObj->ISA()->alignedInstanceSize() + extraBytes;
     
     // fixme need C++ copy constructor
-    objc_memmove_collectable(obj, oldObj, size);
+    memmove(obj, oldObj, size);
     
-#if SUPPORT_GC
-    if (UseGC) gc_fixup_weakreferences(obj, oldObj);
-#endif
+    fixupCopiedIvars(obj, oldObj);
     
     return obj;
 }
@@ -2456,7 +2363,6 @@ static id _object_copyFromZone(id oldObj, size_t extraBytes, void *zone)
 * Calls C++ destructors.
 * Removes associative references.
 * Returns `obj`. Does nothing if `obj` is nil.
-* Be warned that GC DOES NOT CALL THIS. If you edit this, also edit finalize.
 * CoreFoundation and other clients do call this under GC.
 **********************************************************************/
 void *objc_destructInstance(id obj) 
@@ -2472,7 +2378,7 @@ void *objc_destructInstance(id obj)
             _object_remove_assocations(obj);
         }
 
-        if (!UseGC) objc_clear_deallocating(obj);
+        objc_clear_deallocating(obj);
     }
 
     return obj;
@@ -2485,15 +2391,8 @@ _object_dispose(id anObject)
 
     objc_destructInstance(anObject);
     
-#if SUPPORT_GC
-    if (UseGC) {
-        auto_zone_retain(gc_zone, anObject); // gc free expects rc==1
-    } else 
-#endif
-    {
-        // only clobber isa for non-gc
-        anObject->initIsa(_objc_getFreedObjectClass ()); 
-    }
+    anObject->initIsa(_objc_getFreedObjectClass ()); 
+
     free(anObject);
     return nil;
 }
@@ -2556,27 +2455,19 @@ void (*_error)(id, const char *, va_list) = _objc_error;
 
 id class_createInstance(Class cls, size_t extraBytes)
 {
-    if (UseGC) {
-        return _class_createInstance(cls, extraBytes);
-    } else {
-        return (*_alloc)(cls, extraBytes);
-    }
+    return (*_alloc)(cls, extraBytes);
 }
 
 id class_createInstanceFromZone(Class cls, size_t extraBytes, void *z)
 {
     OBJC_WARN_DEPRECATED;
-    if (UseGC) {
-        return _class_createInstanceFromZone(cls, extraBytes, z);
-    } else {
-        return (*_zoneAlloc)(cls, extraBytes, z);
-    }
+    return (*_zoneAlloc)(cls, extraBytes, z);
 }
 
 unsigned class_createInstances(Class cls, size_t extraBytes, 
                                id *results, unsigned num_requested)
 {
-    if (UseGC  ||  _alloc == &_class_createInstance) {
+    if (_alloc == &_class_createInstance) {
         return _class_createInstancesFromZone(cls, extraBytes, nil, 
                                               results, num_requested);
     } else {
@@ -2587,35 +2478,30 @@ unsigned class_createInstances(Class cls, size_t extraBytes,
 
 id object_copy(id obj, size_t extraBytes) 
 {
-    if (UseGC) return _object_copy(obj, extraBytes);
-    else return (*_copy)(obj, extraBytes); 
+    return (*_copy)(obj, extraBytes); 
 }
 
 id object_copyFromZone(id obj, size_t extraBytes, void *z) 
 {
     OBJC_WARN_DEPRECATED;
-    if (UseGC) return _object_copyFromZone(obj, extraBytes, z);
-    else return (*_zoneCopy)(obj, extraBytes, z); 
+    return (*_zoneCopy)(obj, extraBytes, z); 
 }
 
 id object_dispose(id obj) 
 {
-    if (UseGC) return _object_dispose(obj);
-    else return (*_dealloc)(obj); 
+    return (*_dealloc)(obj); 
 }
 
 id object_realloc(id obj, size_t nBytes) 
 {
     OBJC_WARN_DEPRECATED;
-    if (UseGC) return _object_realloc(obj, nBytes);
-    else return (*_realloc)(obj, nBytes); 
+    return (*_realloc)(obj, nBytes); 
 }
 
 id object_reallocFromZone(id obj, size_t nBytes, void *z) 
 {
     OBJC_WARN_DEPRECATED;
-    if (UseGC) return _object_reallocFromZone(obj, nBytes, z);
-    else return (*_zoneRealloc)(obj, nBytes, z); 
+    return (*_zoneRealloc)(obj, nBytes, z); 
 }
 
 

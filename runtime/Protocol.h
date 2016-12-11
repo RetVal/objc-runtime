@@ -41,7 +41,7 @@
 // All methods of class Protocol are unavailable. 
 // Use the functions in objc/runtime.h instead.
 
-__OSX_AVAILABLE_STARTING(__MAC_10_0, __IPHONE_2_0)
+OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0)
 @interface Protocol : NSObject
 @end
 
@@ -50,7 +50,7 @@ __OSX_AVAILABLE_STARTING(__MAC_10_0, __IPHONE_2_0)
 
 #include <objc/Object.h>
 
-__OSX_AVAILABLE_STARTING(__MAC_10_0, __IPHONE_2_0)
+OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0)
 @interface Protocol : Object
 {
 @private
@@ -71,9 +71,15 @@ __OSX_AVAILABLE_STARTING(__MAC_10_0, __IPHONE_2_0)
 /* Looking up information specific to a protocol */
 
 - (struct objc_method_description *) descriptionForInstanceMethod:(SEL)aSel
-    __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_0,__MAC_10_5, __IPHONE_2_0,__IPHONE_2_0);
+    __OSX_DEPRECATED(10.0, 10.5, "use protocol_getMethodDescription instead") 
+    __IOS_DEPRECATED(2.0, 2.0, "use protocol_getMethodDescription instead") 
+    __TVOS_DEPRECATED(9.0, 9.0, "use protocol_getMethodDescription instead") 
+    __WATCHOS_DEPRECATED(1.0, 1.0, "use protocol_getMethodDescription instead");
 - (struct objc_method_description *) descriptionForClassMethod:(SEL)aSel 
-    __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_0,__MAC_10_5, __IPHONE_2_0,__IPHONE_2_0);
+    __OSX_DEPRECATED(10.0, 10.5, "use protocol_getMethodDescription instead") 
+    __IOS_DEPRECATED(2.0, 2.0, "use protocol_getMethodDescription instead") 
+    __TVOS_DEPRECATED(9.0, 9.0, "use protocol_getMethodDescription instead") 
+    __WATCHOS_DEPRECATED(1.0, 1.0, "use protocol_getMethodDescription instead");
 
 @end
 

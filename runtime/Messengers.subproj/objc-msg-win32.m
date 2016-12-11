@@ -135,11 +135,6 @@ OBJC_EXPORT __declspec(naked) id objc_msgSend(id a, SEL b, ...)
         mov ecx, SELECTOR
         mov eax, SELF
 
-#if SUPPORT_GC
-        // check whether selector is ignored
-#error oops
-#endif
-
         // check whether receiver is nil
         test eax, eax
         je NIL
@@ -208,11 +203,6 @@ OBJC_EXPORT __declspec(naked) double objc_msgSend_fpret(id a, SEL b, ...)
         // load receiver and selector
         mov ecx, SELECTOR
         mov eax, SELF
-
-#if SUPPORT_GC
-        // check whether selector is ignored
-#error oops
-#endif
 
         // check whether receiver is nil
         test eax, eax
@@ -283,11 +273,6 @@ OBJC_EXPORT __declspec(naked) id objc_msgSendSuper(struct objc_super *a, SEL b, 
         mov ecx, SELECTOR
         mov edx, super_class[eax]
 
-#if SUPPORT_GC
-        // check whether selector is ignored
-#error oops
-#endif
-
         // search the cache (class in edx)
         // CacheLookup WORD_RETURN, MSG_SENDSUPER
         push edi
@@ -349,11 +334,6 @@ OBJC_EXPORT __declspec(naked) void objc_msgSend_stret(void)
         // load receiver and selector
         mov ecx, SELECTOR_STRET
         mov eax, SELF_STRET
-
-#if SUPPORT_GC
-        // check whether selector is ignored
-#error oops
-#endif
 
         // check whether receiver is nil
         test eax, eax
@@ -424,11 +404,6 @@ OBJC_EXPORT __declspec(naked) id objc_msgSendSuper_stret(struct objc_super *a, S
         mov eax, SUPER_STRET
         mov ecx, SELECTOR_STRET
         mov edx, super_class[eax]
-
-#if SUPPORT_GC
-        // check whether selector is ignored
-#error oops
-#endif
 
         // search the cache (class in edx)
         // CacheLookup WORD_RETURN, MSG_SENDSUPER
@@ -542,10 +517,4 @@ OBJC_EXPORT __declspec(naked) void method_invoke_stret(void)
         leave
         jmp eax
     }
-}
-
-
-__declspec(naked) id _objc_ignored_method(id obj, SEL sel)
-{
-    return obj;
 }

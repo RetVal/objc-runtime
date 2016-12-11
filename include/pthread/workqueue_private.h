@@ -25,6 +25,7 @@
 #define __PTHREAD_WORKQUEUE_H__
 
 #include <sys/cdefs.h>
+#include <sys/event.h>
 #include <Availability.h>
 #include <pthread/pthread.h>
 #include <pthread/qos.h>
@@ -32,7 +33,7 @@
 #include <pthread/qos_private.h>
 #endif
 
-#define PTHREAD_WORKQUEUE_SPI_VERSION 20140730
+#define PTHREAD_WORKQUEUE_SPI_VERSION 20160427
 
 /* Feature checking flags, returned by _pthread_workqueue_supported()
  *
@@ -42,6 +43,7 @@
 #define WORKQ_FEATURE_DISPATCHFUNC	0x01	// pthread_workqueue_setdispatch_np is supported (or not)
 #define WORKQ_FEATURE_FINEPRIO		0x02	// fine grained pthread workq priorities
 #define WORKQ_FEATURE_MAINTENANCE	0x10	// QOS class maintenance
+#define WORKQ_FEATURE_KEVENT        0x40    // Support for direct kevent delivery
 
 /* Legacy dispatch priority bands */
 
@@ -63,11 +65,20 @@ typedef void (*pthread_workqueue_function_t)(int queue_priority, int options, vo
 // New callback prototype, used with pthread_workqueue_init
 typedef void (*pthread_workqueue_function2_t)(pthread_priority_t priority);
 
+// Newer callback prototype, used in conjection with function2 when there are kevents to deliver
+// both parameters are in/out parameters
+#define WORKQ_KEVENT_EVENT_BUFFER_LEN 16
+typedef void (*pthread_workqueue_function_kevent_t)(void **events, int *nevents);
+
 // Initialises the pthread workqueue subsystem, passing the new-style callback prototype,
 // the dispatchoffset and an unused flags field.
 __OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_8_0)
 int
 _pthread_workqueue_init(pthread_workqueue_function2_t func, int offset, int flags);
+
+__OSX_AVAILABLE_STARTING(__MAC_10_11, __IPHONE_9_0)
+int
+_pthread_workqueue_init_with_kevent(pthread_workqueue_function2_t queue_func, pthread_workqueue_function_kevent_t kevent_func, int offset, int flags);
 
 // Non-zero enables kill on current thread, zero disables it.
 __OSX_AVAILABLE_STARTING(__MAC_10_6, __IPHONE_3_2)
@@ -99,13 +110,35 @@ __OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_8_0)
 int
 _pthread_workqueue_addthreads(int numthreads, pthread_priority_t priority);
 
+__OSX_AVAILABLE_STARTING(__MAC_10_11, __IPHONE_9_0)
+int
+_pthread_workqueue_set_event_manager_priority(pthread_priority_t priority);
+
 // Apply a QoS override without allocating userspace memory
-__OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_8_0)
+__OSX_AVAILABLE(10.12) __IOS_AVAILABLE(10.0)
+__TVOS_AVAILABLE(10.0) __WATCHOS_AVAILABLE(3.0)
+int
+_pthread_qos_override_start_direct(mach_port_t thread, pthread_priority_t priority, void *resource);
+
+// Drop a corresponding QoS override made above, if the resource matches
+__OSX_AVAILABLE(10.12) __IOS_AVAILABLE(10.0)
+__TVOS_AVAILABLE(10.0) __WATCHOS_AVAILABLE(3.0)
+int
+_pthread_qos_override_end_direct(mach_port_t thread, void *resource);
+
+// Apply a QoS override without allocating userspace memory
+__OSX_DEPRECATED(10.10, 10.12, "use _pthread_qos_override_start_direct()")
+__IOS_DEPRECATED(8.0, 10.0, "use _pthread_qos_override_start_direct()")
+__TVOS_DEPRECATED(8.0, 10.0, "use _pthread_qos_override_start_direct()")
+__WATCHOS_DEPRECATED(1.0, 3.0, "use _pthread_qos_override_start_direct()")
 int
 _pthread_override_qos_class_start_direct(mach_port_t thread, pthread_priority_t priority);
 
 // Drop a corresponding QoS override made above.
-__OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_8_0)
+__OSX_DEPRECATED(10.10, 10.12, "use _pthread_qos_override_end_direct()")
+__IOS_DEPRECATED(8.0, 10.0, "use _pthread_qos_override_end_direct()")
+__TVOS_DEPRECATED(8.0, 10.0, "use _pthread_qos_override_end_direct()")
+__WATCHOS_DEPRECATED(1.0, 3.0, "use _pthread_qos_override_end_direct()")
 int
 _pthread_override_qos_class_end_direct(mach_port_t thread);
 
@@ -113,6 +146,12 @@ _pthread_override_qos_class_end_direct(mach_port_t thread);
 __OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_8_0)
 int
 _pthread_workqueue_override_start_direct(mach_port_t thread, pthread_priority_t priority);
+
+// Apply a QoS override on a given workqueue thread.
+__OSX_AVAILABLE(10.12) __IOS_AVAILABLE(10.0)
+__TVOS_AVAILABLE(10.0) __WATCHOS_AVAILABLE(3.0)
+int
+_pthread_workqueue_override_start_direct_check_owner(mach_port_t thread, pthread_priority_t priority, mach_port_t *ulock_addr);
 
 // Drop all QoS overrides on the current workqueue thread.
 __OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_8_0)

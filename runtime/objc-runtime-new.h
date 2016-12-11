@@ -260,6 +260,9 @@ struct method_list_t : entsize_list_tt<method_t, method_list_t, 0x3> {
 };
 
 struct ivar_list_t : entsize_list_tt<ivar_t, ivar_list_t, 0> {
+    bool containsIvar(Ivar ivar) const {
+        return (ivar >= (Ivar)&*begin()  &&  ivar < (Ivar)&*end());
+    }
 };
 
 struct property_list_t : entsize_list_tt<property_t, property_list_t, 0> {
@@ -271,6 +274,7 @@ typedef uintptr_t protocol_ref_t;  // protocol_t *, but unremapped
 // Values for protocol_t->flags
 #define PROTOCOL_FIXED_UP_2 (1<<31)  // must never be set by compiler
 #define PROTOCOL_FIXED_UP_1 (1<<30)  // must never be set by compiler
+// Bits 0..15 are reserved for Swift's use.
 
 #define PROTOCOL_FIXED_UP_MASK (PROTOCOL_FIXED_UP_1 | PROTOCOL_FIXED_UP_2)
 
@@ -285,8 +289,9 @@ struct protocol_t : objc_object {
     uint32_t size;   // sizeof(protocol_t)
     uint32_t flags;
     // Fields below this point are not always present on disk.
-    const char **extendedMethodTypes;
+    const char **_extendedMethodTypes;
     const char *_demangledName;
+    property_list_t *_classProperties;
 
     const char *demangledName();
 
@@ -297,12 +302,26 @@ struct protocol_t : objc_object {
     bool isFixedUp() const;
     void setFixedUp();
 
+#   define HAS_FIELD(f) (size >= offsetof(protocol_t, f) + sizeof(f))
+
     bool hasExtendedMethodTypesField() const {
-        return size >= (offsetof(protocol_t, extendedMethodTypes) 
-                        + sizeof(extendedMethodTypes));
+        return HAS_FIELD(_extendedMethodTypes);
     }
-    bool hasExtendedMethodTypes() const {
-        return hasExtendedMethodTypesField() && extendedMethodTypes;
+    bool hasDemangledNameField() const {
+        return HAS_FIELD(_demangledName);
+    }
+    bool hasClassPropertiesField() const {
+        return HAS_FIELD(_classProperties);
+    }
+
+#   undef HAS_FIELD
+
+    const char **extendedMethodTypes() const {
+        return hasExtendedMethodTypesField() ? _extendedMethodTypes : nil;
+    }
+
+    property_list_t *classProperties() const {
+        return hasClassPropertiesField() ? _classProperties : nil;
     }
 };
 
@@ -354,7 +373,8 @@ struct locstamped_category_list_t {
 // The extra bits are optimized for the retain/release and alloc/dealloc paths.
 
 // Values for class_ro_t->flags
-// These are emitted by the compiler and are part of the ABI. 
+// These are emitted by the compiler and are part of the ABI.
+// Note: See CGObjCNonFragileABIMac::BuildClassRoTInitializer in clang
 // class is a metaclass
 #define RO_META               (1<<0)
 // class is a root class
@@ -369,10 +389,12 @@ struct locstamped_category_list_t {
 #define RO_EXCEPTION          (1<<5)
 // this bit is available for reassignment
 // #define RO_REUSE_ME           (1<<6) 
-// class compiled with -fobjc-arc (automatic retain/release)
-#define RO_IS_ARR             (1<<7)
+// class compiled with ARC
+#define RO_IS_ARC             (1<<7)
 // class has .cxx_destruct but no .cxx_construct (with RO_HAS_CXX_STRUCTORS)
 #define RO_HAS_CXX_DTOR_ONLY  (1<<8)
+// class is not ARC but has ARC-style weak ivar layout 
+#define RO_HAS_WEAK_WITHOUT_ARC (1<<9)
 
 // class is in an unloadable bundle - must never be set by compiler
 #define RO_FROM_BUNDLE        (1<<29)
@@ -398,8 +420,8 @@ struct locstamped_category_list_t {
 #define RW_CONSTRUCTING       (1<<26)
 // class allocated and registered
 #define RW_CONSTRUCTED        (1<<25)
-// GC:  class has unsafe finalize method
-#define RW_FINALIZE_ON_MAIN_THREAD (1<<24)
+// available for use; was RW_FINALIZE_ON_MAIN_THREAD
+// #define RW_24 (1<<24)
 // class +load has been called
 #define RW_LOADED             (1<<23)
 #if !SUPPORT_NONPOINTER_ISA
@@ -430,8 +452,9 @@ struct locstamped_category_list_t {
 // Note this is is stored in the metaclass.
 #define RW_HAS_DEFAULT_AWZ    (1<<16)
 // class's instances requires raw isa
-// not tracked for 32-bit because it only applies to non-pointer isa
-// #define RW_REQUIRES_RAW_ISA
+#if SUPPORT_NONPOINTER_ISA
+#define RW_REQUIRES_RAW_ISA   (1<<15)
+#endif
 
 // class is a Swift class
 #define FAST_IS_SWIFT         (1UL<<0)
@@ -483,7 +506,7 @@ struct locstamped_category_list_t {
 //   _tryRetain/_isDeallocating/retainWeakReference/allowsWeakReference
 #define FAST_HAS_DEFAULT_RR     (1UL<<49)
 // summary bit for fast alloc path: !hasCxxCtor and 
-//   !requiresRawIsa and instanceSize fits into shiftedSize
+//   !instancesRequireRawIsa and instanceSize fits into shiftedSize
 #define FAST_ALLOC              (1UL<<50)
 // instance size in units of 16 bytes
 //   or 0 if the instance size is too big in this field
@@ -776,6 +799,7 @@ class protocol_array_t :
 
 
 struct class_rw_t {
+    // Be warned that Symbolication knows the layout of this structure.
     uint32_t flags;
     uint32_t version;
 
@@ -789,6 +813,10 @@ struct class_rw_t {
     Class nextSiblingClass;
 
     char *demangledName;
+
+#if SUPPORT_INDEXED_ISA
+    uint32_t index;
+#endif
 
     void setFlags(uint32_t set) 
     {
@@ -941,20 +969,24 @@ public:
 #endif
 
 #if FAST_REQUIRES_RAW_ISA
-    bool requiresRawIsa() {
+    bool instancesRequireRawIsa() {
         return getBit(FAST_REQUIRES_RAW_ISA);
     }
-    void setRequiresRawIsa() {
+    void setInstancesRequireRawIsa() {
         setBits(FAST_REQUIRES_RAW_ISA);
     }
+#elif SUPPORT_NONPOINTER_ISA
+    bool instancesRequireRawIsa() {
+        return data()->flags & RW_REQUIRES_RAW_ISA;
+    }
+    void setInstancesRequireRawIsa() {
+        data()->setFlags(RW_REQUIRES_RAW_ISA);
+    }
 #else
-# if SUPPORT_NONPOINTER_ISA
-#   error oops
-# endif
-    bool requiresRawIsa() {
+    bool instancesRequireRawIsa() {
         return true;
     }
-    void setRequiresRawIsa() {
+    void setInstancesRequireRawIsa() {
         // nothing
     }
 #endif
@@ -998,6 +1030,22 @@ public:
         return false;
     }
 #endif
+
+    void setClassArrayIndex(unsigned Idx) {
+#if SUPPORT_INDEXED_ISA
+        // 0 is unused as then we can rely on zero-initialisation from calloc.
+        assert(Idx > 0);
+        data()->index = Idx;
+#endif
+    }
+
+    unsigned classArrayIndex() {
+#if SUPPORT_INDEXED_ISA
+        return data()->index;
+#else
+        return 0;
+#endif
+    }
 
     bool isSwift() {
         return getBit(FAST_IS_SWIFT);
@@ -1059,15 +1107,15 @@ struct objc_class : objc_object {
     void setHasCustomAWZ(bool inherited = false);
     void printCustomAWZ(bool inherited);
 
-    bool requiresRawIsa() {
-        return bits.requiresRawIsa();
+    bool instancesRequireRawIsa() {
+        return bits.instancesRequireRawIsa();
     }
-    void setRequiresRawIsa(bool inherited = false);
-    void printRequiresRawIsa(bool inherited);
+    void setInstancesRequireRawIsa(bool inherited = false);
+    void printInstancesRequireRawIsa(bool inherited);
 
-    bool canAllocIndexed() {
+    bool canAllocNonpointer() {
         assert(!isFuture());
-        return !requiresRawIsa();
+        return !instancesRequireRawIsa();
     }
     bool canAllocFast() {
         assert(!isFuture());
@@ -1099,6 +1147,18 @@ struct objc_class : objc_object {
     }
 
 
+    // Return YES if the class's ivars are managed by ARC, 
+    // or the class is MRC but has ARC-style weak ivars.
+    bool hasAutomaticIvars() {
+        return data()->ro->flags & (RO_IS_ARC | RO_HAS_WEAK_WITHOUT_ARC);
+    }
+
+    // Return YES if the class's ivars are managed by ARC.
+    bool isARC() {
+        return data()->ro->flags & RO_IS_ARC;
+    }
+
+
 #if SUPPORT_NONPOINTER_ISA
     // Tracked in non-pointer isas; not tracked otherwise
 #else
@@ -1121,17 +1181,6 @@ struct objc_class : objc_object {
 
     void setShouldGrowCache(bool) {
         // fixme good or bad for memory use?
-    }
-
-    bool shouldFinalizeOnMainThread() {
-        // finishInitializing() propagates this flag from the superclass.
-        assert(isRealized());
-        return data()->flags & RW_FINALIZE_ON_MAIN_THREAD;
-    }
-
-    void setShouldFinalizeOnMainThread() {
-        assert(isRealized());
-        setInfo(RW_FINALIZE_ON_MAIN_THREAD);
     }
 
     bool isInitializing() {
@@ -1201,6 +1250,18 @@ struct objc_class : objc_object {
     const char *nameForLogging();
 
     // May be unaligned depending on class's ivars.
+    uint32_t unalignedInstanceStart() {
+        assert(isRealized());
+        return data()->ro->instanceStart;
+    }
+
+    // Class's instance start rounded up to a pointer-size boundary.
+    // This is used for ARC layout bitmaps.
+    uint32_t alignedInstanceStart() {
+        return word_align(unalignedInstanceStart());
+    }
+
+    // May be unaligned depending on class's ivars.
     uint32_t unalignedInstanceSize() {
         assert(isRealized());
         return data()->ro->instanceSize;
@@ -1226,6 +1287,17 @@ struct objc_class : objc_object {
         }
         bits.setFastInstanceSize(newSize);
     }
+
+    void chooseClassArrayIndex();
+
+    void setClassArrayIndex(unsigned Idx) {
+        bits.setClassArrayIndex(Idx);
+    }
+
+    unsigned classArrayIndex() {
+        return bits.classArrayIndex();
+    }
+
 };
 
 
@@ -1254,16 +1326,15 @@ struct category_t {
     struct method_list_t *classMethods;
     struct protocol_list_t *protocols;
     struct property_list_t *instanceProperties;
+    // Fields below this point are not always present on disk.
+    struct property_list_t *_classProperties;
 
     method_list_t *methodsForMeta(bool isMeta) {
         if (isMeta) return classMethods;
         else return instanceMethods;
     }
 
-    property_list_t *propertiesForMeta(bool isMeta) {
-        if (isMeta) return nil; // classProperties;
-        else return instanceProperties;
-    }
+    property_list_t *propertiesForMeta(bool isMeta, struct header_info *hi);
 };
 
 struct objc_super2 {
@@ -1300,12 +1371,29 @@ foreach_realized_class_and_subclass_2(Class top, bool (^code)(Class))
     }
 }
 
+// Enumerates a class and all of its realized subclasses.
 static inline void
 foreach_realized_class_and_subclass(Class top, void (^code)(Class)) 
 {
     foreach_realized_class_and_subclass_2(top, ^bool(Class cls) { 
         code(cls); return true; 
     });
+}
+
+// Enumerates all realized classes and metaclasses.
+extern Class firstRealizedClass();
+static inline void
+foreach_realized_class_and_metaclass(void (^code)(Class)) 
+{
+    for (Class top = firstRealizedClass(); 
+         top != nil; 
+         top = top->data()->nextSiblingClass) 
+    {
+        foreach_realized_class_and_subclass_2(top, ^bool(Class cls) { 
+            code(cls); return true; 
+        });
+    }
+
 }
 
 #endif

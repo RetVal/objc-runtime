@@ -67,36 +67,57 @@
 
 #endif
 
+// Define SUPPORT_INDEXED_ISA for targets which store the class in the ISA as
+// an index in to a class table.
+// Note, keep this in sync with objc-config.h.
+// FIXME: Remove this duplication.  We should get this from objc-config.h.
+#if __ARM_ARCH_7K__ >= 2
+#   define SUPPORT_INDEXED_ISA 1
+#else
+#   define SUPPORT_INDEXED_ISA 0
+#endif
+
+// Note, keep these in sync with objc-private.h
+#define ISA_INDEX_IS_NPI      1
+#define ISA_INDEX_MASK        0x0001FFFC
+#define ISA_INDEX_SHIFT       2
+#define ISA_INDEX_BITS        15
+#define ISA_INDEX_COUNT       (1 << ISA_INDEX_BITS)
+#define ISA_INDEX_MAGIC_MASK  0x001E0001
+#define ISA_INDEX_MAGIC_VALUE 0x001C0001
+
 .syntax unified	
 	
 #define MI_EXTERN(var) \
 	.non_lazy_symbol_pointer                        ;\
-L ## var ## $$non_lazy_ptr:                              ;\
+L##var##$$non_lazy_ptr:                                 ;\
 	.indirect_symbol var                            ;\
 	.long 0
 
 #define MI_GET_EXTERN(reg,var)  \
-	movw	reg, :lower16:(L##var##$$non_lazy_ptr-4f-4)  ;\
-	movt	reg, :upper16:(L##var##$$non_lazy_ptr-4f-4)  ;\
-4:	add	reg, pc                                     ;\
+	movw	reg, :lower16:(L##var##$$non_lazy_ptr-7f-4)  ;\
+	movt	reg, :upper16:(L##var##$$non_lazy_ptr-7f-4)  ;\
+7:	add	reg, pc                                      ;\
 	ldr	reg, [reg]
-
-#define MI_CALL_EXTERNAL(var)    \
-	MI_GET_EXTERN(r12,var)  ;\
-	blx     r12
-
 	
 #define MI_GET_ADDRESS(reg,var)  \
-	movw	reg, :lower16:(var-4f-4)  ;\
-	movt	reg, :upper16:(var-4f-4)  ;\
-4:	add	reg, pc                                     ;\
-
-
-MI_EXTERN(__class_lookupMethodAndLoadCache3)
-MI_EXTERN(___objc_error)
+	movw	reg, :lower16:(var-7f-4)  ;\
+	movt	reg, :upper16:(var-7f-4)  ;\
+7:	add	reg, pc                                     ;\
 
 
 .data
+
+#if SUPPORT_INDEXED_ISA
+
+	.align 2
+	.globl _objc_indexed_classes
+_objc_indexed_classes:
+	.fill ISA_INDEX_COUNT, 4, 0
+
+#endif
+
+
 
 // _objc_entryPoints and _objc_exitPoints are used by method dispatch
 // caching code to figure out whether any threads are actively 
@@ -113,17 +134,25 @@ _objc_entryPoints:
 	.long   _objc_msgSendSuper_stret
 	.long   _objc_msgSendSuper2
 	.long   _objc_msgSendSuper2_stret
+	.long   _objc_msgLookup
+	.long   _objc_msgLookup_stret
+	.long   _objc_msgLookupSuper2
+	.long   _objc_msgLookupSuper2_stret
 	.long   0
 
 .private_extern _objc_exitPoints
 _objc_exitPoints:
-	.long   LGetImpExit
-	.long   LMsgSendExit
-	.long   LMsgSendStretExit
-	.long   LMsgSendSuperExit
-	.long   LMsgSendSuperStretExit
-	.long   LMsgSendSuper2Exit
-	.long   LMsgSendSuper2StretExit
+	.long   LExit_cache_getImp
+	.long   LExit_objc_msgSend
+	.long   LExit_objc_msgSend_stret
+	.long   LExit_objc_msgSendSuper
+	.long   LExit_objc_msgSendSuper_stret
+	.long   LExit_objc_msgSendSuper2
+	.long   LExit_objc_msgSendSuper2_stret
+	.long   LExit_objc_msgLookup
+	.long   LExit_objc_msgLookup_stret
+	.long   LExit_objc_msgLookupSuper2
+	.long   LExit_objc_msgLookupSuper2_stret
 	.long   0
 
 
@@ -154,30 +183,30 @@ _gdb_objc_messenger_breakpoints:
 // contents populated by the macros below
 
 .macro MESSENGER_START
-4:
+7:
 	.section __DATA,__objc_msg_break
-	.long 4b
+	.long 7b
 	.long ENTER
 	.text
 .endmacro
 .macro MESSENGER_END_FAST
-4:
+7:
 	.section __DATA,__objc_msg_break
-	.long 4b
+	.long 7b
 	.long FAST_EXIT
 	.text
 .endmacro
 .macro MESSENGER_END_SLOW
-4:
+7:
 	.section __DATA,__objc_msg_break
-	.long 4b
+	.long 7b
 	.long SLOW_EXIT
 	.text
 .endmacro
 .macro MESSENGER_END_NIL
-4:
+7:
 	.section __DATA,__objc_msg_break
-	.long 4b
+	.long 7b
 	.long NIL_EXIT
 	.text
 .endmacro
@@ -186,11 +215,11 @@ _gdb_objc_messenger_breakpoints:
 /********************************************************************
  * Names for relative labels
  * DO NOT USE THESE LABELS ELSEWHERE
- * Reserved labels: 8: 9:
+ * Reserved labels: 6: 7: 8: 9:
  ********************************************************************/
-#define LCacheMiss 	8
-#define LCacheMiss_f 	8f
-#define LCacheMiss_b 	8b
+// 6: used by CacheLookup
+// 7: used by MI_GET_ADDRESS etc and MESSENGER_START etc
+// 8: used by CacheLookup
 #define LNilReceiver 	9
 #define LNilReceiver_f 	9f
 #define LNilReceiver_b 	9b
@@ -201,14 +230,7 @@ _gdb_objc_messenger_breakpoints:
  ********************************************************************/
 
 #define NORMAL 0
-#define FPRET 1
-#define FP2RET 2
-#define GETIMP 3
-#define STRET 4
-#define SUPER 5
-#define SUPER2 6
-#define SUPER_STRET 7
-#define SUPER2_STRET 8
+#define STRET 1
 
 
 /********************************************************************
@@ -246,18 +268,18 @@ _gdb_objc_messenger_breakpoints:
 	.text
 	.thumb
 	.align 5
-	.globl    _$0
+	.globl $0
 	.thumb_func
-_$0:	
+$0:	
 .endmacro
 
 .macro STATIC_ENTRY /*name*/
 	.text
 	.thumb
 	.align 5
-	.private_extern _$0
+	.private_extern $0
 	.thumb_func
-_$0:	
+$0:	
 .endmacro
 	
 	
@@ -272,110 +294,94 @@ _$0:
 //////////////////////////////////////////////////////////////////////
 
 .macro END_ENTRY /* name */
+LExit$0:	
 .endmacro
 
 
 /////////////////////////////////////////////////////////////////////
 //
-// CacheLookup	return-type
+// CacheLookup	NORMAL|STRET
+// CacheLookup2	NORMAL|STRET
 //
 // Locate the implementation for a selector in a class's method cache.
 //
 // Takes: 
-//	  $0 = NORMAL, STRET, SUPER, SUPER_STRET, SUPER2, SUPER2_STRET, GETIMP
+//	  $0 = NORMAL, STRET
 //	  r0 or r1 (STRET) = receiver
 //	  r1 or r2 (STRET) = selector
 //	  r9 = class to search in
 //
-// On exit: r9 and r12 clobbered
-//	    (found) calls or returns IMP, eq/ne/r9 set for forwarding
-//	    (not found) jumps to LCacheMiss
+// On exit: r9 clobbered
+//	    (found) continues after CacheLookup, IMP in r12, eq set
+//	    (not found) continues after CacheLookup2
 //
 /////////////////////////////////////////////////////////////////////
-	
-.macro CacheHit
-
-.if $0 == GETIMP
-	ldr	r0, [r9, #4]		// r0 = bucket->imp
-	MI_GET_ADDRESS(r1, __objc_msgSend_uncached_impcache)
-	teq	r0, r1
-	it	eq
-	moveq	r0, #0			// don't return msgSend_uncached
-	bx	lr			// return imp
-.elseif $0 == NORMAL
-	ldr	r12, [r9, #4]		// r12 = bucket->imp
-					// eq already set for nonstret forward
-	MESSENGER_END_FAST
-	bx	r12			// call imp
-.elseif $0 == STRET
-	ldr	r12, [r9, #4]		// r12 = bucket->imp
-	movs	r9, #1			// r9=1, Z=0 for stret forwarding
-	MESSENGER_END_FAST
-	bx	r12			// call imp
-.elseif $0 == SUPER
-	ldr	r12, [r9, #4]		// r12 = bucket->imp
-	ldr	r9, [r0, #CLASS]	// r9 = class to search for forwarding
-	ldr	r0, [r0, #RECEIVER]	// fetch real receiver
-	tst	r12, r12		// set ne for forwarding (r12!=0)
-	MESSENGER_END_FAST
-	bx	r12			// call imp
-.elseif $0 == SUPER2
-	ldr	r12, [r9, #4]		// r12 = bucket->imp
-	ldr	r9, [r0, #CLASS]
-	ldr	r9, [r9, #SUPERCLASS]	// r9 = class to search for forwarding
-	ldr	r0, [r0, #RECEIVER]	// fetch real receiver
-	tst	r12, r12		// set ne for forwarding (r12!=0)
-	MESSENGER_END_FAST
-	bx	r12			// call imp
-.elseif $0 == SUPER_STRET
-	ldr	r12, [r9, #4]		// r12 = bucket->imp
-	ldr	r9, [r1, #CLASS]	// r9 = class to search for forwarding
-	orr	r9, r9, #1		// r9 = class|1 for super_stret forward
-	ldr	r1, [r1, #RECEIVER]	// fetch real receiver
-	tst	r12, r12		// set ne for forwarding (r12!=0)
-	MESSENGER_END_FAST
-	bx	r12			// call imp
-.elseif $0 == SUPER2_STRET
-	ldr	r12, [r9, #4]		// r12 = bucket->imp
-	ldr	r9, [r1, #CLASS]	// r9 = class to search for forwarding
-	ldr	r9, [r9, #SUPERCLASS]	// r9 = class to search for forwarding
-	orr	r9, r9, #1		// r9 = class|1 for super_stret forward
-	ldr	r1, [r1, #RECEIVER]	// fetch real receiver
-	tst	r12, r12		// set ne for forwarding (r12!=0)
-	MESSENGER_END_FAST
-	bx	r12			// call imp
-.else
-.abort oops
-.endif
-
-.endmacro
 	
 .macro CacheLookup
 	
 	ldrh	r12, [r9, #CACHE_MASK]	// r12 = mask
 	ldr	r9, [r9, #CACHE]	// r9 = buckets
-.if $0 == STRET  ||  $0 == SUPER_STRET
+.if $0 == STRET
 	and	r12, r12, r2		// r12 = index = SEL & mask
 .else
 	and	r12, r12, r1		// r12 = index = SEL & mask
 .endif
 	add	r9, r9, r12, LSL #3	// r9 = bucket = buckets+index*8
 	ldr	r12, [r9]		// r12 = bucket->sel
-2:
-.if $0 == STRET  ||  $0 == SUPER_STRET
+6:
+.if $0 == STRET
 	teq	r12, r2
 .else
 	teq	r12, r1
 .endif
-	bne	1f
-	CacheHit $0
-1:	
+	bne	8f
+	ldr	r12, [r9, #4]		// r12 = bucket->imp
+
+.if $0 == STRET
+	tst	r12, r12		// set ne for stret forwarding
+.else
+	// eq already set for nonstret forwarding by `teq` above
+.endif
+
+.endmacro
+
+.macro CacheLookup2
+	
+8:	
 	cmp	r12, #1
-	blo	LCacheMiss_f		// if (bucket->sel == 0) cache miss
+	blo	8f			// if (bucket->sel == 0) cache miss
 	it	eq			// if (bucket->sel == 1) cache wrap
 	ldreq	r9, [r9, #4]		// bucket->imp is before first bucket
 	ldr	r12, [r9, #8]!		// r12 = (++bucket)->sel
-	b	2b
+	b	6b
+8:
+
+.endmacro
+
+/////////////////////////////////////////////////////////////////////
+//
+// GetClassFromIsa	return-type
+//
+// Given an Isa, return the class for the Isa.
+//
+// Takes:
+//	  r9 = class
+//
+// On exit: r12 clobbered
+//          r9 contains the class for this Isa.
+//
+/////////////////////////////////////////////////////////////////////
+.macro GetClassFromIsa
+
+#if SUPPORT_INDEXED_ISA
+	// Note: We are doing a little wasted work here to load values we might not
+	// need.  Branching turns out to be even worse when performance was measured.
+	MI_GET_ADDRESS(r12, _objc_indexed_classes)
+	tst.w	r9, #ISA_INDEX_IS_NPI
+	itt	ne
+	ubfxne	r9, r9, #ISA_INDEX_SHIFT, #ISA_INDEX_BITS
+	ldrne.w	r9, [r12, r9, lsl #2]
+#endif
 
 .endmacro
 
@@ -390,37 +396,51 @@ _$0:
  * If not found, returns NULL.
  ********************************************************************/
 
-	STATIC_ENTRY cache_getImp
+	STATIC_ENTRY _cache_getImp
 
 	mov	r9, r0
-	CacheLookup GETIMP		// returns IMP on success
+	CacheLookup NORMAL
+	// cache hit, IMP in r12
+	mov	r0, r12
+	bx	lr			// return imp
 	
-LCacheMiss:
-	mov     r0, #0          	// return nil if cache miss
+	CacheLookup2 GETIMP
+	// cache miss, return nil
+	mov	r0, #0
 	bx	lr
 
-LGetImpExit: 
-	END_ENTRY cache_getImp
+	END_ENTRY _cache_getImp
 
 
 /********************************************************************
  *
- * id objc_msgSend(id self, SEL	_cmd,...);
+ * id objc_msgSend(id self, SEL _cmd, ...);
+ * IMP objc_msgLookup(id self, SEL _cmd, ...);
+ * 
+ * objc_msgLookup ABI:
+ * IMP returned in r12
+ * Forwarding returned in Z flag
+ * r9 reserved for our use but not used
  *
  ********************************************************************/
 
-	ENTRY objc_msgSend
+	ENTRY _objc_msgSend
 	MESSENGER_START
 	
 	cbz	r0, LNilReceiver_f
 
 	ldr	r9, [r0]		// r9 = self->isa
+	GetClassFromIsa			// r9 = class
 	CacheLookup NORMAL
-	// calls IMP or LCacheMiss
+	// cache hit, IMP in r12, eq already set for nonstret forwarding
+	MESSENGER_END_FAST
+	bx	r12			// call imp
 
-LCacheMiss:
+	CacheLookup2 NORMAL
+	// cache miss
+	ldr	r9, [r0]		// r9 = self->isa
+	GetClassFromIsa			// r9 = class
 	MESSENGER_END_SLOW
-	ldr	r9, [r0, #ISA]		// class = receiver->isa
 	b	__objc_msgSend_uncached
 
 LNilReceiver:
@@ -432,24 +452,47 @@ LNilReceiver:
 	MESSENGER_END_NIL
 	bx	lr	
 
-LMsgSendExit:
-	END_ENTRY objc_msgSend
+	END_ENTRY _objc_msgSend
+
+	
+	ENTRY _objc_msgLookup
+
+	cbz	r0, LNilReceiver_f
+
+	ldr	r9, [r0]		// r9 = self->isa
+	GetClassFromIsa			// r9 = class
+	CacheLookup NORMAL
+	// cache hit, IMP in r12, eq already set for nonstret forwarding
+	bx	lr
+
+	CacheLookup2 NORMAL
+	// cache miss
+	ldr	r9, [r0]		// r9 = self->isa
+	GetClassFromIsa			// r9 = class
+	b	__objc_msgLookup_uncached
+
+LNilReceiver:
+	MI_GET_ADDRESS(r12, __objc_msgNil)
+	bx	lr
+
+	END_ENTRY _objc_msgLookup
 
 
-/********************************************************************
- * id		objc_msgSend_noarg(id self, SEL op)
- *
- * On entry: r0 is the message receiver,
- *           r1 is the selector
- ********************************************************************/
-
-	ENTRY objc_msgSend_noarg
-	b 	_objc_msgSend
-	END_ENTRY objc_msgSend_noarg
+	STATIC_ENTRY __objc_msgNil
+	
+	// r0 is already zero
+	mov	r1, #0
+	mov	r2, #0
+	mov	r3, #0
+	FP_RETURN_ZERO
+	bx	lr
+	
+	END_ENTRY __objc_msgNil
 
 
 /********************************************************************
  * void objc_msgSend_stret(void *st_addr, id self, SEL op, ...);
+ * IMP objc_msgLookup_stret(void *st_addr, id self, SEL op, ...);
  *
  * objc_msgSend_stret is the struct-return form of msgSend.
  * The ABI calls for r0 to be used as the address of the structure
@@ -460,26 +503,60 @@ LMsgSendExit:
  *           r2 is the selector
  ********************************************************************/
 
-	ENTRY objc_msgSend_stret
+	ENTRY _objc_msgSend_stret
 	MESSENGER_START
 	
 	cbz	r1, LNilReceiver_f
 
 	ldr	r9, [r1]		// r9 = self->isa
+	GetClassFromIsa			// r9 = class
 	CacheLookup STRET
-	// calls IMP or LCacheMiss
+	// cache hit, IMP in r12, ne already set for stret forwarding
+	MESSENGER_END_FAST
+	bx	r12
 
-LCacheMiss:	
-	MESSENGER_END_SLOW
+	CacheLookup2 STRET
+	// cache miss
 	ldr	r9, [r1]		// r9 = self->isa
+	GetClassFromIsa			// r9 = class
+	MESSENGER_END_SLOW
 	b	__objc_msgSend_stret_uncached
 
 LNilReceiver:
 	MESSENGER_END_NIL
 	bx	lr
 	
-LMsgSendStretExit:
-	END_ENTRY objc_msgSend_stret
+	END_ENTRY _objc_msgSend_stret
+
+
+	ENTRY _objc_msgLookup_stret
+	
+	cbz	r1, LNilReceiver_f
+
+	ldr	r9, [r1]		// r9 = self->isa
+	GetClassFromIsa			// r9 = class
+	CacheLookup STRET
+	// cache hit, IMP in r12, ne already set for stret forwarding
+	bx	lr
+
+	CacheLookup2 STRET
+	// cache miss
+	ldr	r9, [r1]		// r9 = self->isa
+	GetClassFromIsa			// r9 = class
+	b	__objc_msgLookup_stret_uncached
+
+LNilReceiver:
+	MI_GET_ADDRESS(r12, __objc_msgNil_stret)
+	bx	lr
+
+	END_ENTRY _objc_msgLookup_stret
+
+
+	STATIC_ENTRY __objc_msgNil_stret
+	
+	bx	lr
+
+	END_ENTRY __objc_msgNil_stret
 
 
 /********************************************************************
@@ -491,21 +568,24 @@ LMsgSendStretExit:
  * }
  ********************************************************************/
 
-	ENTRY objc_msgSendSuper
+	ENTRY _objc_msgSendSuper
 	MESSENGER_START
 	
 	ldr	r9, [r0, #CLASS]	// r9 = struct super->class
-	CacheLookup SUPER
-	// calls IMP or LCacheMiss
+	CacheLookup NORMAL
+	// cache hit, IMP in r12, eq already set for nonstret forwarding
+	ldr	r0, [r0, #RECEIVER]	// load real receiver
+	MESSENGER_END_FAST
+	bx	r12			// call imp
 
-LCacheMiss:
-	MESSENGER_END_SLOW
+	CacheLookup2 NORMAL
+	// cache miss
 	ldr	r9, [r0, #CLASS]	// r9 = struct super->class
 	ldr	r0, [r0, #RECEIVER]	// load real receiver
+	MESSENGER_END_SLOW
 	b	__objc_msgSend_uncached
 	
-LMsgSendSuperExit:
-	END_ENTRY objc_msgSendSuper
+	END_ENTRY _objc_msgSendSuper
 
 
 /********************************************************************
@@ -517,23 +597,45 @@ LMsgSendSuperExit:
  * }
  ********************************************************************/
 	
-	ENTRY objc_msgSendSuper2
+	ENTRY _objc_msgSendSuper2
 	MESSENGER_START
 	
 	ldr	r9, [r0, #CLASS]	// class = struct super->class
-	ldr     r9, [r9, #SUPERCLASS]   // class = class->superclass
-	CacheLookup SUPER2
-	// calls IMP or LCacheMiss
-
-LCacheMiss:
-	MESSENGER_END_SLOW
-	ldr	r9, [r0, #CLASS]	// class = struct super->class
-	ldr     r9, [r9, #SUPERCLASS]   // class = class->superclass
+	ldr	r9, [r9, #SUPERCLASS]   // class = class->superclass
+	CacheLookup NORMAL
+	// cache hit, IMP in r12, eq already set for nonstret forwarding
 	ldr	r0, [r0, #RECEIVER]	// load real receiver
+	MESSENGER_END_FAST
+	bx	r12			// call imp
+
+	CacheLookup2 NORMAL
+	// cache miss
+	ldr	r9, [r0, #CLASS]	// class = struct super->class
+	ldr	r9, [r9, #SUPERCLASS]   // class = class->superclass
+	ldr	r0, [r0, #RECEIVER]	// load real receiver
+	MESSENGER_END_SLOW
 	b	__objc_msgSend_uncached
 	
-LMsgSendSuper2Exit:
-	END_ENTRY objc_msgSendSuper2
+	END_ENTRY _objc_msgSendSuper2
+
+	
+	ENTRY _objc_msgLookupSuper2
+	
+	ldr	r9, [r0, #CLASS]	// class = struct super->class
+	ldr	r9, [r9, #SUPERCLASS]   // class = class->superclass
+	CacheLookup NORMAL
+	// cache hit, IMP in r12, eq already set for nonstret forwarding
+	ldr	r0, [r0, #RECEIVER]	// load real receiver
+	bx	lr
+
+	CacheLookup2 NORMAL
+	// cache miss
+	ldr	r9, [r0, #CLASS]
+	ldr	r9, [r9, #SUPERCLASS]	// r9 = class to search
+	ldr	r0, [r0, #RECEIVER]	// load real receiver
+	b	__objc_msgLookup_uncached
+	
+	END_ENTRY _objc_msgLookupSuper2
 
 
 /********************************************************************
@@ -548,132 +650,171 @@ LMsgSendSuper2Exit:
  *           r2 is the selector
  ********************************************************************/
 
-	ENTRY objc_msgSendSuper_stret
+	ENTRY _objc_msgSendSuper_stret
 	MESSENGER_START
 	
-	ldr     r9, [r1, #CLASS]	// r9 = struct super->class
-	CacheLookup SUPER_STRET
-	// calls IMP or LCacheMiss
+	ldr	r9, [r1, #CLASS]	// r9 = struct super->class
+	CacheLookup STRET
+	// cache hit, IMP in r12, ne already set for stret forwarding
+	ldr	r1, [r1, #RECEIVER]	// load real receiver
+	MESSENGER_END_FAST
+	bx	r12			// call imp
 
-LCacheMiss:
+	CacheLookup2 STRET
+	// cache miss
+	ldr	r9, [r1, #CLASS]	// r9 = struct super->class
+	ldr	r1, [r1, #RECEIVER]	// load real receiver
 	MESSENGER_END_SLOW
-	ldr     r9, [r1, #CLASS]	// r9 = struct super->class
-	ldr     r1, [r1, #RECEIVER]	// load real receiver
 	b	__objc_msgSend_stret_uncached
 
-LMsgSendSuperStretExit:
-	END_ENTRY objc_msgSendSuper_stret
+	END_ENTRY _objc_msgSendSuper_stret
 
 
 /********************************************************************
  * id objc_msgSendSuper2_stret
  ********************************************************************/
 
-	ENTRY objc_msgSendSuper2_stret
+	ENTRY _objc_msgSendSuper2_stret
 	MESSENGER_START
 	
-	ldr     r9, [r1, #CLASS]	// class = struct super->class
-	ldr     r9, [r9, #SUPERCLASS]	// class = class->superclass
-	CacheLookup SUPER2_STRET
-
-LCacheMiss:
-	MESSENGER_END_SLOW
-	ldr     r9, [r1, #CLASS]	// class = struct super->class
-	ldr     r9, [r9, #SUPERCLASS]	// class = class->superclass
+	ldr	r9, [r1, #CLASS]	// class = struct super->class
+	ldr	r9, [r9, #SUPERCLASS]	// class = class->superclass
+	CacheLookup STRET
+	// cache hit, IMP in r12, ne already set for stret forwarding
 	ldr	r1, [r1, #RECEIVER]	// load real receiver
+	MESSENGER_END_FAST
+	bx	r12			// call imp
+
+	CacheLookup2 STRET
+	// cache miss
+	ldr	r9, [r1, #CLASS]	// class = struct super->class
+	ldr	r9, [r9, #SUPERCLASS]	// class = class->superclass
+	ldr	r1, [r1, #RECEIVER]	// load real receiver
+	MESSENGER_END_SLOW
 	b	__objc_msgSend_stret_uncached
 	
-LMsgSendSuper2StretExit:
-	END_ENTRY objc_msgSendSuper2_stret
+	END_ENTRY _objc_msgSendSuper2_stret
+
+	
+	ENTRY _objc_msgLookupSuper2_stret
+	
+	ldr	r9, [r1, #CLASS]	// class = struct super->class
+	ldr	r9, [r9, #SUPERCLASS]	// class = class->superclass
+	CacheLookup STRET
+	// cache hit, IMP in r12, ne already set for stret forwarding
+	ldr	r1, [r1, #RECEIVER]	// load real receiver
+	bx	lr
+
+	CacheLookup2 STRET
+	// cache miss
+	ldr	r9, [r1, #CLASS]
+	ldr	r9, [r9, #SUPERCLASS]	// r9 = class to search
+	ldr	r1, [r1, #RECEIVER]	// load real receiver
+	b	__objc_msgLookup_stret_uncached
+	
+	END_ENTRY _objc_msgLookupSuper2_stret
+
+	
+/////////////////////////////////////////////////////////////////////
+//
+// MethodTableLookup	NORMAL|STRET
+//
+// Locate the implementation for a selector in a class's method lists.
+//
+// Takes: 
+//	  $0 = NORMAL, STRET
+//	  r0 or r1 (STRET) = receiver
+//	  r1 or r2 (STRET) = selector
+//	  r9 = class to search in
+//
+// On exit: IMP in r12, eq/ne set for forwarding
+//
+/////////////////////////////////////////////////////////////////////
+	
+.macro MethodTableLookup
+	
+	stmfd	sp!, {r0-r3,r7,lr}
+	add	r7, sp, #16
+	sub	sp, #8			// align stack
+	FP_SAVE
+
+.if $0 == NORMAL
+	// receiver already in r0
+	// selector already in r1
+.else
+	mov 	r0, r1			// receiver
+	mov 	r1, r2			// selector
+.endif
+	mov	r2, r9			// class to search
+
+	blx	__class_lookupMethodAndLoadCache3
+	mov	r12, r0			// r12 = IMP
+	
+.if $0 == NORMAL
+	cmp	r12, r12		// set eq for nonstret forwarding
+.else
+	tst	r12, r12		// set ne for stret forwarding
+.endif
+
+	FP_RESTORE
+	add	sp, #8			// align stack
+	ldmfd	sp!, {r0-r3,r7,lr}
+
+.endmacro
 
 
 /********************************************************************
  *
- * _objc_msgSend_uncached_impcache
- * Used to erase method cache entries in-place by 
- * bouncing them to the uncached lookup.
- *
  * _objc_msgSend_uncached
  * _objc_msgSend_stret_uncached
- * The uncached lookup.
+ * _objc_msgLookup_uncached
+ * _objc_msgLookup_stret_uncached
+ * The uncached method lookup.
  *
  ********************************************************************/
-	
-	STATIC_ENTRY _objc_msgSend_uncached_impcache
-	// Method cache version
 
-	// THIS IS NOT A CALLABLE C FUNCTION
-	// Out-of-band Z is 0 (EQ) for normal, 1 (NE) for stret and/or super
-	// Out-of-band r9 is 1 for stret, cls for super, cls|1 for super_stret
-	// Note objc_msgForward_impcache uses the same parameters
-
-	MESSENGER_START
-	nop
-	MESSENGER_END_SLOW
-	
-	ite	eq
-	ldreq	r9, [r0]		// normal: r9 = class = self->isa
-	tstne	r9, #1			// low bit clear?
-	beq	__objc_msgSend_uncached	// super: r9 is already the class
-					// stret or super_stret
-	eors	r9, r9, #1		// clear low bit
-	it	eq			// r9 now zero?
-	ldreq	r9, [r1]		// stret: r9 = class = self->isa
-					// super_stret: r9 is already the class
-	b	__objc_msgSend_stret_uncached
-
-	END_ENTRY _objc_msgSend_uncached_impcache
-
-
-	STATIC_ENTRY _objc_msgSend_uncached
-
-	// THIS IS NOT A CALLABLE C FUNCTION
-	// Out-of-band r9 is the class to search
-
-	stmfd	sp!, {r0-r3,r7,lr}
-	add     r7, sp, #16
-	sub     sp, #8			// align stack
-	FP_SAVE
-					// receiver already in r0
-					// selector already in r1
-	mov	r2, r9			// class to search
-
-	MI_CALL_EXTERNAL(__class_lookupMethodAndLoadCache3)
-	mov     r12, r0			// r12 = IMP
-
-	movs	r9, #0			// r9=0, Z=1 for nonstret forwarding
-	FP_RESTORE
-	add     sp, #8			// align stack
-	ldmfd	sp!, {r0-r3,r7,lr}
-	bx	r12
-
-	END_ENTRY _objc_msgSend_uncached
-
-
-	STATIC_ENTRY _objc_msgSend_stret_uncached
+	STATIC_ENTRY __objc_msgSend_uncached
 
 	// THIS IS NOT A CALLABLE C FUNCTION
 	// Out-of-band r9 is the class to search
 	
-	stmfd	sp!, {r0-r3,r7,lr}
-	add     r7, sp, #16
-	sub     sp, #8			// align stack
-	FP_SAVE
+	MethodTableLookup NORMAL	// returns IMP in r12
+	bx	r12
 
-	mov 	r0, r1			// receiver
-	mov 	r1, r2			// selector
-	mov	r2, r9			// class to search
+	END_ENTRY __objc_msgSend_uncached
 
-	MI_CALL_EXTERNAL(__class_lookupMethodAndLoadCache3)
-	mov     r12, r0			// r12 = IMP
 
-	movs	r9, #1			// r9=1, Z=0 for stret forwarding
-	FP_RESTORE
-	add     sp, #8			// align stack
-	ldmfd	sp!, {r0-r3,r7,lr}
+	STATIC_ENTRY __objc_msgSend_stret_uncached
+
+	// THIS IS NOT A CALLABLE C FUNCTION
+	// Out-of-band r9 is the class to search
+
+	MethodTableLookup STRET		// returns IMP in r12
 	bx	r12
 	
-	END_ENTRY _objc_msgSend_stret_uncached
+	END_ENTRY __objc_msgSend_stret_uncached
+
+	
+	STATIC_ENTRY __objc_msgLookup_uncached
+
+	// THIS IS NOT A CALLABLE C FUNCTION
+	// Out-of-band r9 is the class to search
+	
+	MethodTableLookup NORMAL	// returns IMP in r12
+	bx	lr
+
+	END_ENTRY __objc_msgLookup_uncached
+
+
+	STATIC_ENTRY __objc_msgLookup_stret_uncached
+
+	// THIS IS NOT A CALLABLE C FUNCTION
+	// Out-of-band r9 is the class to search
+
+	MethodTableLookup STRET		// returns IMP in r12
+	bx	lr
+	
+	END_ENTRY __objc_msgLookup_stret_uncached
 
 	
 /********************************************************************
@@ -690,85 +831,77 @@ LMsgSendSuper2StretExit:
 	MI_EXTERN(__objc_forward_handler)
 	MI_EXTERN(__objc_forward_stret_handler)
 	
-	STATIC_ENTRY   _objc_msgForward_impcache
+	STATIC_ENTRY __objc_msgForward_impcache
 	// Method cache version
 
 	// THIS IS NOT A CALLABLE C FUNCTION
-	// Out-of-band Z is 0 (EQ) for normal, 1 (NE) for stret and/or super
-	// Out-of-band r9 is 1 for stret, cls for super, cls|1 for super_stret
-	// Note _objc_msgSend_uncached_impcache uses the same parameters
+	// Out-of-band Z is 0 (EQ) for normal, 1 (NE) for stret
 
 	MESSENGER_START
 	nop
 	MESSENGER_END_SLOW
 
-	it	ne
-	tstne	r9, #1
 	beq	__objc_msgForward
 	b	__objc_msgForward_stret
 	
-	END_ENTRY _objc_msgForward_impcache
+	END_ENTRY __objc_msgForward_impcache
 	
 
-	ENTRY   _objc_msgForward
+	ENTRY __objc_msgForward
 	// Non-stret version
 
 	MI_GET_EXTERN(r12, __objc_forward_handler)
 	ldr	r12, [r12]
 	bx	r12
 
-	END_ENTRY _objc_msgForward
+	END_ENTRY __objc_msgForward
 
 
-	ENTRY   _objc_msgForward_stret
+	ENTRY __objc_msgForward_stret
 	// Struct-return version
 
 	MI_GET_EXTERN(r12, __objc_forward_stret_handler)
 	ldr	r12, [r12]
 	bx	r12
 
-	END_ENTRY _objc_msgForward_stret
+	END_ENTRY __objc_msgForward_stret
 
 
-	ENTRY objc_msgSend_debug
+	ENTRY _objc_msgSend_noarg
+	b 	_objc_msgSend
+	END_ENTRY _objc_msgSend_noarg
+
+	ENTRY _objc_msgSend_debug
 	b	_objc_msgSend
-	END_ENTRY objc_msgSend_debug
+	END_ENTRY _objc_msgSend_debug
 
-	ENTRY objc_msgSendSuper2_debug
+	ENTRY _objc_msgSendSuper2_debug
 	b	_objc_msgSendSuper2
-	END_ENTRY objc_msgSendSuper2_debug
+	END_ENTRY _objc_msgSendSuper2_debug
 
-	ENTRY objc_msgSend_stret_debug
+	ENTRY _objc_msgSend_stret_debug
 	b	_objc_msgSend_stret
-	END_ENTRY objc_msgSend_stret_debug
+	END_ENTRY _objc_msgSend_stret_debug
 
-	ENTRY objc_msgSendSuper2_stret_debug
+	ENTRY _objc_msgSendSuper2_stret_debug
 	b	_objc_msgSendSuper2_stret
-	END_ENTRY objc_msgSendSuper2_stret_debug
+	END_ENTRY _objc_msgSendSuper2_stret_debug
 
 
-	ENTRY method_invoke
+	ENTRY _method_invoke
 	// r1 is method triplet instead of SEL
 	ldr	r12, [r1, #METHOD_IMP]
 	ldr	r1, [r1, #METHOD_NAME]
 	bx	r12
-	END_ENTRY method_invoke
+	END_ENTRY _method_invoke
 
 
-	ENTRY method_invoke_stret
+	ENTRY _method_invoke_stret
 	// r2 is method triplet instead of SEL
 	ldr	r12, [r2, #METHOD_IMP]
 	ldr	r2, [r2, #METHOD_NAME]
 	bx	r12
-	END_ENTRY method_invoke_stret
-
-
-	STATIC_ENTRY _objc_ignored_method
-
-	// self is already in a0
-	bx	lr
-
-	END_ENTRY _objc_ignored_method
+	END_ENTRY _method_invoke_stret
 	
 
 .section __DATA,__objc_msg_break

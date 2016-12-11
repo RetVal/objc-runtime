@@ -509,17 +509,7 @@ static void _objc_exception_destructor(void *exc_gen)
                      exc, obj, object_getClassName(obj));
     }
 
-#if SUPPORT_GC
-    if (UseGC) {
-        if (auto_zone_is_valid_pointer(gc_zone, obj)) {
-            auto_zone_release(gc_zone, exc->obj);
-        }
-    }
-    else 
-#endif
-    {
-        [obj release];
-    }
+    [obj release];
 }
 
 
@@ -530,20 +520,9 @@ void objc_exception_throw(id obj)
 
     obj = (*exception_preprocessor)(obj);
 
-    // Retain the exception object during unwinding.
-    // GC: because `exc` is unscanned memory
-    // Non-GC: because otherwise an autorelease pool pop can cause a crash
-#if SUPPORT_GC
-    if (UseGC) {
-        if (auto_zone_is_valid_pointer(gc_zone, obj)) {
-            auto_zone_retain(gc_zone, obj);
-        }
-    }
-    else 
-#endif
-    {
-        [obj retain];
-    }
+    // Retain the exception object during unwinding
+    // because otherwise an autorelease pool pop can cause a crash
+    [obj retain];
 
     exc->obj = obj;
     exc->tinfo.vtable = objc_ehtype_vtable+2;
@@ -1084,7 +1063,8 @@ static mutex_t DebugLock;
 static struct alt_handler_list *DebugLists;
 static uintptr_t DebugCounter;
 
-void alt_handler_error(uintptr_t token) __attribute__((noinline));
+__attribute__((noinline, noreturn))
+void alt_handler_error(uintptr_t token);
 
 static struct alt_handler_list *
 fetch_handler_list(bool create)
@@ -1243,7 +1223,6 @@ void objc_removeExceptionHandler(uintptr_t token)
     if (!list  ||  !list->handlers) {
         // no alt handlers active
         alt_handler_error(token);
-        __builtin_trap();
     }
 
     uintptr_t i = token-1;
@@ -1259,7 +1238,6 @@ void objc_removeExceptionHandler(uintptr_t token)
     if (i >= list->allocated) {
         // token out of range
         alt_handler_error(token);
-        __builtin_trap();
     }
 
     struct alt_handler_data *data = &list->handlers[i];
@@ -1267,7 +1245,6 @@ void objc_removeExceptionHandler(uintptr_t token)
     if (data->frame.ip_start == 0  &&  data->frame.ip_end == 0  &&  data->frame.cfa == 0) {
         // token in range, but invalid
         alt_handler_error(token);
-        __builtin_trap();
     }
 
     if (PrintAltHandlers) {
@@ -1283,77 +1260,69 @@ void objc_removeExceptionHandler(uintptr_t token)
     list->used--;
 }
 
-void objc_alt_handler_error(void) __attribute__((noinline));
 
+BREAKPOINT_FUNCTION(
+void objc_alt_handler_error(void));
+
+__attribute__((noinline, noreturn))
 void alt_handler_error(uintptr_t token)
 {
-    if (!DebugAltHandlers) {
-        _objc_inform_now_and_on_crash
-            ("objc_removeExceptionHandler() called with unknown alt handler; "
-             "this is probably a bug in multithreaded AppKit use. "
-             "Set environment variable OBJC_DEBUG_ALT_HANDLERS=YES "
-             "or break in objc_alt_handler_error() to debug.");
-        objc_alt_handler_error();
-    }
+    _objc_inform
+        ("objc_removeExceptionHandler() called with unknown alt handler; "
+         "this is probably a bug in multithreaded AppKit use. "
+         "Set environment variable OBJC_DEBUG_ALT_HANDLERS=YES "
+         "or break in objc_alt_handler_error() to debug.");
 
-    DebugLock.lock();
+    if (DebugAltHandlers) {
+        DebugLock.lock();
+        
+        // Search other threads' alt handler lists for this handler.
+        struct alt_handler_list *list;
+        for (list = DebugLists; list; list = list->next_DEBUGONLY) {
+            unsigned h;
+            for (h = 0; h < list->allocated; h++) {
+                struct alt_handler_data *data = &list->handlers[h];
+                if (data->debug  &&  data->debug->token == token) {
+                    // found it
+                    int i;
+                    
+                    // Build a string from the recorded backtrace
+                    char *symbolString;
+                    char **symbols = 
+                        backtrace_symbols(data->debug->backtrace, 
+                                          data->debug->backtraceSize);
+                    size_t len = 1;
+                    for (i = 0; i < data->debug->backtraceSize; i++){
+                        len += 4 + strlen(symbols[i]) + 1;
+                    }
+                    symbolString = (char *)calloc(len, 1);
+                    for (i = 0; i < data->debug->backtraceSize; i++){
+                        strcat(symbolString, "    ");
+                        strcat(symbolString, symbols[i]);
+                        strcat(symbolString, "\n");
+                    }
+                    
+                    free(symbols);
+                    
+                    _objc_inform_now_and_on_crash
+                        ("The matching objc_addExceptionHandler() was called "
+                         "by:\nThread '%s': Dispatch queue: '%s': \n%s", 
+                         data->debug->thread, data->debug->queue, symbolString);
 
-    // Search other threads' alt handler lists for this handler.
-    struct alt_handler_list *list;
-    for (list = DebugLists; list; list = list->next_DEBUGONLY) {
-        unsigned h;
-        for (h = 0; h < list->allocated; h++) {
-            struct alt_handler_data *data = &list->handlers[h];
-            if (data->debug  &&  data->debug->token == token) {
-                // found it
-                int i;
-
-                // Build a string from the recorded backtrace
-                char *symbolString;
-                char **symbols = 
-                    backtrace_symbols(data->debug->backtrace, 
-                                      data->debug->backtraceSize);
-                size_t len = 1;
-                for (i = 0; i < data->debug->backtraceSize; i++){
-                    len += 4 + strlen(symbols[i]) + 1;
+                    goto done;
                 }
-                symbolString = (char *)calloc(len, 1);
-                for (i = 0; i < data->debug->backtraceSize; i++){
-                    strcat(symbolString, "    ");
-                    strcat(symbolString, symbols[i]);
-                    strcat(symbolString, "\n");
-                }
-
-                free(symbols);
-
-                _objc_inform_now_and_on_crash
-                    ("objc_removeExceptionHandler() called with "
-                     "unknown alt handler; this is probably a bug in "
-                     "multithreaded AppKit use. \n"
-                     "The matching objc_addExceptionHandler() was called by:\n"
-                     "Thread '%s': Dispatch queue: '%s': \n%s", 
-                     data->debug->thread, data->debug->queue, symbolString);
-
-                DebugLock.unlock();
-                free(symbolString);
-                
-                objc_alt_handler_error();
             }
         }
+    done:   
+        DebugLock.unlock();
     }
 
-    DebugLock.unlock();
 
-    // not found
-    _objc_inform_now_and_on_crash
-        ("objc_removeExceptionHandler() called with unknown alt handler; "
-         "this is probably a bug in multithreaded AppKit use");
     objc_alt_handler_error();
-}
-
-void objc_alt_handler_error(void)
-{
-    __builtin_trap();
+    
+    _objc_fatal
+        ("objc_removeExceptionHandler() called with unknown alt handler; "
+         "this is probably a bug in multithreaded AppKit use. ");
 }
 
 // called in order registered, to match 32-bit _NSAddAltHandler2

@@ -26,23 +26,6 @@
 #include "objc-private.h"
 #include "objc-file.h"
 
-// Segment and section names are 16 bytes and may be un-terminated.
-bool segnameEquals(const char *lhs, const char *rhs) {
-    return 0 == strncmp(lhs, rhs, 16);
-}
-
-bool segnameStartsWith(const char *segname, const char *prefix) {
-    return 0 == strncmp(segname, prefix, strlen(prefix));
-}
-
-bool sectnameEquals(const char *lhs, const char *rhs) {
-    return segnameEquals(lhs, rhs);
-}
-
-bool sectnameStartsWith(const char *sectname, const char *prefix) {
-    return segnameStartsWith(sectname, prefix);
-}
-
 
 // Look for a __DATA or __DATA_CONST or __DATA_DIRTY section 
 // with the given name that stores an array of T.
@@ -68,7 +51,7 @@ T* getDataSection(const headerType *mhdr, const char *sectname,
         return getDataSection<type>(mhdr, sectname, nil, outCount);     \
     }                                                                   \
     type *name(const header_info *hi, size_t *outCount) {               \
-        return getDataSection<type>(hi->mhdr, sectname, nil, outCount); \
+        return getDataSection<type>(hi->mhdr(), sectname, nil, outCount); \
     }
 
 //      function name                 content type     section name
@@ -82,7 +65,7 @@ GETSECT(_getObjc2CategoryList,        category_t *,    "__objc_catlist");
 GETSECT(_getObjc2NonlazyCategoryList, category_t *,    "__objc_nlcatlist");
 GETSECT(_getObjc2ProtocolList,        protocol_t *,    "__objc_protolist");
 GETSECT(_getObjc2ProtocolRefs,        protocol_t *,    "__objc_protorefs");
-GETSECT(getLibobjcInitializers,       Initializer,   "__objc_init_func");
+GETSECT(getLibobjcInitializers,       Initializer,     "__objc_init_func");
 
 
 objc_image_info *
@@ -128,15 +111,17 @@ bool
 _hasObjcContents(const header_info *hi)
 {
     const segmentType *data = 
-        getsegbynamefromheader(hi->mhdr, "__DATA");
+        getsegbynamefromheader(hi->mhdr(), "__DATA");
     const segmentType *data_const = 
-        getsegbynamefromheader(hi->mhdr, "__DATA_CONST");
+        getsegbynamefromheader(hi->mhdr(), "__DATA_CONST");
     const segmentType *data_dirty = 
-        getsegbynamefromheader(hi->mhdr, "__DATA_CONST");
+        getsegbynamefromheader(hi->mhdr(), "__DATA_DIRTY");
     
     return segmentHasObjcContents(data) 
         || segmentHasObjcContents(data_const) 
         || segmentHasObjcContents(data_dirty);
 }
 
+
+// OBJC2
 #endif

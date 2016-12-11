@@ -49,14 +49,14 @@ __BEGIN_DECLS
 // Return cls if it's a valid class, or crash.
 OBJC_EXPORT Class gdb_class_getClass(Class cls)
 #if __OBJC2__
-    __OSX_AVAILABLE_STARTING(__MAC_10_6, __IPHONE_3_1);
+    OBJC_AVAILABLE(10.6, 3.1, 9.0, 1.0);
 #else
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_3_1);
+    OBJC_AVAILABLE(10.7, 3.1, 9.0, 1.0);
 #endif
 
 // Same as gdb_class_getClass(object_getClass(cls)).
 OBJC_EXPORT Class gdb_object_getClass(id obj)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_4_3);
+    OBJC_AVAILABLE(10.7, 4.3, 9.0, 1.0);
 
 
 /***********************************************************************
@@ -67,13 +67,14 @@ OBJC_EXPORT Class gdb_object_getClass(id obj)
 
 // Maps class name to Class, for in-use classes only. NXStrValueMapPrototype.
 OBJC_EXPORT NXMapTable *gdb_objc_realized_classes
-    __OSX_AVAILABLE_STARTING(__MAC_10_6, __IPHONE_3_1);
+    OBJC_AVAILABLE(10.6, 3.1, 9.0, 1.0);
 
 #else
 
 // Hashes Classes, for all known classes. Custom prototype.
 OBJC_EXPORT NXHashTable *_objc_debug_class_hash
-    __OSX_AVAILABLE_STARTING(__MAC_10_2, __IPHONE_NA);
+    __OSX_AVAILABLE(10.2) 
+    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
 
 #endif
 
@@ -87,14 +88,35 @@ OBJC_EXPORT NXHashTable *_objc_debug_class_hash
 // Extract isa pointer from an isa field.
 // (Class)(isa & mask) == class pointer
 OBJC_EXPORT const uintptr_t objc_debug_isa_class_mask
-    __OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_7_0);
+    OBJC_AVAILABLE(10.10, 7.0, 9.0, 1.0);
 
 // Extract magic cookie from an isa field.
 // (isa & magic_mask) == magic_value
 OBJC_EXPORT const uintptr_t objc_debug_isa_magic_mask
-    __OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_7_0);
+    OBJC_AVAILABLE(10.10, 7.0, 9.0, 1.0);
 OBJC_EXPORT const uintptr_t objc_debug_isa_magic_value
-    __OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_7_0);
+    OBJC_AVAILABLE(10.10, 7.0, 9.0, 1.0);
+
+// Use indexed ISAs for targets which store index of the class in the ISA.
+// This index can be used to index the array of classes.
+OBJC_EXPORT const uintptr_t objc_debug_indexed_isa_magic_mask;
+OBJC_EXPORT const uintptr_t objc_debug_indexed_isa_magic_value;
+
+// Then these are used to extract the index from the ISA.
+OBJC_EXPORT const uintptr_t objc_debug_indexed_isa_index_mask;
+OBJC_EXPORT const uintptr_t objc_debug_indexed_isa_index_shift;
+
+// And then we can use that index to get the class from this array.  Note
+// the size is provided so that clients can ensure the index they get is in
+// bounds and not read off the end of the array.
+OBJC_EXPORT Class objc_indexed_classes[];
+
+// When we don't have enough bits to store a class*, we can instead store an
+// index in to this array.  Classes are added here when they are realized.
+// Note, an index of 0 is illegal.
+OBJC_EXPORT uintptr_t objc_indexed_classes_count;
+
+// Absolute symbols for some of the above values are in objc-abi.h.
 
 #endif
 
@@ -104,26 +126,57 @@ OBJC_EXPORT const uintptr_t objc_debug_isa_magic_value
 **********************************************************************/
 #if __OBJC2__
 
+// Basic tagged pointers (7 classes, 60-bit payload).
+
 // if (obj & mask) obj is a tagged pointer object
 OBJC_EXPORT uintptr_t objc_debug_taggedpointer_mask
-    __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
+    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0);
 
 // tag_slot = (obj >> slot_shift) & slot_mask
 OBJC_EXPORT unsigned int objc_debug_taggedpointer_slot_shift
-    __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
+    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0);
 OBJC_EXPORT uintptr_t objc_debug_taggedpointer_slot_mask
-    __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
+    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0);
 
 // class = classes[tag_slot]
 OBJC_EXPORT Class objc_debug_taggedpointer_classes[]
-    __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
+    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0);
 
 // payload = (obj << payload_lshift) >> payload_rshift
 // Payload signedness is determined by the signedness of the right-shift.
 OBJC_EXPORT unsigned int objc_debug_taggedpointer_payload_lshift
-    __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
+    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0);
 OBJC_EXPORT unsigned int objc_debug_taggedpointer_payload_rshift
-    __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
+    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0);
+
+
+// Extended tagged pointers (255 classes, 52-bit payload).
+
+// If you interrogate an extended tagged pointer using the basic 
+// tagged pointer scheme alone, it will appear to have an isa 
+// that is either nil or class __NSUnrecognizedTaggedPointer.
+
+// if (ext_mask != 0  &&  (obj & ext_mask) == ext_mask) 
+//   obj is a ext tagged pointer object
+OBJC_EXPORT uintptr_t objc_debug_taggedpointer_ext_mask
+    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0);
+
+// ext_tag_slot = (obj >> ext_slot_shift) & ext_slot_mask
+OBJC_EXPORT unsigned int objc_debug_taggedpointer_ext_slot_shift
+    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0);
+OBJC_EXPORT uintptr_t objc_debug_taggedpointer_ext_slot_mask
+    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0);
+
+// class = ext_classes[ext_tag_slot]
+OBJC_EXPORT Class objc_debug_taggedpointer_ext_classes[]
+    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0);
+
+// payload = (obj << ext_payload_lshift) >> ext_payload_rshift
+// Payload signedness is determined by the signedness of the right-shift.
+OBJC_EXPORT unsigned int objc_debug_taggedpointer_ext_payload_lshift
+    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0);
+OBJC_EXPORT unsigned int objc_debug_taggedpointer_ext_payload_rshift
+    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0);
 
 #endif
 
@@ -158,24 +211,10 @@ struct objc_messenger_breakpoint {
 
 OBJC_EXPORT struct objc_messenger_breakpoint 
 gdb_objc_messenger_breakpoints[]
-    __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
+    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0);
 
 #endif
 
-
-#ifndef OBJC_NO_GC
-
-/***********************************************************************
- * Garbage Collector heap dump
-**********************************************************************/
-
-/* Dump GC heap; if supplied the name is returned in filenamebuffer.  Returns YES on success. */
-OBJC_EXPORT BOOL objc_dumpHeap(char *filenamebuffer, unsigned long length)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_NA);
-
-#define OBJC_HEAP_DUMP_FILENAME_FORMAT "/tmp/objc-gc-heap-dump-%d-%d"
-
-#endif
 
 __END_DECLS
 

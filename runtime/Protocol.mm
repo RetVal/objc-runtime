@@ -36,14 +36,23 @@
 #include <mach-o/ldsyms.h>
 
 #include "Protocol.h"
+#include "NSObject.h"
 
-#if __OBJC2__
+// __IncompleteProtocol is used as the return type of objc_allocateProtocol().
+
+// Old ABI uses NSObject as the superclass even though Protocol uses Object
+// because the R/R implementation for class Protocol is added at runtime
+// by CF, so __IncompleteProtocol would be left without an R/R implementation 
+// otherwise, which would break ARC.
+
 @interface __IncompleteProtocol : NSObject @end
 @implementation __IncompleteProtocol 
+#if __OBJC2__
 // fixme hack - make __IncompleteProtocol a non-lazy class
 + (void) load { } 
-@end
 #endif
+@end
+
 
 @implementation Protocol 
 

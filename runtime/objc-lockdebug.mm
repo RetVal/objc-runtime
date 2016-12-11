@@ -152,6 +152,42 @@ clearLock(_objc_lock_list *locks, void *lock, int kind)
 * Mutex checking
 **********************************************************************/
 
+#if !TARGET_OS_SIMULATOR
+// Non-simulator platforms have lock debugging built into os_unfair_lock.
+
+
+void
+lockdebug_mutex_lock(mutex_t *lock)
+{
+    // empty
+}
+
+void
+lockdebug_mutex_unlock(mutex_t *lock)
+{
+    // empty
+}
+
+void
+lockdebug_mutex_assert_locked(mutex_t *lock)
+{
+    os_unfair_lock_assert_owner((os_unfair_lock *)lock);
+}
+
+void
+lockdebug_mutex_assert_unlocked(mutex_t *lock)
+{
+    os_unfair_lock_assert_not_owner((os_unfair_lock *)lock);
+}
+
+
+// !TARGET_OS_SIMULATOR
+#else
+// TARGET_OS_SIMULATOR
+
+// Simulator platforms have no built-in lock debugging in os_unfair_lock.
+
+
 void 
 lockdebug_mutex_lock(mutex_t *lock)
 {
@@ -205,6 +241,9 @@ lockdebug_mutex_assert_unlocked(mutex_t *lock)
     }
 }
 
+
+// TARGET_OS_SIMULATOR
+#endif
 
 /***********************************************************************
 * Recursive mutex checking

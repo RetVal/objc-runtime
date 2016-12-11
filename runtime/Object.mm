@@ -35,7 +35,8 @@ typedef struct objc_object *id;
 
 #if __OBJC2__
 
-__OSX_AVAILABLE_STARTING(__MAC_10_0, __IPHONE_NA)
+__OSX_AVAILABLE(10.0) 
+__IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE
 OBJC_ROOT_CLASS
 @interface Object { 
     Class isa; 
@@ -99,7 +100,6 @@ OBJC_ROOT_CLASS
 #include "Object.h"
 #include "Protocol.h"
 #include "objc-runtime.h"
-#include "objc-auto.h"
 
 
 // Error Messages
