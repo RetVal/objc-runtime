@@ -18,7 +18,7 @@
 @property (readonly) NSUInteger hash;
 
 @property (readonly) Class superclass;
-- (Class)class OBJC_SWIFT_UNAVAILABLE("use 'anObject.dynamicType' instead");
+- (Class)class OBJC_SWIFT_UNAVAILABLE("use 'type(of: anObject)' instead");
 - (instancetype)self;
 
 - (id)performSelector:(SEL)aSelector;

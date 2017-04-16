@@ -187,15 +187,17 @@ namespace objc_references_support {
 using namespace objc_references_support;
 
 // class AssociationsManager manages a lock / hash table singleton pair.
-// Allocating an instance acquires the lock, and calling its assocations() method
-// lazily allocates it.
+// Allocating an instance acquires the lock, and calling its assocations()
+// method lazily allocates the hash table.
+
+spinlock_t AssociationsManagerLock;
 
 class AssociationsManager {
-    static spinlock_t _lock;
-    static AssociationsHashMap *_map;               // associative references:  object pointer -> PtrPtrHashMap.
+    // associative references: object pointer -> PtrPtrHashMap.
+    static AssociationsHashMap *_map;
 public:
-    AssociationsManager()   { _lock.lock(); }
-    ~AssociationsManager()  { _lock.unlock(); }
+    AssociationsManager()   { AssociationsManagerLock.lock(); }
+    ~AssociationsManager()  { AssociationsManagerLock.unlock(); }
     
     AssociationsHashMap &associations() {
         if (_map == NULL)
@@ -204,7 +206,6 @@ public:
     }
 };
 
-spinlock_t AssociationsManager::_lock;
 AssociationsHashMap *AssociationsManager::_map = NULL;
 
 // expanded policy bits.

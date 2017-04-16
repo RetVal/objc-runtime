@@ -153,36 +153,6 @@ OBJC_EXPORT BOOL object_isClass(id obj)
 
 
 /** 
- * Returns the class name of a given object.
- * 
- * @param obj An Objective-C object.
- * 
- * @return The name of the class of which \e obj is an instance.
- */
-OBJC_EXPORT const char *object_getClassName(id obj)
-    OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0);
-
-/** 
- * Returns a pointer to any extra bytes allocated with an instance given object.
- * 
- * @param obj An Objective-C object.
- * 
- * @return A pointer to any extra bytes allocated with \e obj. If \e obj was
- *   not allocated with any extra bytes, then dereferencing the returned pointer is undefined.
- * 
- * @note This function returns a pointer to any extra bytes allocated with the instance
- *  (as specified by \c class_createInstance with extraBytes>0). This memory follows the
- *  object's ordinary ivars, but may not be adjacent to the last ivar.
- * @note The returned pointer is guaranteed to be pointer-size aligned, even if the area following
- *  the object's last ivar is less aligned than that. Alignment greater than pointer-size is never
- *  guaranteed, even if the area following the object's last ivar is more aligned than that.
- * @note In a garbage-collected environment, the memory is scanned conservatively.
- */
-OBJC_EXPORT void *object_getIndexedIvars(id obj)
-    OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0)
-    OBJC_ARC_UNAVAILABLE;
-
-/** 
  * Reads the value of an instance variable in an object.
  * 
  * @param obj The object containing the instance variable whose value you want to read.
@@ -1396,20 +1366,6 @@ OBJC_EXPORT const char **objc_copyClassNamesForImage(const char *image,
 OBJC_EXPORT const char *sel_getName(SEL sel)
     OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0);
 
-/** 
- * Registers a method name with the Objective-C runtime system.
- * 
- * @param str A pointer to a C string. Pass the name of the method you wish to register.
- * 
- * @return A pointer of type SEL specifying the selector for the named method.
- * 
- * @note The implementation of this method is identical to the implementation of \c sel_registerName.
- * @note Prior to OS X version 10.0, this method tried to find the selector mapped to the given name
- *  and returned \c NULL if the selector was not found. This was changed for safety, because it was
- *  observed that many of the callers of this function did not check the return value for \c NULL.
- */
-OBJC_EXPORT SEL sel_getUid(const char *str)
-    OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0);
 
 /** 
  * Registers a method with the Objective-C runtime system, maps the method 

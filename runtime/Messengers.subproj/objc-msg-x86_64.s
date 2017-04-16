@@ -1281,49 +1281,4 @@ LCacheMiss:
 .quad 0
 .quad 0
 
-
-	// Workaround for Skype evil (rdar://19715989)
-
-	.text
-	.align 4
-	.private_extern _map_images
-	.private_extern _map_2_images
-	.private_extern _hax
-_hax:	
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-_map_images:
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	jmp _map_2_images
-
 #endif

@@ -99,7 +99,7 @@
 /* classInitLock protects CLS_INITIALIZED and CLS_INITIALIZING, and 
  * is signalled when any class is done initializing. 
  * Threads that are waiting for a class to finish initializing wait on this. */
-static monitor_t classInitLock;
+monitor_t classInitLock;
 
 
 /***********************************************************************

@@ -59,6 +59,11 @@ Protocol *getPreoptimizedProtocol(const char *name)
     return nil;
 }
 
+unsigned int getPreoptimizedClassUnreasonableCount()
+{
+    return 0;
+}
+
 Class getPreoptimizedClass(const char *name)
 {
     return nil;
@@ -162,6 +167,17 @@ Protocol *getPreoptimizedProtocol(const char *name)
     if (!protocols) return nil;
 
     return (Protocol *)protocols->getProtocol(name);
+}
+
+
+unsigned int getPreoptimizedClassUnreasonableCount()
+{
+    objc_clsopt_t *classes = opt ? opt->clsopt() : nil;
+    if (!classes) return 0;
+    
+    // This is an overestimate: each set of duplicates 
+    // gets double-counted in `capacity` as well.
+    return classes->capacity + classes->duplicateCount();
 }
 
 

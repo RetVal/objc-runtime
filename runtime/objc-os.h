@@ -120,8 +120,6 @@ void vsyslog(int, const char *, va_list) UNAVAILABLE_ATTRIBUTE;
 #define fastpath(x) (__builtin_expect(bool(x), 1))
 #define slowpath(x) (__builtin_expect(bool(x), 0))
 
-#include <libkern/OSAtomic.h>
-
 typedef OSSpinLock os_lock_handoff_s;
 #define OS_LOCK_HANDOFF_INIT OS_SPINLOCK_INIT
 
@@ -136,7 +134,6 @@ ALWAYS_INLINE void os_lock_unlock(volatile os_lock_handoff_s *lock) {
 ALWAYS_INLINE bool os_lock_trylock(volatile os_lock_handoff_s *lock) {
     return OSSpinLockTry(lock);
 }
-
 
 static ALWAYS_INLINE uintptr_t 
 addc(uintptr_t lhs, uintptr_t rhs, uintptr_t carryin, uintptr_t *carryout)
@@ -271,7 +268,7 @@ ClearExclusive(uintptr_t *dst __unused)
     __BEGIN_DECLS
     extern const char *CRSetCrashLogMessage(const char *msg);
     extern const char *CRGetCrashLogMessage(void);
-    extern const char *CRSetCrashLogMessage2(const char *msg);
+    extern const char *CRGetCrashLogMessage2(const char *msg);
     __END_DECLS
 #endif
 
@@ -820,8 +817,14 @@ using monitor_t = monitor_tt<DEBUG>;
 using rwlock_t = rwlock_tt<DEBUG>;
 using recursive_mutex_t = recursive_mutex_tt<DEBUG>;
 
-#include "objc-lockdebug.h"
+// Use fork_unsafe_lock to get a lock that isn't 
+// acquired and released around fork().
+// All fork-safe locks are checked in debug builds.
+struct fork_unsafe_lock_t { };
+extern const fork_unsafe_lock_t fork_unsafe_lock;
 
+extern "C" void os_unfair_lock_assert_owner(os_unfair_lock *);
+extern "C" void os_unfair_lock_assert_not_owner(os_unfair_lock *);
 extern "C" void os_unfair_lock_unlock(os_unfair_lock *);
 extern "C" void os_unfair_lock_lock_with_options(os_unfair_lock *, uint32_t options);
 
@@ -833,18 +836,21 @@ inline void os_unfair_lock_unlock_inline(os_unfair_lock *unfair_lock) {
     os_unfair_lock_unlock(unfair_lock);
 }
 
-extern "C" void os_unfair_lock_assert_owner(os_unfair_lock *);
-extern "C" void os_unfair_lock_assert_not_owner(os_unfair_lock *);
-
 #ifndef OS_UNFAIR_LOCK_DATA_SYNCHRONIZATION
 #define OS_UNFAIR_LOCK_DATA_SYNCHRONIZATION 0x10000
 #endif
+
+#include "objc-lockdebug.h"
 
 template <bool Debug>
 class mutex_tt : nocopy_t {
     os_unfair_lock mLock;
  public:
-    mutex_tt() : mLock(OS_UNFAIR_LOCK_INIT) { }
+    mutex_tt() : mLock(OS_UNFAIR_LOCK_INIT) {
+        lockdebug_remember_mutex(this);
+    }
+
+    mutex_tt(const fork_unsafe_lock_t unsafe) : mLock(OS_UNFAIR_LOCK_INIT) { }
 
     void lock() {
         lockdebug_mutex_lock(this);
@@ -859,6 +865,13 @@ class mutex_tt : nocopy_t {
         os_unfair_lock_unlock_inline(&mLock);
     }
 
+    void forceReset() {
+        lockdebug_mutex_unlock(this);
+
+        bzero(&mLock, sizeof(mLock));
+        mLock = os_unfair_lock OS_UNFAIR_LOCK_INIT;
+    }
+
     void assertLocked() {
         lockdebug_mutex_assert_locked(this);
     }
@@ -871,7 +884,7 @@ class mutex_tt : nocopy_t {
     // Address-ordered lock discipline for a pair of locks.
 
     static void lockTwo(mutex_tt *lock1, mutex_tt *lock2) {
-        if (lock1 > lock2) {
+        if (lock1 < lock2) {
             lock1->lock();
             lock2->lock();
         } else {
@@ -892,7 +905,13 @@ class recursive_mutex_tt : nocopy_t {
     pthread_mutex_t mLock;
 
   public:
-    recursive_mutex_tt() : mLock(PTHREAD_RECURSIVE_MUTEX_INITIALIZER) { }
+    recursive_mutex_tt() : mLock(PTHREAD_RECURSIVE_MUTEX_INITIALIZER) {
+        lockdebug_remember_recursive_mutex(this);
+    }
+
+    recursive_mutex_tt(const fork_unsafe_lock_t unsafe)
+        : mLock(PTHREAD_RECURSIVE_MUTEX_INITIALIZER)
+    { }
 
     void lock()
     {
@@ -908,6 +927,14 @@ class recursive_mutex_tt : nocopy_t {
 
         int err = pthread_mutex_unlock(&mLock);
         if (err) _objc_fatal("pthread_mutex_unlock failed (%d)", err);
+    }
+
+    void forceReset()
+    {
+        lockdebug_recursive_mutex_unlock(this);
+
+        bzero(&mLock, sizeof(mLock));
+        mLock = pthread_mutex_t PTHREAD_RECURSIVE_MUTEX_INITIALIZER;
     }
 
     bool tryUnlock()
@@ -941,7 +968,14 @@ class monitor_tt {
 
   public:
     monitor_tt() 
-        : mutex(PTHREAD_MUTEX_INITIALIZER), cond(PTHREAD_COND_INITIALIZER) { }
+        : mutex(PTHREAD_MUTEX_INITIALIZER), cond(PTHREAD_COND_INITIALIZER)
+    {
+        lockdebug_remember_monitor(this);
+    }
+
+    monitor_tt(const fork_unsafe_lock_t unsafe) 
+        : mutex(PTHREAD_MUTEX_INITIALIZER), cond(PTHREAD_COND_INITIALIZER)
+    { }
 
     void enter() 
     {
@@ -977,6 +1011,16 @@ class monitor_tt {
     {
         int err = pthread_cond_broadcast(&cond);
         if (err) _objc_fatal("pthread_cond_broadcast failed (%d)", err);        
+    }
+
+    void forceReset()
+    {
+        lockdebug_monitor_leave(this);
+        
+        bzero(&mutex, sizeof(mutex));
+        bzero(&cond, sizeof(cond));
+        mutex = pthread_mutex_t PTHREAD_MUTEX_INITIALIZER;
+        cond = pthread_cond_t PTHREAD_COND_INITIALIZER;
     }
 
     void assertLocked()
@@ -1058,12 +1102,16 @@ static inline void qosEndOverride() { }
 
 template <bool Debug>
 class rwlock_tt : nocopy_t {
-    pthread_rwlock_t mLock = PTHREAD_RWLOCK_INITIALIZER;
+    pthread_rwlock_t mLock;
 
   public:
     rwlock_tt() : mLock(PTHREAD_RWLOCK_INITIALIZER) {
-        pthread_rwlock_init(&mLock, nullptr);
+        lockdebug_remember_rwlock(this);
     }
+
+    rwlock_tt(const fork_unsafe_lock_t unsafe)
+        : mLock(PTHREAD_RWLOCK_INITIALIZER)
+    { }
     
     void read() 
     {
@@ -1129,6 +1177,14 @@ class rwlock_tt : nocopy_t {
         } else {
             _objc_fatal("pthread_rwlock_trywrlock failed (%d)", err);
         }
+    }
+
+    void forceReset()
+    {
+        lockdebug_rwlock_unlock_write(this);
+
+        bzero(&mLock, sizeof(mLock));
+        mLock = pthread_rwlock_t PTHREAD_RWLOCK_INITIALIZER;
     }
 
 
@@ -1266,5 +1322,14 @@ ustrdupMaybeNil(const uint8_t *str)
     (unsigned short)(((uint32_t)(v))>>16),  \
     (unsigned  char)(((uint32_t)(v))>>8),   \
     (unsigned  char)(((uint32_t)(v))>>0)
+
+// fork() safety requires careful tracking of all locks.
+// Our custom lock types check this in debug builds.
+// Disallow direct use of all other lock types.
+typedef __darwin_pthread_mutex_t pthread_mutex_t UNAVAILABLE_ATTRIBUTE;
+typedef __darwin_pthread_rwlock_t pthread_rwlock_t UNAVAILABLE_ATTRIBUTE;
+typedef int32_t OSSpinLock UNAVAILABLE_ATTRIBUTE;
+typedef struct os_unfair_lock_s os_unfair_lock UNAVAILABLE_ATTRIBUTE;
+
 
 #endif

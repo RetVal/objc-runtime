@@ -56,18 +56,34 @@ typedef void (*IMP)(void /* id, SEL, ... */ );
 typedef id (*IMP)(id, SEL, ...); 
 #endif
 
-#define OBJC_BOOL_DEFINED
-
 /// Type to represent a boolean value.
-#if (TARGET_OS_IPHONE && __LP64__)  ||  TARGET_OS_WATCH
-#define OBJC_BOOL_IS_BOOL 1
-typedef bool BOOL;
+
+#if defined(__OBJC_BOOL_IS_BOOL)
+    // Honor __OBJC_BOOL_IS_BOOL when available.
+#   if __OBJC_BOOL_IS_BOOL
+#       define OBJC_BOOL_IS_BOOL 1
+#   else
+#       define OBJC_BOOL_IS_BOOL 0
+#   endif
 #else
-#define OBJC_BOOL_IS_CHAR 1
-typedef signed char BOOL; 
-// BOOL is explicitly signed so @encode(BOOL) == "c" rather than "C" 
-// even if -funsigned-char is used.
+    // __OBJC_BOOL_IS_BOOL not set.
+#   if TARGET_OS_OSX || (TARGET_OS_IOS && !__LP64__ && !__ARM_ARCH_7K)
+#      define OBJC_BOOL_IS_BOOL 0
+#   else
+#      define OBJC_BOOL_IS_BOOL 1
+#   endif
 #endif
+
+#if OBJC_BOOL_IS_BOOL
+    typedef bool BOOL;
+#else
+#   define OBJC_BOOL_IS_CHAR 1
+    typedef signed char BOOL; 
+    // BOOL is explicitly signed so @encode(BOOL) == "c" rather than "C" 
+    // even if -funsigned-char is used.
+#endif
+
+#define OBJC_BOOL_DEFINED
 
 #if __has_feature(objc_bool)
 #define YES __objc_yes
@@ -164,7 +180,8 @@ OBJC_EXPORT const char *object_getClassName(id obj)
  * @note In a garbage-collected environment, the memory is scanned conservatively.
  */
 OBJC_EXPORT void *object_getIndexedIvars(id obj)
-    OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0)
+    OBJC_ARC_UNAVAILABLE;
 
 /** 
  * Identifies a selector as being valid or invalid.

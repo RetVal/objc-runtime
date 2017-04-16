@@ -85,7 +85,7 @@ static bool isUTF8Continuation(char c)
 }
 
 // Add "message" to any forthcoming crash log.
-static mutex_t crashlog_lock;
+mutex_t crashlog_lock;
 static void _objc_crashlog(const char *message)
 {
     char *newmsg;

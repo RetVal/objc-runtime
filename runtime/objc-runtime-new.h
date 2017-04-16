@@ -901,7 +901,11 @@ public:
     {
         assert(!data()  ||  (newData->flags & (RW_REALIZING | RW_FUTURE)));
         // Set during realization or construction only. No locking needed.
-        bits = (bits & ~FAST_DATA_MASK) | (uintptr_t)newData;
+        // Use a store-release fence because there may be concurrent
+        // readers of data and data's contents.
+        uintptr_t newBits = (bits & ~FAST_DATA_MASK) | (uintptr_t)newData;
+        atomic_thread_fence(memory_order_release);
+        bits = newBits;
     }
 
     bool hasDefaultRR() {
@@ -1351,12 +1355,16 @@ struct message_ref_t {
 extern Method protocol_getMethod(protocol_t *p, SEL sel, bool isRequiredMethod, bool isInstanceMethod, bool recursive);
 
 static inline void
-foreach_realized_class_and_subclass_2(Class top, bool (^code)(Class)) 
+foreach_realized_class_and_subclass_2(Class top, unsigned& count,
+                                      std::function<bool (Class)> code) 
 {
     // runtimeLock.assertWriting();
     assert(top);
     Class cls = top;
     while (1) {
+        if (--count == 0) {
+            _objc_fatal("Memory corruption in class list.");
+        }
         if (!code(cls)) break;
 
         if (cls->data()->firstSubclass) {
@@ -1364,6 +1372,9 @@ foreach_realized_class_and_subclass_2(Class top, bool (^code)(Class))
         } else {
             while (!cls->data()->nextSiblingClass  &&  cls != top) {
                 cls = cls->superclass;
+                if (--count == 0) {
+                    _objc_fatal("Memory corruption in class list.");
+                }
             }
             if (cls == top) break;
             cls = cls->data()->nextSiblingClass;
@@ -1371,26 +1382,39 @@ foreach_realized_class_and_subclass_2(Class top, bool (^code)(Class))
     }
 }
 
+extern Class firstRealizedClass();
+extern unsigned int unreasonableClassCount();
+
 // Enumerates a class and all of its realized subclasses.
 static inline void
-foreach_realized_class_and_subclass(Class top, void (^code)(Class)) 
+foreach_realized_class_and_subclass(Class top,
+                                    std::function<void (Class)> code)
 {
-    foreach_realized_class_and_subclass_2(top, ^bool(Class cls) { 
-        code(cls); return true; 
+    unsigned int count = unreasonableClassCount();
+
+    foreach_realized_class_and_subclass_2(top, count,
+                                          [&code](Class cls) -> bool
+    {
+        code(cls);
+        return true; 
     });
 }
 
 // Enumerates all realized classes and metaclasses.
-extern Class firstRealizedClass();
 static inline void
-foreach_realized_class_and_metaclass(void (^code)(Class)) 
+foreach_realized_class_and_metaclass(std::function<void (Class)> code) 
 {
+    unsigned int count = unreasonableClassCount();
+    
     for (Class top = firstRealizedClass(); 
          top != nil; 
          top = top->data()->nextSiblingClass) 
     {
-        foreach_realized_class_and_subclass_2(top, ^bool(Class cls) { 
-            code(cls); return true; 
+        foreach_realized_class_and_subclass_2(top, count,
+                                              [&code](Class cls) -> bool
+        {
+            code(cls);
+            return true; 
         });
     }
 

@@ -2157,8 +2157,8 @@ unmap_image(const char *path __unused, const struct mach_header *mh)
 * Calls ABI-agnostic code after taking ABI-specific locks.
 **********************************************************************/
 void
-map_2_images(unsigned count, const char * const paths[],
-             const struct mach_header * const mhdrs[])
+map_images(unsigned count, const char * const paths[],
+           const struct mach_header * const mhdrs[])
 {
     recursive_mutex_locker_t lock(loadMethodLock);
     map_images_nolock(count, paths, mhdrs);

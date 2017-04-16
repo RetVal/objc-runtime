@@ -136,6 +136,10 @@ namespace {
 // don't want the table to act as a root for `leaks`.
 typedef objc::DenseMap<DisguisedPtr<objc_object>,size_t,true> RefcountMap;
 
+// Template parameters.
+enum HaveOld { DontHaveOld = false, DoHaveOld = true };
+enum HaveNew { DontHaveNew = false, DoHaveNew = true };
+
 struct SideTable {
     spinlock_t slock;
     RefcountMap refcnts;
@@ -151,46 +155,58 @@ struct SideTable {
 
     void lock() { slock.lock(); }
     void unlock() { slock.unlock(); }
+    void forceReset() { slock.forceReset(); }
 
     // Address-ordered lock discipline for a pair of side tables.
 
-    template<bool HaveOld, bool HaveNew>
+    template<HaveOld, HaveNew>
     static void lockTwo(SideTable *lock1, SideTable *lock2);
-    template<bool HaveOld, bool HaveNew>
+    template<HaveOld, HaveNew>
     static void unlockTwo(SideTable *lock1, SideTable *lock2);
 };
 
 
 template<>
-void SideTable::lockTwo<true, true>(SideTable *lock1, SideTable *lock2) {
+void SideTable::lockTwo<DoHaveOld, DoHaveNew>
+    (SideTable *lock1, SideTable *lock2)
+{
     spinlock_t::lockTwo(&lock1->slock, &lock2->slock);
 }
 
 template<>
-void SideTable::lockTwo<true, false>(SideTable *lock1, SideTable *) {
+void SideTable::lockTwo<DoHaveOld, DontHaveNew>
+    (SideTable *lock1, SideTable *)
+{
     lock1->lock();
 }
 
 template<>
-void SideTable::lockTwo<false, true>(SideTable *, SideTable *lock2) {
+void SideTable::lockTwo<DontHaveOld, DoHaveNew>
+    (SideTable *, SideTable *lock2)
+{
     lock2->lock();
 }
 
 template<>
-void SideTable::unlockTwo<true, true>(SideTable *lock1, SideTable *lock2) {
+void SideTable::unlockTwo<DoHaveOld, DoHaveNew>
+    (SideTable *lock1, SideTable *lock2)
+{
     spinlock_t::unlockTwo(&lock1->slock, &lock2->slock);
 }
 
 template<>
-void SideTable::unlockTwo<true, false>(SideTable *lock1, SideTable *) {
+void SideTable::unlockTwo<DoHaveOld, DontHaveNew>
+    (SideTable *lock1, SideTable *)
+{
     lock1->unlock();
 }
 
 template<>
-void SideTable::unlockTwo<false, true>(SideTable *, SideTable *lock2) {
+void SideTable::unlockTwo<DontHaveOld, DoHaveNew>
+    (SideTable *, SideTable *lock2)
+{
     lock2->unlock();
 }
-    
 
 
 // We cannot use a C++ static initializer to initialize SideTables because
@@ -211,6 +227,29 @@ static StripedMap<SideTable>& SideTables() {
 // anonymous namespace
 };
 
+void SideTableLockAll() {
+    SideTables().lockAll();
+}
+
+void SideTableUnlockAll() {
+    SideTables().unlockAll();
+}
+
+void SideTableForceResetAll() {
+    SideTables().forceResetAll();
+}
+
+void SideTableDefineLockOrder() {
+    SideTables().defineLockOrder();
+}
+
+void SideTableLocksPrecedeLock(const void *newlock) {
+    SideTables().precedeLock(newlock);
+}
+
+void SideTableLocksSucceedLock(const void *oldlock) {
+    SideTables().succeedLock(oldlock);
+}
 
 //
 // The -fobjc-arc flag causes the compiler to issue calls to objc_{retain/release/autorelease/retain_block}
@@ -256,12 +295,16 @@ objc_storeStrong(id *location, id obj)
 // If CrashIfDeallocating is true, the process is halted if newObj is 
 //   deallocating or newObj's class does not support weak references. 
 //   If CrashIfDeallocating is false, nil is stored instead.
-template <bool HaveOld, bool HaveNew, bool CrashIfDeallocating>
+enum CrashIfDeallocating {
+    DontCrashIfDeallocating = false, DoCrashIfDeallocating = true
+};
+template <HaveOld haveOld, HaveNew haveNew,
+          CrashIfDeallocating crashIfDeallocating>
 static id 
 storeWeak(id *location, objc_object *newObj)
 {
-    assert(HaveOld  ||  HaveNew);
-    if (!HaveNew) assert(newObj == nil);
+    assert(haveOld  ||  haveNew);
+    if (!haveNew) assert(newObj == nil);
 
     Class previouslyInitializedClass = nil;
     id oldObj;
@@ -272,34 +315,34 @@ storeWeak(id *location, objc_object *newObj)
     // Order by lock address to prevent lock ordering problems. 
     // Retry if the old value changes underneath us.
  retry:
-    if (HaveOld) {
+    if (haveOld) {
         oldObj = *location;
         oldTable = &SideTables()[oldObj];
     } else {
         oldTable = nil;
     }
-    if (HaveNew) {
+    if (haveNew) {
         newTable = &SideTables()[newObj];
     } else {
         newTable = nil;
     }
 
-    SideTable::lockTwo<HaveOld, HaveNew>(oldTable, newTable);
+    SideTable::lockTwo<haveOld, haveNew>(oldTable, newTable);
 
-    if (HaveOld  &&  *location != oldObj) {
-        SideTable::unlockTwo<HaveOld, HaveNew>(oldTable, newTable);
+    if (haveOld  &&  *location != oldObj) {
+        SideTable::unlockTwo<haveOld, haveNew>(oldTable, newTable);
         goto retry;
     }
 
     // Prevent a deadlock between the weak reference machinery
     // and the +initialize machinery by ensuring that no 
     // weakly-referenced object has an un-+initialized isa.
-    if (HaveNew  &&  newObj) {
+    if (haveNew  &&  newObj) {
         Class cls = newObj->getIsa();
         if (cls != previouslyInitializedClass  &&  
             !((objc_class *)cls)->isInitialized()) 
         {
-            SideTable::unlockTwo<HaveOld, HaveNew>(oldTable, newTable);
+            SideTable::unlockTwo<haveOld, haveNew>(oldTable, newTable);
             _class_initialize(_class_getNonMetaClass(cls, (id)newObj));
 
             // If this class is finished with +initialize then we're good.
@@ -315,15 +358,15 @@ storeWeak(id *location, objc_object *newObj)
     }
 
     // Clean up old value, if any.
-    if (HaveOld) {
+    if (haveOld) {
         weak_unregister_no_lock(&oldTable->weak_table, oldObj, location);
     }
 
     // Assign new value, if any.
-    if (HaveNew) {
-        newObj = (objc_object *)weak_register_no_lock(&newTable->weak_table, 
-                                                      (id)newObj, location, 
-                                                      CrashIfDeallocating);
+    if (haveNew) {
+        newObj = (objc_object *)
+            weak_register_no_lock(&newTable->weak_table, (id)newObj, location, 
+                                  crashIfDeallocating);
         // weak_register_no_lock returns nil if weak store should be rejected
 
         // Set is-weakly-referenced bit in refcount table.
@@ -338,7 +381,7 @@ storeWeak(id *location, objc_object *newObj)
         // No new value. The storage is not changed.
     }
     
-    SideTable::unlockTwo<HaveOld, HaveNew>(oldTable, newTable);
+    SideTable::unlockTwo<haveOld, haveNew>(oldTable, newTable);
 
     return (id)newObj;
 }
@@ -356,7 +399,7 @@ storeWeak(id *location, objc_object *newObj)
 id
 objc_storeWeak(id *location, id newObj)
 {
-    return storeWeak<true/*old*/, true/*new*/, true/*crash*/>
+    return storeWeak<DoHaveOld, DoHaveNew, DoCrashIfDeallocating>
         (location, (objc_object *)newObj);
 }
 
@@ -374,7 +417,7 @@ objc_storeWeak(id *location, id newObj)
 id
 objc_storeWeakOrNil(id *location, id newObj)
 {
-    return storeWeak<true/*old*/, true/*new*/, false/*crash*/>
+    return storeWeak<DoHaveOld, DoHaveNew, DontCrashIfDeallocating>
         (location, (objc_object *)newObj);
 }
 
@@ -403,7 +446,7 @@ objc_initWeak(id *location, id newObj)
         return nil;
     }
 
-    return storeWeak<false/*old*/, true/*new*/, true/*crash*/>
+    return storeWeak<DontHaveOld, DoHaveNew, DoCrashIfDeallocating>
         (location, (objc_object*)newObj);
 }
 
@@ -415,7 +458,7 @@ objc_initWeakOrNil(id *location, id newObj)
         return nil;
     }
 
-    return storeWeak<false/*old*/, true/*new*/, false/*crash*/>
+    return storeWeak<DontHaveOld, DoHaveNew, DontCrashIfDeallocating>
         (location, (objc_object*)newObj);
 }
 
@@ -434,7 +477,7 @@ objc_initWeakOrNil(id *location, id newObj)
 void
 objc_destroyWeak(id *location)
 {
-    (void)storeWeak<true/*old*/, false/*new*/, false/*crash*/>
+    (void)storeWeak<DoHaveOld, DontHaveNew, DontCrashIfDeallocating>
         (location, nil);
 }
 

@@ -39,10 +39,9 @@
 - (id)mutableCopyWithZone:(void *)zone;
 @end
 
-// These locks must not be at function scope.
-static StripedMap<spinlock_t> PropertyLocks;
-static StripedMap<spinlock_t> StructLocks;
-static StripedMap<spinlock_t> CppObjectLocks;
+StripedMap<spinlock_t> PropertyLocks;
+StripedMap<spinlock_t> StructLocks;
+StripedMap<spinlock_t> CppObjectLocks;
 
 #define MUTABLE_COPY 2
 

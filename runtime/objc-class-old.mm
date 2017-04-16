@@ -1504,7 +1504,7 @@ unsigned int method_getArgumentInfo(Method m, int arg,
 }
 
 
-static spinlock_t impLock;
+spinlock_t impLock;
 
 IMP method_setImplementation(Method m_gen, IMP imp)
 {

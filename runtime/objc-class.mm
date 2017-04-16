@@ -158,8 +158,8 @@
 
 #include "objc-private.h"
 #include "objc-abi.h"
-#include "objc-os.h"
 #include <objc/message.h>
+
 
 /* overriding the default object allocation and error handling routines */
 
@@ -816,6 +816,9 @@ IMP class_getMethodImplementation_stret(Class cls, SEL sel)
 /***********************************************************************
 * instrumentObjcMessageSends
 **********************************************************************/
+// Define this everywhere even if it isn't used to simplify fork() safety code.
+spinlock_t objcMsgLogLock;
+
 #if !SUPPORT_MESSAGE_LOGGING
 
 void	instrumentObjcMessageSends(BOOL flag)
@@ -826,7 +829,6 @@ void	instrumentObjcMessageSends(BOOL flag)
 
 bool objcMsgLogEnabled = false;
 static int objcMsgLogFD = -1;
-static spinlock_t objcMsgLogLock;
 
 bool logMessageSend(bool isClassMethod,
                     const char *objectsClass,

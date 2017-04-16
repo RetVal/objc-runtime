@@ -99,6 +99,14 @@ OBJC_EXPORT void _objc_init(void)
     OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0);
 #endif
 
+// fork() safety called by libSystem
+OBJC_EXPORT void _objc_atfork_prepare(void)
+    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0);
+OBJC_EXPORT void _objc_atfork_parent(void)
+    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0);
+OBJC_EXPORT void _objc_atfork_child(void)
+    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0);
+
 // Return YES if GC is on and `object` is a GC allocation.
 OBJC_EXPORT BOOL objc_isAuto(id object) 
     __OSX_DEPRECATED(10.4, 10.8, "it always returns NO") 

@@ -1036,6 +1036,25 @@ static void removeNamedClass(Class cls, const char *name)
 
 
 /***********************************************************************
+* unreasonableClassCount
+* Provides an upper bound for any iteration of classes, 
+* to prevent spins when runtime metadata is corrupted.
+**********************************************************************/
+unsigned unreasonableClassCount()
+{
+    runtimeLock.assertLocked();
+
+    int base = NXCountMapTable(gdb_objc_realized_classes) +
+        getPreoptimizedClassUnreasonableCount();
+
+    // Provide lots of slack here. Some iterations touch metaclasses too.
+    // Some iterations backtrack (like realized class iteration).
+    // We don't need an efficient bound, merely one that prevents spins.
+    return (base + 1) * 16;
+}
+
+
+/***********************************************************************
 * futureNamedClasses
 * Returns the classname => future class map for unrealized future classes.
 * Locking: runtimeLock must be held by the caller
@@ -1992,8 +2011,8 @@ void _objc_flush_caches(Class cls)
 * Locking: write-locks runtimeLock
 **********************************************************************/
 void
-map_2_images(unsigned count, const char * const paths[],
-             const struct mach_header * const mhdrs[])
+map_images(unsigned count, const char * const paths[],
+           const struct mach_header * const mhdrs[])
 {
     rwlock_writer_t lock(runtimeLock);
     return map_images_nolock(count, paths, mhdrs);
@@ -4264,7 +4283,7 @@ objc_class::nameForLogging()
 * If realize=false, the class must already be realized or future.
 * Locking: If realize=true, runtimeLock must be held for writing by the caller.
 **********************************************************************/
-static mutex_t DemangleCacheLock;
+mutex_t DemangleCacheLock;
 static NXHashTable *DemangleCache;
 const char *
 objc_class::demangledName(bool realize)
@@ -4568,9 +4587,7 @@ IMP _class_lookupMethodAndLoadCache3(id obj, SEL sel, Class cls)
 IMP lookUpImpOrForward(Class cls, SEL sel, id inst, 
                        bool initialize, bool cache, bool resolver)
 {
-    Class curClass;
     IMP imp = nil;
-    Method meth;
     bool triedResolver = NO;
 
     runtimeLock.assertUnlocked();
@@ -4581,25 +4598,43 @@ IMP lookUpImpOrForward(Class cls, SEL sel, id inst,
         if (imp) return imp;
     }
 
+    // runtimeLock is held during isRealized and isInitialized checking
+    // to prevent races against concurrent realization.
+
+    // runtimeLock is held during method search to make
+    // method-lookup + cache-fill atomic with respect to method addition.
+    // Otherwise, a category could be added but ignored indefinitely because
+    // the cache was re-filled with the old value after the cache flush on
+    // behalf of the category.
+
+    runtimeLock.read();
+
     if (!cls->isRealized()) {
-        rwlock_writer_t lock(runtimeLock);
+        // Drop the read-lock and acquire the write-lock.
+        // realizeClass() checks isRealized() again to prevent
+        // a race while the lock is down.
+        runtimeLock.unlockRead();
+        runtimeLock.write();
+
         realizeClass(cls);
+
+        runtimeLock.unlockWrite();
+        runtimeLock.read();
     }
 
     if (initialize  &&  !cls->isInitialized()) {
+        runtimeLock.unlockRead();
         _class_initialize (_class_getNonMetaClass(cls, inst));
+        runtimeLock.read();
         // If sel == initialize, _class_initialize will send +initialize and 
         // then the messenger will send +initialize again after this 
         // procedure finishes. Of course, if this is not being called 
         // from the messenger then it won't happen. 2778172
     }
 
-    // The lock is held to make method-lookup + cache-fill atomic 
-    // with respect to method addition. Otherwise, a category could 
-    // be added but ignored indefinitely because the cache was re-filled 
-    // with the old value after the cache flush on behalf of the category.
- retry:
-    runtimeLock.read();
+    
+ retry:    
+    runtimeLock.assertReading();
 
     // Try this class's cache.
 
@@ -4607,40 +4642,50 @@ IMP lookUpImpOrForward(Class cls, SEL sel, id inst,
     if (imp) goto done;
 
     // Try this class's method lists.
-
-    meth = getMethodNoSuper_nolock(cls, sel);
-    if (meth) {
-        log_and_fill_cache(cls, meth->imp, sel, inst, cls);
-        imp = meth->imp;
-        goto done;
+    {
+        Method meth = getMethodNoSuper_nolock(cls, sel);
+        if (meth) {
+            log_and_fill_cache(cls, meth->imp, sel, inst, cls);
+            imp = meth->imp;
+            goto done;
+        }
     }
 
     // Try superclass caches and method lists.
-
-    curClass = cls;
-    while ((curClass = curClass->superclass)) {
-        // Superclass cache.
-        imp = cache_getImp(curClass, sel);
-        if (imp) {
-            if (imp != (IMP)_objc_msgForward_impcache) {
-                // Found the method in a superclass. Cache it in this class.
-                log_and_fill_cache(cls, imp, sel, inst, curClass);
+    {
+        unsigned attempts = unreasonableClassCount();
+        for (Class curClass = cls;
+             curClass != nil;
+             curClass = curClass->superclass)
+        {
+            // Halt if there is a cycle in the superclass chain.
+            if (--attempts == 0) {
+                _objc_fatal("Memory corruption in class list.");
+            }
+            
+            // Superclass cache.
+            imp = cache_getImp(curClass, sel);
+            if (imp) {
+                if (imp != (IMP)_objc_msgForward_impcache) {
+                    // Found the method in a superclass. Cache it in this class.
+                    log_and_fill_cache(cls, imp, sel, inst, curClass);
+                    goto done;
+                }
+                else {
+                    // Found a forward:: entry in a superclass.
+                    // Stop searching, but don't cache yet; call method 
+                    // resolver for this class first.
+                    break;
+                }
+            }
+            
+            // Superclass method list.
+            Method meth = getMethodNoSuper_nolock(curClass, sel);
+            if (meth) {
+                log_and_fill_cache(cls, meth->imp, sel, inst, curClass);
+                imp = meth->imp;
                 goto done;
             }
-            else {
-                // Found a forward:: entry in a superclass.
-                // Stop searching, but don't cache yet; call method 
-                // resolver for this class first.
-                break;
-            }
-        }
-
-        // Superclass method list.
-        meth = getMethodNoSuper_nolock(curClass, sel);
-        if (meth) {
-            log_and_fill_cache(cls, meth->imp, sel, inst, curClass);
-            imp = meth->imp;
-            goto done;
         }
     }
 
@@ -4649,6 +4694,7 @@ IMP lookUpImpOrForward(Class cls, SEL sel, id inst,
     if (resolver  &&  !triedResolver) {
         runtimeLock.unlockRead();
         _class_resolveMethod(cls, sel, inst);
+        runtimeLock.read();
         // Don't cache the result; we don't hold the lock so it may have 
         // changed already. Re-do the search from scratch instead.
         triedResolver = YES;

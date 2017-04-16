@@ -1059,7 +1059,6 @@ struct alt_handler_list {
     struct alt_handler_list *next_DEBUGONLY;
 };
 
-static mutex_t DebugLock;
 static struct alt_handler_list *DebugLists;
 static uintptr_t DebugCounter;
 
@@ -1080,7 +1079,7 @@ fetch_handler_list(bool create)
 
         if (DebugAltHandlers) {
             // Save this list so the debug code can find it from other threads
-            mutex_locker_t lock(DebugLock);
+            mutex_locker_t lock(AltHandlerDebugLock);
             list->next_DEBUGONLY = DebugLists;
             DebugLists = list;
         }
@@ -1095,7 +1094,7 @@ void _destroyAltHandlerList(struct alt_handler_list *list)
     if (list) {
         if (DebugAltHandlers) {
             // Detach from the list-of-lists.
-            mutex_locker_t lock(DebugLock);
+            mutex_locker_t lock(AltHandlerDebugLock);
             struct alt_handler_list **listp = &DebugLists;
             while (*listp && *listp != list) listp = &(*listp)->next_DEBUGONLY;
             if (*listp) *listp = (*listp)->next_DEBUGONLY;
@@ -1160,7 +1159,7 @@ uintptr_t objc_addExceptionHandler(objc_exception_handler fn, void *context)
 
     if (DebugAltHandlers) {
         // Record backtrace in case this handler is misused later.
-        mutex_locker_t lock(DebugLock);
+        mutex_locker_t lock(AltHandlerDebugLock);
 
         token = DebugCounter++;
         if (token == 0) token = DebugCounter++;
@@ -1274,7 +1273,7 @@ void alt_handler_error(uintptr_t token)
          "or break in objc_alt_handler_error() to debug.");
 
     if (DebugAltHandlers) {
-        DebugLock.lock();
+        AltHandlerDebugLock.lock();
         
         // Search other threads' alt handler lists for this handler.
         struct alt_handler_list *list;
@@ -1314,7 +1313,7 @@ void alt_handler_error(uintptr_t token)
             }
         }
     done:   
-        DebugLock.unlock();
+        AltHandlerDebugLock.unlock();
     }
 
 
@@ -1394,3 +1393,6 @@ void exception_init(void)
 
 // __OBJC2__
 #endif
+
+// Define this everywhere even if it isn't used, to simplify fork() safety code
+mutex_t AltHandlerDebugLock;
