@@ -8,7 +8,9 @@
 
 /* Begin PBXBuildFile section */
 		00396A861C81654B00667CB8 /* libobjc.A.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = D2AAC0630554660B00DB518D /* libobjc.A.dylib */; };
+		304E5F781F3329E7008E8A5F /* objc-msg-simulator-x86_64.s in Sources */ = {isa = PBXBuildFile; fileRef = 304E5F771F3329E7008E8A5F /* objc-msg-simulator-x86_64.s */; };
 		305B27561C7D9E96005AC125 /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = 305B27551C7D9E96005AC125 /* main.m */; };
+		305EC7AF1F3304D0004510DB /* objc-msg-arm64.s in Sources */ = {isa = PBXBuildFile; fileRef = 305EC7AE1F3304D0004510DB /* objc-msg-arm64.s */; };
 		307ED08F1C78839C000D10DC /* objc-accessors.mm in Sources */ = {isa = PBXBuildFile; fileRef = 307ED08E1C78839C000D10DC /* objc-accessors.mm */; };
 		3082F17A1BCF4C4500104AE9 /* Object.mm in Sources */ = {isa = PBXBuildFile; fileRef = 3082F1791BCF4C4500104AE9 /* Object.mm */; };
 		3082F1831BCF4C7000104AE9 /* objc-runtime-old.mm in Sources */ = {isa = PBXBuildFile; fileRef = 3082F17B1BCF4C7000104AE9 /* objc-runtime-old.mm */; };
@@ -184,8 +186,10 @@
 		304D5E9D1DFD0DFB00D7D1C0 /* libSystem.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libSystem.tbd; path = usr/lib/libSystem.tbd; sourceTree = SDKROOT; };
 		304D5E9F1DFD0E0B00D7D1C0 /* libSystem.B.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libSystem.B.tbd; path = usr/lib/libSystem.B.tbd; sourceTree = SDKROOT; };
 		304D5EA11DFD0ED200D7D1C0 /* libSystem.B.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libSystem.B.dylib; path = ../../../../../usr/lib/libSystem.B.dylib; sourceTree = "<group>"; };
+		304E5F771F3329E7008E8A5F /* objc-msg-simulator-x86_64.s */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.asm; name = "objc-msg-simulator-x86_64.s"; path = "runtime/Messengers.subproj/objc-msg-simulator-x86_64.s"; sourceTree = "<group>"; };
 		305B27531C7D9E96005AC125 /* debug-objc */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "debug-objc"; sourceTree = BUILT_PRODUCTS_DIR; };
 		305B27551C7D9E96005AC125 /* main.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = main.m; sourceTree = "<group>"; };
+		305EC7AE1F3304D0004510DB /* objc-msg-arm64.s */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.asm; name = "objc-msg-arm64.s"; path = "runtime/Messengers.subproj/objc-msg-arm64.s"; sourceTree = "<group>"; };
 		307ED08E1C78839C000D10DC /* objc-accessors.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; name = "objc-accessors.mm"; path = "runtime/objc-accessors.mm"; sourceTree = "<group>"; };
 		3082F1791BCF4C4500104AE9 /* Object.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; name = Object.mm; path = runtime/Object.mm; sourceTree = "<group>"; };
 		3082F17B1BCF4C7000104AE9 /* objc-runtime-old.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; name = "objc-runtime-old.mm"; path = "runtime/objc-runtime-old.mm"; sourceTree = "<group>"; };
@@ -402,8 +406,10 @@
 				E8923D9E116AB2820071B552 /* a2a3-blocktramps-i386.s */,
 				E8923D9F116AB2820071B552 /* a2a3-blocktramps-x86_64.s */,
 				830F2A690D737FB800392440 /* objc-msg-arm.s */,
+				305EC7AE1F3304D0004510DB /* objc-msg-arm64.s */,
 				830F2A6A0D737FB800392440 /* objc-msg-i386.s */,
 				83B1A8BC0FF1AC0D0019EA5B /* objc-msg-simulator-i386.s */,
+				304E5F771F3329E7008E8A5F /* objc-msg-simulator-x86_64.s */,
 				830F2A720D737FB800392440 /* objc-msg-x86_64.s */,
 				3082F17B1BCF4C7000104AE9 /* objc-runtime-old.mm */,
 				3082F17C1BCF4C7000104AE9 /* objc-auto.mm */,
@@ -938,6 +944,7 @@
 				838485F90D6D68A200CEA253 /* objc-exception.mm in Sources */,
 				838485FA0D6D68A200CEA253 /* objc-file.mm in Sources */,
 				838485FC0D6D68A200CEA253 /* objc-initialize.mm in Sources */,
+				305EC7AF1F3304D0004510DB /* objc-msg-arm64.s in Sources */,
 				838485FD0D6D68A200CEA253 /* objc-layout.mm in Sources */,
 				838485FF0D6D68A200CEA253 /* objc-load.mm in Sources */,
 				838486010D6D68A200CEA253 /* objc-loadmethod.mm in Sources */,
@@ -953,6 +960,7 @@
 				3082F1851BCF4C7000104AE9 /* objc-cache-old.mm in Sources */,
 				8384861F0D6D68A800CEA253 /* Protocol.mm in Sources */,
 				838486250D6D68F000CEA253 /* List.m in Sources */,
+				304E5F781F3329E7008E8A5F /* objc-msg-simulator-x86_64.s in Sources */,
 				830F2A740D737FB800392440 /* objc-msg-arm.s in Sources */,
 				830F2A750D737FB900392440 /* objc-msg-i386.s in Sources */,
 				830F2A7D0D737FBB00392440 /* objc-msg-x86_64.s in Sources */,
@@ -992,6 +1000,7 @@
 		1DEB914B08733D8E0010E9CD /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ARCHS = "$(ARCHS_STANDARD)";
 				CLANG_CXX_LANGUAGE_STANDARD = "c++0x";
 				COMBINE_HIDPI_IMAGES = YES;
 				COPY_PHASE_STRIP = NO;
@@ -1016,6 +1025,7 @@
 				);
 				INSTALL_PATH = /usr/lib;
 				MACH_O_TYPE = mh_dylib;
+				ONLY_ACTIVE_ARCH = NO;
 				ORDER_FILE = libobjc.order;
 				OTHER_CFLAGS = (
 					"-fdollars-in-identifiers",
@@ -1031,12 +1041,14 @@
 				PRODUCT_NAME = objc.A;
 				PUBLIC_HEADERS_FOLDER_PATH = /usr/include/objc;
 				UNEXPORTED_SYMBOLS_FILE = unexported_symbols;
+				VALID_ARCHS = "x86_64 i386";
 			};
 			name = Debug;
 		};
 		1DEB914C08733D8E0010E9CD /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ARCHS = "$(ARCHS_STANDARD)";
 				CLANG_CXX_LANGUAGE_STANDARD = "c++0x";
 				COMBINE_HIDPI_IMAGES = YES;
 				DYLIB_CURRENT_VERSION = 228;
@@ -1073,6 +1085,7 @@
 				PRODUCT_NAME = objc.A;
 				PUBLIC_HEADERS_FOLDER_PATH = /usr/include/objc;
 				UNEXPORTED_SYMBOLS_FILE = unexported_symbols;
+				VALID_ARCHS = "x86_64 i386";
 			};
 			name = Release;
 		};
@@ -1245,10 +1258,11 @@
 				GCC_THREADSAFE_STATICS = NO;
 				GCC_WARN_ABOUT_DEPRECATED_FUNCTIONS = NO;
 				HEADER_SEARCH_PATHS = (
-					"$(DSTROOT)/$(INDIGO_INSTALL_PATH_PREFIX)/usr/include/**",
-					"$(DSTROOT)/$(INDIGO_INSTALL_PATH_PREFIX)/usr/local/include/**",
-					"$(CONFIGURATION_BUILD_DIR)/$(INDIGO_INSTALL_PATH_PREFIX)/usr/include/**",
-					"$(CONFIGURATION_BUILD_DIR)/$(INDIGO_INSTALL_PATH_PREFIX)/usr/local/include/**",
+					"$(DSTROOT)/usr/include/**",
+					"$(DSTROOT)/usr/local/include/**",
+					"$(CONFIGURATION_BUILD_DIR)/usr/include/**",
+					"$(CONFIGURATION_BUILD_DIR)/usr/local/include/**",
+					"$(SRCROOT)/include",
 				);
 				INSTALL_PATH = "$(INDIGO_INSTALL_PATH_PREFIX)/usr/lib";
 				LD_DYLIB_INSTALL_NAME_mh_dylib = "/usr/lib/$(EXECUTABLE_PATH)";
@@ -1276,10 +1290,11 @@
 				GCC_THREADSAFE_STATICS = NO;
 				GCC_WARN_ABOUT_DEPRECATED_FUNCTIONS = NO;
 				HEADER_SEARCH_PATHS = (
-					"$(DSTROOT)/$(INDIGO_INSTALL_PATH_PREFIX)/usr/include/**",
-					"$(DSTROOT)/$(INDIGO_INSTALL_PATH_PREFIX)/usr/local/include/**",
-					"$(CONFIGURATION_BUILD_DIR)/$(INDIGO_INSTALL_PATH_PREFIX)/usr/include/**",
-					"$(CONFIGURATION_BUILD_DIR)/$(INDIGO_INSTALL_PATH_PREFIX)/usr/local/include/**",
+					"$(DSTROOT)/usr/include/**",
+					"$(DSTROOT)/usr/local/include/**",
+					"$(CONFIGURATION_BUILD_DIR)/usr/include/**",
+					"$(CONFIGURATION_BUILD_DIR)/usr/local/include/**",
+					"$(SRCROOT)/include/**",
 				);
 				INSTALL_PATH = "$(INDIGO_INSTALL_PATH_PREFIX)/usr/lib";
 				LD_DYLIB_INSTALL_NAME_mh_dylib = "/usr/lib/$(EXECUTABLE_PATH)";
