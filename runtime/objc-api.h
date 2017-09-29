@@ -54,6 +54,15 @@
 #   endif
 #endif
 
+#ifndef __BRIDGEOS_AVAILABLE
+#   define __BRIDGEOS_AVAILABLE(v)
+#endif
+#ifndef __BRIDGEOS_DEPRECATED
+#   define __BRIDGEOS_DEPRECATED(v1, v2, m)
+#endif
+#ifndef __BRIDGEOS_UNAVAILABLE
+#   define __BRIDGEOS_UNAVAILABLE
+#endif
 
 /*
  * OBJC_NO_GC 1: GC is not supported
@@ -92,9 +101,9 @@
 
 /* OBJC_AVAILABLE: shorthand for all-OS availability */
 #if !defined(OBJC_AVAILABLE)
-#   define OBJC_AVAILABLE(x, i, t, w)                \
-        __OSX_AVAILABLE(x)  __IOS_AVAILABLE(i)       \
-        __TVOS_AVAILABLE(t) __WATCHOS_AVAILABLE(w)
+#   define OBJC_AVAILABLE(x, i, t, w, b)                            \
+    __OSX_AVAILABLE(x)  __IOS_AVAILABLE(i)  __TVOS_AVAILABLE(t) \
+    __WATCHOS_AVAILABLE(w)  __BRIDGEOS_AVAILABLE(b)
 #endif
 
 

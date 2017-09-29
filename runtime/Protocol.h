@@ -41,7 +41,7 @@
 // All methods of class Protocol are unavailable. 
 // Use the functions in objc/runtime.h instead.
 
-OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0)
+OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0, 2.0)
 @interface Protocol : NSObject
 @end
 
@@ -50,7 +50,7 @@ OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0)
 
 #include <objc/Object.h>
 
-OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0)
+OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0, 2.0)
 @interface Protocol : Object
 {
 @private

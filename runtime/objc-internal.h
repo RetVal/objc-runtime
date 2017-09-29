@@ -60,7 +60,7 @@ __BEGIN_DECLS
 // Returns nil if the superclass is under construction.
 // Call objc_registerClassPair() when you are done.
 OBJC_EXPORT Class objc_initializeClassPair(Class superclass, const char *name, Class cls, Class metacls) 
-    OBJC_AVAILABLE(10.6, 3.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.6, 3.0, 9.0, 1.0, 2.0);
 
 // Class and metaclass construction from a compiler-generated memory image.
 // cls and cls->isa must each be OBJC_MAX_CLASS_SIZE bytes. 
@@ -74,38 +74,38 @@ OBJC_EXPORT Class objc_initializeClassPair(Class superclass, const char *name, C
 struct objc_image_info;
 OBJC_EXPORT Class objc_readClassPair(Class cls, 
                                      const struct objc_image_info *info)
-    OBJC_AVAILABLE(10.10, 8.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.10, 8.0, 9.0, 1.0, 2.0);
 #endif
 
 // Batch object allocation using malloc_zone_batch_malloc().
 OBJC_EXPORT unsigned class_createInstances(Class cls, size_t extraBytes, 
                                            id *results, unsigned num_requested)
-    OBJC_AVAILABLE(10.7, 4.3, 9.0, 1.0)
+    OBJC_AVAILABLE(10.7, 4.3, 9.0, 1.0, 2.0)
     OBJC_ARC_UNAVAILABLE;
 
 // Get the isa pointer written into objects just before being freed.
 OBJC_EXPORT Class _objc_getFreedObjectClass(void)
-    OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0, 2.0);
 
 // env NSObjCMessageLoggingEnabled
 OBJC_EXPORT void instrumentObjcMessageSends(BOOL flag)
-    OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0, 2.0);
 
 // Initializer called by libSystem
 OBJC_EXPORT void _objc_init(void)
 #if __OBJC2__
-    OBJC_AVAILABLE(10.8, 6.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.8, 6.0, 9.0, 1.0, 2.0);
 #else
-    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0);
+    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
 #endif
 
 // fork() safety called by libSystem
 OBJC_EXPORT void _objc_atfork_prepare(void)
-    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0);
+    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
 OBJC_EXPORT void _objc_atfork_parent(void)
-    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0);
+    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
 OBJC_EXPORT void _objc_atfork_child(void)
-    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0);
+    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
 
 // Return YES if GC is on and `object` is a GC allocation.
 OBJC_EXPORT BOOL objc_isAuto(id object) 
@@ -141,7 +141,7 @@ OBJC_EXPORT void _objc_setClassLoader(BOOL (*newClassLoader)(const char *))  OBJ
 // Install handler for allocation failures. 
 // Handler may abort, or throw, or provide an object to return.
 OBJC_EXPORT void _objc_setBadAllocHandler(id (*newHandler)(Class isa))
-    OBJC_AVAILABLE(10.8, 6.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.8, 6.0, 9.0, 1.0, 2.0);
 
 // This can go away when AppKit stops calling it (rdar://7811851)
 #if __OBJC2__
@@ -211,13 +211,13 @@ _objc_taggedPointersEnabled(void);
 // Register a class for a tagged pointer tag.
 // Aborts if the tag is invalid or already in use.
 OBJC_EXPORT void _objc_registerTaggedPointerClass(objc_tag_index_t tag, Class cls)
-    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0, 2.0);
 
 // Returns the registered class for the given tag.
 // Returns nil if the tag is valid but has no registered class.
 // Aborts if the tag is invalid.
 OBJC_EXPORT Class _objc_getClassForTag(objc_tag_index_t tag)
-    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0, 2.0);
 
 // Create a tagged pointer object with the given tag and payload.
 // Assumes the tag is valid.
@@ -385,10 +385,10 @@ _objc_getTaggedPointerSignedValue(const void *ptr)
  * class_getMethodImplementation(object_getClass(obj), name);
  */
 OBJC_EXPORT IMP object_getMethodImplementation(id obj, SEL name)
-    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT IMP object_getMethodImplementation_stret(id obj, SEL name)
-    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0)
+    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0, 2.0)
     OBJC_ARM64_UNAVAILABLE;
 
 
@@ -415,10 +415,10 @@ typedef enum {
 } objc_ivar_memory_management_t;
 
 OBJC_EXPORT objc_ivar_memory_management_t _class_getIvarMemoryManagement(Class cls, Ivar ivar)
-    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0);
+    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
 
 OBJC_EXPORT BOOL _class_isFutureClass(Class cls)
-    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0, 2.0);
 
 
 // API to only be called by root classes like NSObject or NSProxy
@@ -426,149 +426,149 @@ OBJC_EXPORT BOOL _class_isFutureClass(Class cls)
 OBJC_EXPORT
 id
 _objc_rootRetain(id obj)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
 void
 _objc_rootRelease(id obj)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
 bool
 _objc_rootReleaseWasZero(id obj)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
 bool
 _objc_rootTryRetain(id obj)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
 bool
 _objc_rootIsDeallocating(id obj)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
 id
 _objc_rootAutorelease(id obj)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
 uintptr_t
 _objc_rootRetainCount(id obj)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
 id
 _objc_rootInit(id obj)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
 id
 _objc_rootAllocWithZone(Class cls, malloc_zone_t *zone)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
 id
 _objc_rootAlloc(Class cls)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
 void
 _objc_rootDealloc(id obj)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
 void
 _objc_rootFinalize(id obj)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
 malloc_zone_t *
 _objc_rootZone(id obj)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
 uintptr_t
 _objc_rootHash(id obj)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
 void *
 objc_autoreleasePoolPush(void)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
 void
 objc_autoreleasePoolPop(void *context)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 
 OBJC_EXPORT id objc_alloc(Class cls)
-    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT id objc_allocWithZone(Class cls)
-    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT id objc_retain(id obj)
     __asm__("_objc_retain")
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT void objc_release(id obj)
     __asm__("_objc_release")
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT id objc_autorelease(id obj)
     __asm__("_objc_autorelease")
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 // Prepare a value at +1 for return through a +0 autoreleasing convention.
 OBJC_EXPORT
 id
 objc_autoreleaseReturnValue(id obj)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 // Prepare a value at +0 for return through a +0 autoreleasing convention.
 OBJC_EXPORT
 id
 objc_retainAutoreleaseReturnValue(id obj)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 // Accept a value returned through a +0 autoreleasing convention for use at +1.
 OBJC_EXPORT
 id
 objc_retainAutoreleasedReturnValue(id obj)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 // Accept a value returned through a +0 autoreleasing convention for use at +0.
 OBJC_EXPORT
 id
 objc_unsafeClaimAutoreleasedReturnValue(id obj)
-    OBJC_AVAILABLE(10.11, 9.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.11, 9.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
 void
 objc_storeStrong(id *location, id obj)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
 id
 objc_retainAutorelease(id obj)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 // obsolete.
 OBJC_EXPORT id objc_retain_autorelease(id obj)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
 id
 objc_loadWeakRetained(id *location)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
 id 
 objc_initWeak(id *location, id val) 
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 // Like objc_storeWeak, but stores nil if the new object is deallocating 
 // or the new object's class does not support weak references.
@@ -576,7 +576,7 @@ objc_initWeak(id *location, id val)
 OBJC_EXPORT
 id
 objc_storeWeakOrNil(id *location, id obj)
-    OBJC_AVAILABLE(10.11, 9.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.11, 9.0, 9.0, 1.0, 2.0);
 
 // Like objc_initWeak, but stores nil if the new object is deallocating 
 // or the new object's class does not support weak references.
@@ -584,34 +584,34 @@ objc_storeWeakOrNil(id *location, id obj)
 OBJC_EXPORT
 id 
 objc_initWeakOrNil(id *location, id val) 
-    OBJC_AVAILABLE(10.11, 9.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.11, 9.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
 void 
 objc_destroyWeak(id *location) 
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
 void 
 objc_copyWeak(id *to, id *from)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
 void 
 objc_moveWeak(id *to, id *from) 
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 
 OBJC_EXPORT
 void
 _objc_autoreleasePoolPrint(void)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT BOOL objc_should_deallocate(id object)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT void objc_clear_deallocating(id object)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
  
 // to make CF link for now
@@ -619,17 +619,17 @@ OBJC_EXPORT void objc_clear_deallocating(id object)
 OBJC_EXPORT
 void *
 _objc_autoreleasePoolPush(void)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
 void
 _objc_autoreleasePoolPop(void *context)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 
 // Extra @encode data for XPC, or NULL
 OBJC_EXPORT const char *_protocol_getMethodTypeEncoding(Protocol *p, SEL sel, BOOL isRequiredMethod, BOOL isInstanceMethod)
-    OBJC_AVAILABLE(10.8, 6.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.8, 6.0, 9.0, 1.0, 2.0);
 
 
 // API to only be called by classes that provide their own reference count storage
@@ -637,7 +637,7 @@ OBJC_EXPORT const char *_protocol_getMethodTypeEncoding(Protocol *p, SEL sel, BO
 OBJC_EXPORT
 void
 _objc_deallocOnMainThreadHelper(void *context)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 // On async versus sync deallocation and the _dealloc2main flag
 //

@@ -49,14 +49,14 @@ __BEGIN_DECLS
 // Return cls if it's a valid class, or crash.
 OBJC_EXPORT Class gdb_class_getClass(Class cls)
 #if __OBJC2__
-    OBJC_AVAILABLE(10.6, 3.1, 9.0, 1.0);
+    OBJC_AVAILABLE(10.6, 3.1, 9.0, 1.0, 2.0);
 #else
-    OBJC_AVAILABLE(10.7, 3.1, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 3.1, 9.0, 1.0, 2.0);
 #endif
 
 // Same as gdb_class_getClass(object_getClass(cls)).
 OBJC_EXPORT Class gdb_object_getClass(id obj)
-    OBJC_AVAILABLE(10.7, 4.3, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 4.3, 9.0, 1.0, 2.0);
 
 
 /***********************************************************************
@@ -67,7 +67,7 @@ OBJC_EXPORT Class gdb_object_getClass(id obj)
 
 // Maps class name to Class, for in-use classes only. NXStrValueMapPrototype.
 OBJC_EXPORT NXMapTable *gdb_objc_realized_classes
-    OBJC_AVAILABLE(10.6, 3.1, 9.0, 1.0);
+    OBJC_AVAILABLE(10.6, 3.1, 9.0, 1.0, 2.0);
 
 #else
 
@@ -88,14 +88,14 @@ OBJC_EXPORT NXHashTable *_objc_debug_class_hash
 // Extract isa pointer from an isa field.
 // (Class)(isa & mask) == class pointer
 OBJC_EXPORT const uintptr_t objc_debug_isa_class_mask
-    OBJC_AVAILABLE(10.10, 7.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.10, 7.0, 9.0, 1.0, 2.0);
 
 // Extract magic cookie from an isa field.
 // (isa & magic_mask) == magic_value
 OBJC_EXPORT const uintptr_t objc_debug_isa_magic_mask
-    OBJC_AVAILABLE(10.10, 7.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.10, 7.0, 9.0, 1.0, 2.0);
 OBJC_EXPORT const uintptr_t objc_debug_isa_magic_value
-    OBJC_AVAILABLE(10.10, 7.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.10, 7.0, 9.0, 1.0, 2.0);
 
 // Use indexed ISAs for targets which store index of the class in the ISA.
 // This index can be used to index the array of classes.
@@ -130,24 +130,24 @@ OBJC_EXPORT uintptr_t objc_indexed_classes_count;
 
 // if (obj & mask) obj is a tagged pointer object
 OBJC_EXPORT uintptr_t objc_debug_taggedpointer_mask
-    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0, 2.0);
 
 // tag_slot = (obj >> slot_shift) & slot_mask
 OBJC_EXPORT unsigned int objc_debug_taggedpointer_slot_shift
-    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0, 2.0);
 OBJC_EXPORT uintptr_t objc_debug_taggedpointer_slot_mask
-    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0, 2.0);
 
 // class = classes[tag_slot]
 OBJC_EXPORT Class objc_debug_taggedpointer_classes[]
-    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0, 2.0);
 
 // payload = (obj << payload_lshift) >> payload_rshift
 // Payload signedness is determined by the signedness of the right-shift.
 OBJC_EXPORT unsigned int objc_debug_taggedpointer_payload_lshift
-    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0, 2.0);
 OBJC_EXPORT unsigned int objc_debug_taggedpointer_payload_rshift
-    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0, 2.0);
 
 
 // Extended tagged pointers (255 classes, 52-bit payload).
@@ -159,24 +159,24 @@ OBJC_EXPORT unsigned int objc_debug_taggedpointer_payload_rshift
 // if (ext_mask != 0  &&  (obj & ext_mask) == ext_mask) 
 //   obj is a ext tagged pointer object
 OBJC_EXPORT uintptr_t objc_debug_taggedpointer_ext_mask
-    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0);
+    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
 
 // ext_tag_slot = (obj >> ext_slot_shift) & ext_slot_mask
 OBJC_EXPORT unsigned int objc_debug_taggedpointer_ext_slot_shift
-    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0);
+    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
 OBJC_EXPORT uintptr_t objc_debug_taggedpointer_ext_slot_mask
-    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0);
+    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
 
 // class = ext_classes[ext_tag_slot]
 OBJC_EXPORT Class objc_debug_taggedpointer_ext_classes[]
-    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0);
+    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
 
 // payload = (obj << ext_payload_lshift) >> ext_payload_rshift
 // Payload signedness is determined by the signedness of the right-shift.
 OBJC_EXPORT unsigned int objc_debug_taggedpointer_ext_payload_lshift
-    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0);
+    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
 OBJC_EXPORT unsigned int objc_debug_taggedpointer_ext_payload_rshift
-    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0);
+    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
 
 #endif
 
@@ -211,7 +211,7 @@ struct objc_messenger_breakpoint {
 
 OBJC_EXPORT struct objc_messenger_breakpoint 
 gdb_objc_messenger_breakpoints[]
-    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0, 2.0);
 
 #endif
 

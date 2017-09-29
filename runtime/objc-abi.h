@@ -47,7 +47,7 @@
 
 // Old static initializer. Used by old crt1.o and old bug workarounds.
 OBJC_EXPORT void _objcInit(void)
-    OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0, 2.0);
 
 /* Images */
 
@@ -123,36 +123,36 @@ HasClassProperties:
 
 // Read or write an object property. Not all object properties use these.
 OBJC_EXPORT id objc_getProperty(id self, SEL _cmd, ptrdiff_t offset, BOOL atomic)
-    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
 OBJC_EXPORT void objc_setProperty(id self, SEL _cmd, ptrdiff_t offset, id newValue, BOOL atomic, signed char shouldCopy)
-    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT void objc_setProperty_atomic(id self, SEL _cmd, id newValue, ptrdiff_t offset)
-    OBJC_AVAILABLE(10.8, 6.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.8, 6.0, 9.0, 1.0, 2.0);
 OBJC_EXPORT void objc_setProperty_nonatomic(id self, SEL _cmd, id newValue, ptrdiff_t offset)
-    OBJC_AVAILABLE(10.8, 6.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.8, 6.0, 9.0, 1.0, 2.0);
 OBJC_EXPORT void objc_setProperty_atomic_copy(id self, SEL _cmd, id newValue, ptrdiff_t offset)
-    OBJC_AVAILABLE(10.8, 6.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.8, 6.0, 9.0, 1.0, 2.0);
 OBJC_EXPORT void objc_setProperty_nonatomic_copy(id self, SEL _cmd, id newValue, ptrdiff_t offset)
-    OBJC_AVAILABLE(10.8, 6.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.8, 6.0, 9.0, 1.0, 2.0);
 
 
 // Read or write a non-object property. Not all uses are C structs, 
 // and not all C struct properties use this.
 OBJC_EXPORT void objc_copyStruct(void *dest, const void *src, ptrdiff_t size, BOOL atomic, BOOL hasStrong)
-    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
 
 // Perform a copy of a C++ object using striped locks. Used by non-POD C++ typed atomic properties.
 OBJC_EXPORT void objc_copyCppObjectAtomic(void *dest, const void *src, void (*copyHelper) (void *dest, const void *source))
-    OBJC_AVAILABLE(10.8, 6.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.8, 6.0, 9.0, 1.0, 2.0);
 
 /* Classes. */
 #if __OBJC2__
 OBJC_EXPORT IMP _objc_empty_vtable
-    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
 #endif
 OBJC_EXPORT struct objc_cache _objc_empty_cache
-    OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0, 2.0);
 
 
 /* Messages */
@@ -160,14 +160,14 @@ OBJC_EXPORT struct objc_cache _objc_empty_cache
 #if __OBJC2__
 // objc_msgSendSuper2() takes the current search class, not its superclass.
 OBJC_EXPORT id objc_msgSendSuper2(struct objc_super *super, SEL op, ...)
-    OBJC_AVAILABLE(10.6, 2.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.6, 2.0, 9.0, 1.0, 2.0);
 OBJC_EXPORT void objc_msgSendSuper2_stret(struct objc_super *super, SEL op,...)
-    OBJC_AVAILABLE(10.6, 2.0, 9.0, 1.0)
+    OBJC_AVAILABLE(10.6, 2.0, 9.0, 1.0, 2.0)
     OBJC_ARM64_UNAVAILABLE;
 
 // objc_msgSend_noarg() may be faster for methods with no additional arguments.
 OBJC_EXPORT id objc_msgSend_noarg(id self, SEL _cmd)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 #endif
 
 #if __OBJC2__
@@ -176,28 +176,28 @@ OBJC_EXPORT id objc_msgSend_noarg(id self, SEL _cmd)
 // Old objc_msgSendSuper() does not have a debug version; this is OBJC2 only.
 // *_fixup() do not have debug versions; use non-fixup only for debug mode.
 OBJC_EXPORT id objc_msgSend_debug(id self, SEL op, ...)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 OBJC_EXPORT id objc_msgSendSuper2_debug(struct objc_super *super, SEL op, ...)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 OBJC_EXPORT void objc_msgSend_stret_debug(id self, SEL op, ...)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0)
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0)
     OBJC_ARM64_UNAVAILABLE;
 OBJC_EXPORT void objc_msgSendSuper2_stret_debug(struct objc_super *super, SEL op,...)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0)
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0)
     OBJC_ARM64_UNAVAILABLE;
 
 # if defined(__i386__)
 OBJC_EXPORT double objc_msgSend_fpret_debug(id self, SEL op, ...)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 # elif defined(__x86_64__)
 OBJC_EXPORT long double objc_msgSend_fpret_debug(id self, SEL op, ...)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 #  if __STDC_VERSION__ >= 199901L
 OBJC_EXPORT _Complex long double objc_msgSend_fp2ret_debug(id self, SEL op, ...)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 #  else
 OBJC_EXPORT void objc_msgSend_fp2ret_debug(id self, SEL op, ...)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 #  endif
 # endif
 
@@ -220,24 +220,24 @@ OBJC_EXPORT void objc_msgSend_fp2ret_debug(id self, SEL op, ...)
 // See each architecture's implementation for details.
 
 OBJC_EXPORT void objc_msgLookup(void)
-    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0);
+    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
 OBJC_EXPORT void objc_msgLookupSuper2(void)
-    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0);
+    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
 OBJC_EXPORT void objc_msgLookup_stret(void)
-    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0)
+    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0)
     OBJC_ARM64_UNAVAILABLE;
 OBJC_EXPORT void objc_msgLookupSuper2_stret(void)
-    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0)
+    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0)
     OBJC_ARM64_UNAVAILABLE;
 
 # if defined(__i386__)
 OBJC_EXPORT void objc_msgLookup_fpret(void)
-    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0);
+    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
 # elif defined(__x86_64__)
 OBJC_EXPORT void objc_msgLookup_fpret(void)
-    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0);
+    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
 OBJC_EXPORT void objc_msgLookup_fp2ret(void)
-    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0);
+    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
 # endif
 
 #endif
@@ -272,11 +272,11 @@ OBJC_EXPORT void objc_msgSend_fp2ret_fixup(void)
 
 // Vtable for C++ exception typeinfo for Objective-C types.
 OBJC_EXPORT const void *objc_ehtype_vtable[]
-    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
 
 // C++ exception typeinfo for type `id`.
 OBJC_EXPORT struct objc_typeinfo OBJC_EHTYPE_id
-    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
 
 #endif
 
@@ -289,14 +289,14 @@ __objc_personality_v0(int version,
                       uint64_t exceptionClass,
                       struct _Unwind_Exception *exceptionObject,
                       struct _Unwind_Context *context)
-    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
 
 #endif
 
 /* ARC */
 
 OBJC_EXPORT id objc_retainBlock(id)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 
 /* Non-pointer isa */
@@ -315,7 +315,7 @@ OBJC_EXPORT id objc_retainBlock(id)
 // Packed-isa version. This one is used directly by Swift code.
 // (Class)(isa & (uintptr_t)&objc_absolute_packed_isa_class_mask) == class ptr
 OBJC_EXPORT const struct { char c; } objc_absolute_packed_isa_class_mask
-    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0);
+    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
 
 #elif __ARM_ARCH_7K__ >= 2
 #   define OBJC_HAVE_NONPOINTER_ISA 1
@@ -329,13 +329,13 @@ OBJC_EXPORT const struct { char c; } objc_absolute_packed_isa_class_mask
 //     cls = (Class)isa;
 // }
 OBJC_EXPORT const struct { char c; } objc_absolute_indexed_isa_magic_mask
-    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0);
+    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
 OBJC_EXPORT const struct { char c; } objc_absolute_indexed_isa_magic_value
-    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0);
+    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
 OBJC_EXPORT const struct { char c; } objc_absolute_indexed_isa_index_mask
-    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0);
+    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
 OBJC_EXPORT const struct { char c; } objc_absolute_indexed_isa_index_shift
-    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0);
+    OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
 
 #endif
 

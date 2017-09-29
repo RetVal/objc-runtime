@@ -47,7 +47,7 @@
 @end
 
 
-OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0)
+OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0, 2.0)
 OBJC_ROOT_CLASS
 OBJC_EXPORT
 @interface NSObject <NSObject> {
@@ -82,7 +82,7 @@ OBJC_EXPORT
 + (IMP)instanceMethodForSelector:(SEL)aSelector;
 - (void)doesNotRecognizeSelector:(SEL)aSelector;
 
-- (id)forwardingTargetForSelector:(SEL)aSelector OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0);
+- (id)forwardingTargetForSelector:(SEL)aSelector OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
 - (void)forwardInvocation:(NSInvocation *)anInvocation OBJC_SWIFT_UNAVAILABLE("");
 - (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector OBJC_SWIFT_UNAVAILABLE("");
 
@@ -93,8 +93,8 @@ OBJC_EXPORT
 
 + (BOOL)isSubclassOfClass:(Class)aClass;
 
-+ (BOOL)resolveClassMethod:(SEL)sel OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0);
-+ (BOOL)resolveInstanceMethod:(SEL)sel OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0);
++ (BOOL)resolveClassMethod:(SEL)sel OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
++ (BOOL)resolveInstanceMethod:(SEL)sel OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
 
 + (NSUInteger)hash;
 + (Class)superclass;
