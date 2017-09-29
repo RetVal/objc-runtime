@@ -84,22 +84,22 @@ typedef void (*objc_exception_handler)(id unused, void *context);
  * @param exception The exception to be thrown.
  */
 OBJC_EXPORT void objc_exception_throw(id exception)
-    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
 OBJC_EXPORT void objc_exception_rethrow(void)
-    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
 OBJC_EXPORT id objc_begin_catch(void *exc_buf)
-    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
 OBJC_EXPORT void objc_end_catch(void)
-    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
 OBJC_EXPORT void objc_terminate(void)
-    OBJC_AVAILABLE(10.8, 6.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.8, 6.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT objc_exception_preprocessor objc_setExceptionPreprocessor(objc_exception_preprocessor fn)
-    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
 OBJC_EXPORT objc_exception_matcher objc_setExceptionMatcher(objc_exception_matcher fn)
-    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
 OBJC_EXPORT objc_uncaught_exception_handler objc_setUncaughtExceptionHandler(objc_uncaught_exception_handler fn)
-    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
 
 // Not for iOS.
 OBJC_EXPORT uintptr_t objc_addExceptionHandler(objc_exception_handler fn, void *context)
