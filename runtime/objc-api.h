@@ -28,6 +28,7 @@
 #include <Availability.h>
 #include <AvailabilityMacros.h>
 #include <TargetConditionals.h>
+#include <sys/types.h>
 
 #ifndef __has_feature
 #   define __has_feature(x) 0
@@ -41,6 +42,27 @@
 #   define __has_attribute(x) 0
 #endif
 
+#if !__has_feature(nullability)
+#   ifndef _Nullable
+#       define _Nullable
+#   endif
+#   ifndef _Nonnull
+#       define _Nonnull
+#   endif
+#   ifndef _Null_unspecified
+#       define _Null_unspecified
+#   endif
+#endif
+
+#ifndef __BRIDGEOS_AVAILABLE
+#   define __BRIDGEOS_AVAILABLE(v)
+#endif
+#ifndef __BRIDGEOS_DEPRECATED
+#   define __BRIDGEOS_DEPRECATED(v1, v2, m)
+#endif
+#ifndef __BRIDGEOS_UNAVAILABLE
+#   define __BRIDGEOS_UNAVAILABLE
+#endif
 
 /*
  * OBJC_API_VERSION 0 or undef: Tiger and earlier API only
@@ -54,15 +76,6 @@
 #   endif
 #endif
 
-#ifndef __BRIDGEOS_AVAILABLE
-#   define __BRIDGEOS_AVAILABLE(v)
-#endif
-#ifndef __BRIDGEOS_DEPRECATED
-#   define __BRIDGEOS_DEPRECATED(v1, v2, m)
-#endif
-#ifndef __BRIDGEOS_UNAVAILABLE
-#   define __BRIDGEOS_UNAVAILABLE
-#endif
 
 /*
  * OBJC_NO_GC 1: GC is not supported
@@ -102,8 +115,8 @@
 /* OBJC_AVAILABLE: shorthand for all-OS availability */
 #if !defined(OBJC_AVAILABLE)
 #   define OBJC_AVAILABLE(x, i, t, w, b)                            \
-    __OSX_AVAILABLE(x)  __IOS_AVAILABLE(i)  __TVOS_AVAILABLE(t) \
-    __WATCHOS_AVAILABLE(w)  __BRIDGEOS_AVAILABLE(b)
+        __OSX_AVAILABLE(x)  __IOS_AVAILABLE(i)  __TVOS_AVAILABLE(t) \
+        __WATCHOS_AVAILABLE(w)  __BRIDGEOS_AVAILABLE(b)
 #endif
 
 
@@ -127,7 +140,7 @@
 #       define OBJC2_UNAVAILABLE                                       \
             __OSX_DEPRECATED(10.5, 10.5, "not available in __OBJC2__") \
             __IOS_DEPRECATED(2.0, 2.0, "not available in __OBJC2__")   \
-            __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE
+            __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE
 #   endif
 #endif
 
@@ -236,6 +249,14 @@
 #else
 #define OBJC_ENUM(_type, _name) _type _name; enum
 #define OBJC_OPTIONS(_type, _name) _type _name; enum
+#endif
+
+#if !defined(OBJC_RETURNS_RETAINED)
+#   if __OBJC__ && __has_attribute(ns_returns_retained)
+#       define OBJC_RETURNS_RETAINED __attribute__((ns_returns_retained))
+#   else
+#       define OBJC_RETURNS_RETAINED
+#   endif
 #endif
 
 #endif

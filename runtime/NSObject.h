@@ -51,7 +51,10 @@ OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0, 2.0)
 OBJC_ROOT_CLASS
 OBJC_EXPORT
 @interface NSObject <NSObject> {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wobjc-interface-ivars"
     Class isa  OBJC_ISA_AVAILABILITY;
+#pragma clang diagnostic pop
 }
 
 + (void)load;

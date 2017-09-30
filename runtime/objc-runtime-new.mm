@@ -60,10 +60,6 @@ static void fixupMessageRef(message_ref_t *msg);
 static bool MetaclassNSObjectAWZSwizzled;
 static bool ClassNSObjectRRSwizzled;
 
-id objc_noop_imp(id self, SEL _cmd __unused) {
-    return self;
-}
-
 
 /***********************************************************************
 * Lock management
@@ -94,6 +90,13 @@ void lock_init(void)
 # endif
 #endif
 }
+
+
+/***********************************************************************
+* Class structure decoding
+**********************************************************************/
+
+const uintptr_t objc_debug_class_rw_data_mask = FAST_DATA_MASK;
 
 
 /***********************************************************************
@@ -4654,7 +4657,7 @@ IMP lookUpImpOrForward(Class cls, SEL sel, id inst,
     // Try superclass caches and method lists.
     {
         unsigned attempts = unreasonableClassCount();
-        for (Class curClass = cls;
+        for (Class curClass = cls->superclass;
              curClass != nil;
              curClass = curClass->superclass)
         {

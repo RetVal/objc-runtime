@@ -31,6 +31,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/errno.h>
+#include <os/overflow.h>
 #include <mach-o/fat.h>
 #include <mach-o/arch.h>
 #include <mach-o/loader.h>
@@ -476,7 +477,15 @@ bool parse_fat(uint8_t *buffer, size_t size)
         fat_magic = OSSwapBigToHostInt32(fh->magic);
         fat_nfat_arch = OSSwapBigToHostInt32(fh->nfat_arch);
 
-        if (size < (sizeof(struct fat_header) + fat_nfat_arch * sizeof(struct fat_arch))) {
+        size_t fat_arch_size;
+        // fat_nfat_arch * sizeof(struct fat_arch) + sizeof(struct fat_header)
+        if (os_mul_and_add_overflow(fat_nfat_arch, sizeof(struct fat_arch),
+                                    sizeof(struct fat_header), &fat_arch_size))
+        {
+            printf("too many fat archs\n");
+            return false;
+        }
+        if (size < fat_arch_size) {
             printf("file is too small\n");
             return false;
         }
@@ -484,7 +493,14 @@ bool parse_fat(uint8_t *buffer, size_t size)
         archs = (struct fat_arch *)(buffer + sizeof(struct fat_header));
 
         /* Special case hidden CPU_TYPE_ARM64 */
-        if (size >= (sizeof(struct fat_header) + (fat_nfat_arch + 1) * sizeof(struct fat_arch))) {
+        size_t fat_arch_plus_one_size;
+        if (os_add_overflow(fat_arch_size, sizeof(struct fat_arch),
+                            &fat_arch_plus_one_size))
+        {
+            printf("too many fat archs\n");
+            return false;
+        }
+        if (size >= fat_arch_plus_one_size) {
             if (fat_nfat_arch > 0
                 && OSSwapBigToHostInt32(archs[fat_nfat_arch].cputype) == CPU_TYPE_ARM64) {
                 fat_nfat_arch++;
@@ -505,7 +521,7 @@ bool parse_fat(uint8_t *buffer, size_t size)
                               arch_cputype, arch_cpusubtype);
 
             /* Check that slice data is after all fat headers and archs */
-            if (arch_offset < (sizeof(struct fat_header) + fat_nfat_arch * sizeof(struct fat_arch))) {
+            if (arch_offset < fat_arch_size) {
                 printf("file is badly formed\n");
                 return false;
             }

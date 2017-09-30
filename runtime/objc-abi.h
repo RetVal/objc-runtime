@@ -46,7 +46,8 @@
 /* Runtime startup. */
 
 // Old static initializer. Used by old crt1.o and old bug workarounds.
-OBJC_EXPORT void _objcInit(void)
+OBJC_EXPORT void
+_objcInit(void)
     OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0, 2.0);
 
 /* Images */
@@ -122,33 +123,54 @@ HasClassProperties:
 /* Properties */
 
 // Read or write an object property. Not all object properties use these.
-OBJC_EXPORT id objc_getProperty(id self, SEL _cmd, ptrdiff_t offset, BOOL atomic)
-    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
-OBJC_EXPORT void objc_setProperty(id self, SEL _cmd, ptrdiff_t offset, id newValue, BOOL atomic, signed char shouldCopy)
+OBJC_EXPORT id _Nullable
+objc_getProperty(id _Nullable self, SEL _Nonnull _cmd,
+                 ptrdiff_t offset, BOOL atomic)
     OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
 
-OBJC_EXPORT void objc_setProperty_atomic(id self, SEL _cmd, id newValue, ptrdiff_t offset)
+OBJC_EXPORT void
+objc_setProperty(id _Nullable self, SEL _Nonnull _cmd, ptrdiff_t offset,
+                 id _Nullable newValue, BOOL atomic, signed char shouldCopy)
+    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
+
+OBJC_EXPORT void
+objc_setProperty_atomic(id _Nullable self, SEL _Nonnull _cmd,
+                        id _Nullable newValue, ptrdiff_t offset)
     OBJC_AVAILABLE(10.8, 6.0, 9.0, 1.0, 2.0);
-OBJC_EXPORT void objc_setProperty_nonatomic(id self, SEL _cmd, id newValue, ptrdiff_t offset)
+
+OBJC_EXPORT void
+objc_setProperty_nonatomic(id _Nullable self, SEL _Nonnull _cmd,
+                           id _Nullable newValue, ptrdiff_t offset)
     OBJC_AVAILABLE(10.8, 6.0, 9.0, 1.0, 2.0);
-OBJC_EXPORT void objc_setProperty_atomic_copy(id self, SEL _cmd, id newValue, ptrdiff_t offset)
+
+OBJC_EXPORT void
+objc_setProperty_atomic_copy(id _Nullable self, SEL _Nonnull _cmd,
+                             id _Nullable newValue, ptrdiff_t offset)
     OBJC_AVAILABLE(10.8, 6.0, 9.0, 1.0, 2.0);
-OBJC_EXPORT void objc_setProperty_nonatomic_copy(id self, SEL _cmd, id newValue, ptrdiff_t offset)
+
+OBJC_EXPORT void
+objc_setProperty_nonatomic_copy(id _Nullable self, SEL _Nonnull _cmd,
+                                id _Nullable newValue, ptrdiff_t offset)
     OBJC_AVAILABLE(10.8, 6.0, 9.0, 1.0, 2.0);
 
 
 // Read or write a non-object property. Not all uses are C structs, 
 // and not all C struct properties use this.
-OBJC_EXPORT void objc_copyStruct(void *dest, const void *src, ptrdiff_t size, BOOL atomic, BOOL hasStrong)
+OBJC_EXPORT void
+objc_copyStruct(void * _Nonnull dest, const void * _Nonnull src,
+                ptrdiff_t size, BOOL atomic, BOOL hasStrong)
     OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
 
 // Perform a copy of a C++ object using striped locks. Used by non-POD C++ typed atomic properties.
-OBJC_EXPORT void objc_copyCppObjectAtomic(void *dest, const void *src, void (*copyHelper) (void *dest, const void *source))
+OBJC_EXPORT void
+objc_copyCppObjectAtomic(void * _Nonnull dest, const void * _Nonnull src,
+                         void (* _Nonnull copyHelper)
+                           (void * _Nonnull dest, const void * _Nonnull source))
     OBJC_AVAILABLE(10.8, 6.0, 9.0, 1.0, 2.0);
 
 /* Classes. */
 #if __OBJC2__
-OBJC_EXPORT IMP _objc_empty_vtable
+OBJC_EXPORT IMP _Nonnull _objc_empty_vtable
     OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
 #endif
 OBJC_EXPORT struct objc_cache _objc_empty_cache
@@ -159,14 +181,19 @@ OBJC_EXPORT struct objc_cache _objc_empty_cache
 
 #if __OBJC2__
 // objc_msgSendSuper2() takes the current search class, not its superclass.
-OBJC_EXPORT id objc_msgSendSuper2(struct objc_super *super, SEL op, ...)
+OBJC_EXPORT id _Nullable
+objc_msgSendSuper2(struct objc_super * _Nonnull super, SEL _Nonnull op, ...)
     OBJC_AVAILABLE(10.6, 2.0, 9.0, 1.0, 2.0);
-OBJC_EXPORT void objc_msgSendSuper2_stret(struct objc_super *super, SEL op,...)
+
+OBJC_EXPORT void
+objc_msgSendSuper2_stret(struct objc_super * _Nonnull super,
+                         SEL _Nonnull op,...)
     OBJC_AVAILABLE(10.6, 2.0, 9.0, 1.0, 2.0)
     OBJC_ARM64_UNAVAILABLE;
 
 // objc_msgSend_noarg() may be faster for methods with no additional arguments.
-OBJC_EXPORT id objc_msgSend_noarg(id self, SEL _cmd)
+OBJC_EXPORT id _Nullable
+objc_msgSend_noarg(id _Nullable self, SEL _Nonnull _cmd)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 #endif
 
@@ -175,28 +202,41 @@ OBJC_EXPORT id objc_msgSend_noarg(id self, SEL _cmd)
 // may perform extra sanity checking. 
 // Old objc_msgSendSuper() does not have a debug version; this is OBJC2 only.
 // *_fixup() do not have debug versions; use non-fixup only for debug mode.
-OBJC_EXPORT id objc_msgSend_debug(id self, SEL op, ...)
+OBJC_EXPORT id _Nullable
+objc_msgSend_debug(id _Nullable self, SEL _Nonnull op, ...)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
-OBJC_EXPORT id objc_msgSendSuper2_debug(struct objc_super *super, SEL op, ...)
+
+OBJC_EXPORT id _Nullable
+objc_msgSendSuper2_debug(struct objc_super * _Nonnull super,
+                         SEL _Nonnull op, ...)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
-OBJC_EXPORT void objc_msgSend_stret_debug(id self, SEL op, ...)
+
+OBJC_EXPORT void
+objc_msgSend_stret_debug(id _Nullable self, SEL _Nonnull op, ...)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0)
     OBJC_ARM64_UNAVAILABLE;
-OBJC_EXPORT void objc_msgSendSuper2_stret_debug(struct objc_super *super, SEL op,...)
+
+OBJC_EXPORT void
+objc_msgSendSuper2_stret_debug(struct objc_super * _Nonnull super,
+                               SEL _Nonnull op,...)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0)
     OBJC_ARM64_UNAVAILABLE;
 
 # if defined(__i386__)
-OBJC_EXPORT double objc_msgSend_fpret_debug(id self, SEL op, ...)
+OBJC_EXPORT double
+objc_msgSend_fpret_debug(id _Nullable self, SEL _Nonnull op, ...)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 # elif defined(__x86_64__)
-OBJC_EXPORT long double objc_msgSend_fpret_debug(id self, SEL op, ...)
+OBJC_EXPORT long double
+objc_msgSend_fpret_debug(id _Nullable self, SEL _Nonnull op, ...)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 #  if __STDC_VERSION__ >= 199901L
-OBJC_EXPORT _Complex long double objc_msgSend_fp2ret_debug(id self, SEL op, ...)
+OBJC_EXPORT _Complex long double
+objc_msgSend_fp2ret_debug(id _Nullable self, SEL _Nonnull op, ...)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 #  else
-OBJC_EXPORT void objc_msgSend_fp2ret_debug(id self, SEL op, ...)
+OBJC_EXPORT void
+objc_msgSend_fp2ret_debug(id _Nullable self, SEL _Nonnull op, ...)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 #  endif
 # endif
@@ -219,24 +259,36 @@ OBJC_EXPORT void objc_msgSend_fp2ret_debug(id self, SEL op, ...)
 // - Red zone is not preserved.
 // See each architecture's implementation for details.
 
-OBJC_EXPORT void objc_msgLookup(void)
+OBJC_EXPORT void
+objc_msgLookup(void)
     OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
-OBJC_EXPORT void objc_msgLookupSuper2(void)
+
+OBJC_EXPORT void
+objc_msgLookupSuper2(void)
     OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
-OBJC_EXPORT void objc_msgLookup_stret(void)
+
+OBJC_EXPORT void
+objc_msgLookup_stret(void)
     OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0)
     OBJC_ARM64_UNAVAILABLE;
-OBJC_EXPORT void objc_msgLookupSuper2_stret(void)
+
+OBJC_EXPORT void
+objc_msgLookupSuper2_stret(void)
     OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0)
     OBJC_ARM64_UNAVAILABLE;
 
 # if defined(__i386__)
-OBJC_EXPORT void objc_msgLookup_fpret(void)
+OBJC_EXPORT void
+objc_msgLookup_fpret(void)
     OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
+
 # elif defined(__x86_64__)
-OBJC_EXPORT void objc_msgLookup_fpret(void)
+OBJC_EXPORT void
+objc_msgLookup_fpret(void)
     OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
-OBJC_EXPORT void objc_msgLookup_fp2ret(void)
+
+OBJC_EXPORT void
+objc_msgLookup_fp2ret(void)
     OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
 # endif
 
@@ -244,24 +296,41 @@ OBJC_EXPORT void objc_msgLookup_fp2ret(void)
 
 #if TARGET_OS_OSX  &&  defined(__x86_64__)
 // objc_msgSend_fixup() is used for vtable-dispatchable call sites.
-OBJC_EXPORT void objc_msgSend_fixup(void)
+OBJC_EXPORT void
+objc_msgSend_fixup(void)
     __OSX_DEPRECATED(10.5, 10.8, "fixup dispatch is no longer optimized") 
-    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
-OBJC_EXPORT void objc_msgSend_stret_fixup(void)
+    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
+    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
+
+OBJC_EXPORT void
+objc_msgSend_stret_fixup(void)
     __OSX_DEPRECATED(10.5, 10.8, "fixup dispatch is no longer optimized") 
-    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
-OBJC_EXPORT void objc_msgSendSuper2_fixup(void)
+    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
+    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
+
+OBJC_EXPORT void
+objc_msgSendSuper2_fixup(void)
     __OSX_DEPRECATED(10.5, 10.8, "fixup dispatch is no longer optimized") 
-    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
-OBJC_EXPORT void objc_msgSendSuper2_stret_fixup(void)
+    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
+    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
+
+OBJC_EXPORT void
+objc_msgSendSuper2_stret_fixup(void)
     __OSX_DEPRECATED(10.5, 10.8, "fixup dispatch is no longer optimized") 
-    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
-OBJC_EXPORT void objc_msgSend_fpret_fixup(void)
+    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
+    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
+
+OBJC_EXPORT void
+objc_msgSend_fpret_fixup(void)
     __OSX_DEPRECATED(10.5, 10.8, "fixup dispatch is no longer optimized") 
-    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
-OBJC_EXPORT void objc_msgSend_fp2ret_fixup(void)
+    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
+    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
+
+OBJC_EXPORT void
+objc_msgSend_fp2ret_fixup(void)
     __OSX_DEPRECATED(10.5, 10.8, "fixup dispatch is no longer optimized") 
-    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
+    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 #endif
 
 /* C++-compatible exception handling. */
@@ -271,7 +340,7 @@ OBJC_EXPORT void objc_msgSend_fp2ret_fixup(void)
 #if !defined(__cplusplus)
 
 // Vtable for C++ exception typeinfo for Objective-C types.
-OBJC_EXPORT const void *objc_ehtype_vtable[]
+OBJC_EXPORT const void * _Nullableobjc_ehtype_vtable[]
     OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
 
 // C++ exception typeinfo for type `id`.
@@ -287,15 +356,16 @@ OBJC_EXPORT int
 __objc_personality_v0(int version,
                       int actions,
                       uint64_t exceptionClass,
-                      struct _Unwind_Exception *exceptionObject,
-                      struct _Unwind_Context *context)
+                      struct _Unwind_Exception * _Nonnull exceptionObject,
+                      struct _Unwind_Context * _Nonnull context)
     OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
 
 #endif
 
 /* ARC */
 
-OBJC_EXPORT id objc_retainBlock(id)
+OBJC_EXPORT id _Nullable
+objc_retainBlock(id _Nullable)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 

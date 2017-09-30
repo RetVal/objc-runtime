@@ -21,7 +21,7 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
-#if DEBUG
+#if LOCKDEBUG
 extern void lockdebug_assert_all_locks_locked();
 extern void lockdebug_assert_no_locks_locked();
 extern void lockdebug_setInForkPrepare(bool);

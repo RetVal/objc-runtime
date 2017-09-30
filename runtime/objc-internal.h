@@ -59,7 +59,9 @@ __BEGIN_DECLS
 // Returns nil if a class with the same name already exists.
 // Returns nil if the superclass is under construction.
 // Call objc_registerClassPair() when you are done.
-OBJC_EXPORT Class objc_initializeClassPair(Class superclass, const char *name, Class cls, Class metacls) 
+OBJC_EXPORT Class _Nullable
+objc_initializeClassPair(Class _Nullable superclass, const char * _Nonnull name,
+                         Class _Nonnull cls, Class _Nonnull metacls) 
     OBJC_AVAILABLE(10.6, 3.0, 9.0, 1.0, 2.0);
 
 // Class and metaclass construction from a compiler-generated memory image.
@@ -72,27 +74,32 @@ OBJC_EXPORT Class objc_initializeClassPair(Class superclass, const char *name, C
 // Do not call objc_registerClassPair().
 #if __OBJC2__
 struct objc_image_info;
-OBJC_EXPORT Class objc_readClassPair(Class cls, 
-                                     const struct objc_image_info *info)
+OBJC_EXPORT Class _Nullable
+objc_readClassPair(Class _Nonnull cls,
+                   const struct objc_image_info * _Nonnull info)
     OBJC_AVAILABLE(10.10, 8.0, 9.0, 1.0, 2.0);
 #endif
 
 // Batch object allocation using malloc_zone_batch_malloc().
-OBJC_EXPORT unsigned class_createInstances(Class cls, size_t extraBytes, 
-                                           id *results, unsigned num_requested)
+OBJC_EXPORT unsigned
+class_createInstances(Class _Nullable cls, size_t extraBytes, 
+                      id _Nonnull * _Nonnull results, unsigned num_requested)
     OBJC_AVAILABLE(10.7, 4.3, 9.0, 1.0, 2.0)
     OBJC_ARC_UNAVAILABLE;
 
 // Get the isa pointer written into objects just before being freed.
-OBJC_EXPORT Class _objc_getFreedObjectClass(void)
+OBJC_EXPORT Class _Nonnull
+_objc_getFreedObjectClass(void)
     OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0, 2.0);
 
 // env NSObjCMessageLoggingEnabled
-OBJC_EXPORT void instrumentObjcMessageSends(BOOL flag)
+OBJC_EXPORT void
+instrumentObjcMessageSends(BOOL flag)
     OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0, 2.0);
 
 // Initializer called by libSystem
-OBJC_EXPORT void _objc_init(void)
+OBJC_EXPORT void
+_objc_init(void)
 #if __OBJC2__
     OBJC_AVAILABLE(10.8, 6.0, 9.0, 1.0, 2.0);
 #else
@@ -100,62 +107,89 @@ OBJC_EXPORT void _objc_init(void)
 #endif
 
 // fork() safety called by libSystem
-OBJC_EXPORT void _objc_atfork_prepare(void)
+OBJC_EXPORT void
+_objc_atfork_prepare(void)
     OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
-OBJC_EXPORT void _objc_atfork_parent(void)
+
+OBJC_EXPORT void
+_objc_atfork_parent(void)
     OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
-OBJC_EXPORT void _objc_atfork_child(void)
+
+OBJC_EXPORT void
+_objc_atfork_child(void)
     OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
 
 // Return YES if GC is on and `object` is a GC allocation.
-OBJC_EXPORT BOOL objc_isAuto(id object) 
+OBJC_EXPORT BOOL
+objc_isAuto(id _Nullable object) 
     __OSX_DEPRECATED(10.4, 10.8, "it always returns NO") 
-    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
+    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 
 // GC startup callback from Foundation
-OBJC_EXPORT malloc_zone_t *objc_collect_init(int (*callback)(void))
+OBJC_EXPORT malloc_zone_t * _Nullable
+objc_collect_init(int (* _Nonnull callback)(void))
     __OSX_DEPRECATED(10.4, 10.8, "it does nothing") 
-    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
+    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 
 // Plainly-implemented GC barriers. Rosetta used to use these.
-OBJC_EXPORT id objc_assign_strongCast_generic(id value, id *dest)
+OBJC_EXPORT id _Nullable
+objc_assign_strongCast_generic(id _Nullable value, id _Nullable * _Nonnull dest)
     UNAVAILABLE_ATTRIBUTE;
-OBJC_EXPORT id objc_assign_global_generic(id value, id *dest)
+
+OBJC_EXPORT id _Nullable
+objc_assign_global_generic(id _Nullable value, id _Nullable * _Nonnull dest)
     UNAVAILABLE_ATTRIBUTE;
-OBJC_EXPORT id objc_assign_threadlocal_generic(id value, id *dest)
+
+OBJC_EXPORT id _Nullable
+objc_assign_threadlocal_generic(id _Nullable value,
+                                id _Nullable * _Nonnull dest)
     UNAVAILABLE_ATTRIBUTE;
-OBJC_EXPORT id objc_assign_ivar_generic(id value, id dest, ptrdiff_t offset)
+
+OBJC_EXPORT id _Nullable
+objc_assign_ivar_generic(id _Nullable value, id _Nonnull dest, ptrdiff_t offset)
     UNAVAILABLE_ATTRIBUTE;
 
 // GC preflight for an app executable.
 // 1: some slice requires GC
 // 0: no slice requires GC
 // -1: I/O or file format error
-OBJC_EXPORT int objc_appRequiresGC(int fd)
+OBJC_EXPORT int
+objc_appRequiresGC(int fd)
     __OSX_AVAILABLE(10.11) 
-    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
+    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 
 // Install missing-class callback. Used by the late unlamented ZeroLink.
-OBJC_EXPORT void _objc_setClassLoader(BOOL (*newClassLoader)(const char *))  OBJC2_UNAVAILABLE;
+OBJC_EXPORT void
+_objc_setClassLoader(BOOL (* _Nonnull newClassLoader)(const char * _Nonnull))
+    OBJC2_UNAVAILABLE;
 
 // Install handler for allocation failures. 
 // Handler may abort, or throw, or provide an object to return.
-OBJC_EXPORT void _objc_setBadAllocHandler(id (*newHandler)(Class isa))
+OBJC_EXPORT void
+_objc_setBadAllocHandler(id _Nullable (* _Nonnull newHandler)
+                           (Class _Nullable isa))
     OBJC_AVAILABLE(10.8, 6.0, 9.0, 1.0, 2.0);
 
 // This can go away when AppKit stops calling it (rdar://7811851)
 #if __OBJC2__
-OBJC_EXPORT void objc_setMultithreaded (BOOL flag)
+OBJC_EXPORT void
+objc_setMultithreaded (BOOL flag)
     __OSX_DEPRECATED(10.0, 10.5, "multithreading is always available") 
-    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
+    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 #endif
 
 // Used by ExceptionHandling.framework
 #if !__OBJC2__
-OBJC_EXPORT void _objc_error(id rcv, const char *fmt, va_list args)
+OBJC_EXPORT void
+_objc_error(id _Nullable rcv, const char * _Nonnull fmt, va_list args)
     __attribute__((noreturn))
     __OSX_DEPRECATED(10.0, 10.5, "use other logging facilities instead") 
-    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
+    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 
 #endif
 
@@ -210,44 +244,46 @@ _objc_taggedPointersEnabled(void);
 
 // Register a class for a tagged pointer tag.
 // Aborts if the tag is invalid or already in use.
-OBJC_EXPORT void _objc_registerTaggedPointerClass(objc_tag_index_t tag, Class cls)
+OBJC_EXPORT void
+_objc_registerTaggedPointerClass(objc_tag_index_t tag, Class _Nonnull cls)
     OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0, 2.0);
 
 // Returns the registered class for the given tag.
 // Returns nil if the tag is valid but has no registered class.
 // Aborts if the tag is invalid.
-OBJC_EXPORT Class _objc_getClassForTag(objc_tag_index_t tag)
+OBJC_EXPORT Class _Nullable
+_objc_getClassForTag(objc_tag_index_t tag)
     OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0, 2.0);
 
 // Create a tagged pointer object with the given tag and payload.
 // Assumes the tag is valid.
 // Assumes tagged pointers are enabled.
 // The payload will be silently truncated to fit.
-static inline void *
+static inline void * _Nonnull
 _objc_makeTaggedPointer(objc_tag_index_t tag, uintptr_t payload);
 
 // Return true if ptr is a tagged pointer object.
 // Does not check the validity of ptr's class.
 static inline bool 
-_objc_isTaggedPointer(const void *ptr);
+_objc_isTaggedPointer(const void * _Nullable ptr);
 
 // Extract the tag value from the given tagged pointer object.
 // Assumes ptr is a valid tagged pointer object.
 // Does not check the validity of ptr's tag.
 static inline objc_tag_index_t 
-_objc_getTaggedPointerTag(const void *ptr);
+_objc_getTaggedPointerTag(const void * _Nullable ptr);
 
 // Extract the payload from the given tagged pointer object.
 // Assumes ptr is a valid tagged pointer object.
 // The payload value is zero-extended.
 static inline uintptr_t
-_objc_getTaggedPointerValue(const void *ptr);
+_objc_getTaggedPointerValue(const void * _Nullable ptr);
 
 // Extract the payload from the given tagged pointer object.
 // Assumes ptr is a valid tagged pointer object.
 // The payload value is sign-extended.
 static inline intptr_t
-_objc_getTaggedPointerSignedValue(const void *ptr);
+_objc_getTaggedPointerSignedValue(const void * _Nullable ptr);
 
 // Don't use the values below. Use the declarations above.
 
@@ -270,23 +306,23 @@ _objc_getTaggedPointerSignedValue(const void *ptr);
 #define _OBJC_TAG_EXT_SLOT_MASK 0xff
 
 #if OBJC_MSB_TAGGED_POINTERS
-#   define _OBJC_TAG_MASK (1ULL<<63)
+#   define _OBJC_TAG_MASK (1UL<<63)
 #   define _OBJC_TAG_INDEX_SHIFT 60
 #   define _OBJC_TAG_SLOT_SHIFT 60
 #   define _OBJC_TAG_PAYLOAD_LSHIFT 4
 #   define _OBJC_TAG_PAYLOAD_RSHIFT 4
-#   define _OBJC_TAG_EXT_MASK (0xfULL<<60)
+#   define _OBJC_TAG_EXT_MASK (0xfUL<<60)
 #   define _OBJC_TAG_EXT_INDEX_SHIFT 52
 #   define _OBJC_TAG_EXT_SLOT_SHIFT 52
 #   define _OBJC_TAG_EXT_PAYLOAD_LSHIFT 12
 #   define _OBJC_TAG_EXT_PAYLOAD_RSHIFT 12
 #else
-#   define _OBJC_TAG_MASK 1
+#   define _OBJC_TAG_MASK 1UL
 #   define _OBJC_TAG_INDEX_SHIFT 1
 #   define _OBJC_TAG_SLOT_SHIFT 0
 #   define _OBJC_TAG_PAYLOAD_LSHIFT 0
 #   define _OBJC_TAG_PAYLOAD_RSHIFT 4
-#   define _OBJC_TAG_EXT_MASK 0xfULL
+#   define _OBJC_TAG_EXT_MASK 0xfUL
 #   define _OBJC_TAG_EXT_INDEX_SHIFT 4
 #   define _OBJC_TAG_EXT_SLOT_SHIFT 4
 #   define _OBJC_TAG_EXT_PAYLOAD_LSHIFT 0
@@ -300,7 +336,7 @@ _objc_taggedPointersEnabled(void)
     return (objc_debug_taggedpointer_mask != 0);
 }
 
-static inline void *
+static inline void * _Nonnull
 _objc_makeTaggedPointer(objc_tag_index_t tag, uintptr_t value)
 {
     // PAYLOAD_LSHIFT and PAYLOAD_RSHIFT are the payload extraction shifts.
@@ -309,7 +345,7 @@ _objc_makeTaggedPointer(objc_tag_index_t tag, uintptr_t value)
     // assert(_objc_taggedPointersEnabled());
     if (tag <= OBJC_TAG_Last60BitPayload) {
         // assert(((value << _OBJC_TAG_PAYLOAD_RSHIFT) >> _OBJC_TAG_PAYLOAD_LSHIFT) == value);
-        return (void*)
+        return (void *)
             (_OBJC_TAG_MASK | 
              ((uintptr_t)tag << _OBJC_TAG_INDEX_SHIFT) | 
              ((value << _OBJC_TAG_PAYLOAD_RSHIFT) >> _OBJC_TAG_PAYLOAD_LSHIFT));
@@ -317,7 +353,7 @@ _objc_makeTaggedPointer(objc_tag_index_t tag, uintptr_t value)
         // assert(tag >= OBJC_TAG_First52BitPayload);
         // assert(tag <= OBJC_TAG_Last52BitPayload);
         // assert(((value << _OBJC_TAG_EXT_PAYLOAD_RSHIFT) >> _OBJC_TAG_EXT_PAYLOAD_LSHIFT) == value);
-        return (void*)
+        return (void *)
             (_OBJC_TAG_EXT_MASK |
              ((uintptr_t)(tag - OBJC_TAG_First52BitPayload) << _OBJC_TAG_EXT_INDEX_SHIFT) |
              ((value << _OBJC_TAG_EXT_PAYLOAD_RSHIFT) >> _OBJC_TAG_EXT_PAYLOAD_LSHIFT));
@@ -325,13 +361,13 @@ _objc_makeTaggedPointer(objc_tag_index_t tag, uintptr_t value)
 }
 
 static inline bool 
-_objc_isTaggedPointer(const void *ptr) 
+_objc_isTaggedPointer(const void * _Nullable ptr) 
 {
-    return ((intptr_t)ptr & _OBJC_TAG_MASK) == _OBJC_TAG_MASK;
+    return ((uintptr_t)ptr & _OBJC_TAG_MASK) == _OBJC_TAG_MASK;
 }
 
 static inline objc_tag_index_t 
-_objc_getTaggedPointerTag(const void *ptr) 
+_objc_getTaggedPointerTag(const void * _Nullable ptr) 
 {
     // assert(_objc_isTaggedPointer(ptr));
     uintptr_t basicTag = ((uintptr_t)ptr >> _OBJC_TAG_INDEX_SHIFT) & _OBJC_TAG_INDEX_MASK;
@@ -344,7 +380,7 @@ _objc_getTaggedPointerTag(const void *ptr)
 }
 
 static inline uintptr_t
-_objc_getTaggedPointerValue(const void *ptr) 
+_objc_getTaggedPointerValue(const void * _Nullable ptr) 
 {
     // assert(_objc_isTaggedPointer(ptr));
     uintptr_t basicTag = ((uintptr_t)ptr >> _OBJC_TAG_INDEX_SHIFT) & _OBJC_TAG_INDEX_MASK;
@@ -356,7 +392,7 @@ _objc_getTaggedPointerValue(const void *ptr)
 }
 
 static inline intptr_t
-_objc_getTaggedPointerSignedValue(const void *ptr) 
+_objc_getTaggedPointerSignedValue(const void * _Nullable ptr) 
 {
     // assert(_objc_isTaggedPointer(ptr));
     uintptr_t basicTag = ((uintptr_t)ptr >> _OBJC_TAG_INDEX_SHIFT) & _OBJC_TAG_INDEX_MASK;
@@ -384,22 +420,31 @@ _objc_getTaggedPointerSignedValue(const void *ptr)
  *
  * class_getMethodImplementation(object_getClass(obj), name);
  */
-OBJC_EXPORT IMP object_getMethodImplementation(id obj, SEL name)
+OBJC_EXPORT IMP _Nonnull
+object_getMethodImplementation(id _Nullable obj, SEL _Nonnull name)
     OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0, 2.0);
 
-OBJC_EXPORT IMP object_getMethodImplementation_stret(id obj, SEL name)
+OBJC_EXPORT IMP _Nonnull
+object_getMethodImplementation_stret(id _Nullable obj, SEL _Nonnull name)
     OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0, 2.0)
     OBJC_ARM64_UNAVAILABLE;
 
 
 // Instance-specific instance variable layout.
 
-OBJC_EXPORT void _class_setIvarLayoutAccessor(Class cls_gen, const uint8_t* (*accessor) (id object))
+OBJC_EXPORT void
+_class_setIvarLayoutAccessor(Class _Nullable cls,
+                             const uint8_t* _Nullable (* _Nonnull accessor)
+                               (id _Nullable object))
     __OSX_AVAILABLE(10.7) 
-    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
-OBJC_EXPORT const uint8_t *_object_getIvarLayout(Class cls_gen, id object)
+    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
+    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
+
+OBJC_EXPORT const uint8_t * _Nullable
+_object_getIvarLayout(Class _Nullable cls, id _Nullable object)
     __OSX_AVAILABLE(10.7) 
-    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
+    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 
 /*
   "Unknown" includes non-object ivars and non-ARC non-__weak ivars
@@ -414,229 +459,223 @@ typedef enum {
     objc_ivar_memoryUnretained   // direct access / direct access
 } objc_ivar_memory_management_t;
 
-OBJC_EXPORT objc_ivar_memory_management_t _class_getIvarMemoryManagement(Class cls, Ivar ivar)
+OBJC_EXPORT objc_ivar_memory_management_t
+_class_getIvarMemoryManagement(Class _Nullable cls, Ivar _Nonnull ivar)
     OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
 
-OBJC_EXPORT BOOL _class_isFutureClass(Class cls)
+OBJC_EXPORT BOOL _class_isFutureClass(Class _Nullable cls)
     OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0, 2.0);
 
 
 // API to only be called by root classes like NSObject or NSProxy
 
 OBJC_EXPORT
-id
-_objc_rootRetain(id obj)
+id _Nonnull
+_objc_rootRetain(id _Nonnull obj)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
 void
-_objc_rootRelease(id obj)
+_objc_rootRelease(id _Nonnull obj)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
 bool
-_objc_rootReleaseWasZero(id obj)
+_objc_rootReleaseWasZero(id _Nonnull obj)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
 bool
-_objc_rootTryRetain(id obj)
+_objc_rootTryRetain(id _Nonnull obj)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
 bool
-_objc_rootIsDeallocating(id obj)
+_objc_rootIsDeallocating(id _Nonnull obj)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
-id
-_objc_rootAutorelease(id obj)
+id _Nonnull
+_objc_rootAutorelease(id _Nonnull obj)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
 uintptr_t
-_objc_rootRetainCount(id obj)
+_objc_rootRetainCount(id _Nonnull obj)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
-id
-_objc_rootInit(id obj)
+id _Nonnull
+_objc_rootInit(id _Nonnull obj)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
-id
-_objc_rootAllocWithZone(Class cls, malloc_zone_t *zone)
+id _Nullable
+_objc_rootAllocWithZone(Class _Nonnull cls, malloc_zone_t * _Nullable zone)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
-id
-_objc_rootAlloc(Class cls)
-    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
-
-OBJC_EXPORT
-void
-_objc_rootDealloc(id obj)
+id _Nullable
+_objc_rootAlloc(Class _Nonnull cls)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
 void
-_objc_rootFinalize(id obj)
+_objc_rootDealloc(id _Nonnull obj)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
-malloc_zone_t *
-_objc_rootZone(id obj)
+void
+_objc_rootFinalize(id _Nonnull obj)
+    OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
+
+OBJC_EXPORT
+malloc_zone_t * _Nonnull
+_objc_rootZone(id _Nonnull obj)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
 uintptr_t
-_objc_rootHash(id obj)
+_objc_rootHash(id _Nonnull obj)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
-void *
+void * _Nonnull
 objc_autoreleasePoolPush(void)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 OBJC_EXPORT
 void
-objc_autoreleasePoolPop(void *context)
+objc_autoreleasePoolPop(void * _Nonnull context)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 
-OBJC_EXPORT id objc_alloc(Class cls)
+OBJC_EXPORT id _Nullable
+objc_alloc(Class _Nullable cls)
     OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0, 2.0);
 
-OBJC_EXPORT id objc_allocWithZone(Class cls)
+OBJC_EXPORT id _Nullable
+objc_allocWithZone(Class _Nullable cls)
     OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0, 2.0);
 
-OBJC_EXPORT id objc_retain(id obj)
+OBJC_EXPORT id _Nullable
+objc_retain(id _Nullable obj)
     __asm__("_objc_retain")
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
-OBJC_EXPORT void objc_release(id obj)
+OBJC_EXPORT void
+objc_release(id _Nullable obj)
     __asm__("_objc_release")
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
-OBJC_EXPORT id objc_autorelease(id obj)
+OBJC_EXPORT id _Nullable
+objc_autorelease(id _Nullable obj)
     __asm__("_objc_autorelease")
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 // Prepare a value at +1 for return through a +0 autoreleasing convention.
-OBJC_EXPORT
-id
-objc_autoreleaseReturnValue(id obj)
+OBJC_EXPORT id _Nullable
+objc_autoreleaseReturnValue(id _Nullable obj)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 // Prepare a value at +0 for return through a +0 autoreleasing convention.
-OBJC_EXPORT
-id
-objc_retainAutoreleaseReturnValue(id obj)
+OBJC_EXPORT id _Nullable
+objc_retainAutoreleaseReturnValue(id _Nullable obj)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 // Accept a value returned through a +0 autoreleasing convention for use at +1.
-OBJC_EXPORT
-id
-objc_retainAutoreleasedReturnValue(id obj)
+OBJC_EXPORT id _Nullable
+objc_retainAutoreleasedReturnValue(id _Nullable obj)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 // Accept a value returned through a +0 autoreleasing convention for use at +0.
-OBJC_EXPORT
-id
-objc_unsafeClaimAutoreleasedReturnValue(id obj)
+OBJC_EXPORT id _Nullable
+objc_unsafeClaimAutoreleasedReturnValue(id _Nullable obj)
     OBJC_AVAILABLE(10.11, 9.0, 9.0, 1.0, 2.0);
 
-OBJC_EXPORT
-void
-objc_storeStrong(id *location, id obj)
+OBJC_EXPORT void
+objc_storeStrong(id _Nullable * _Nonnull location, id _Nullable obj)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
-OBJC_EXPORT
-id
-objc_retainAutorelease(id obj)
+OBJC_EXPORT id _Nullable
+objc_retainAutorelease(id _Nullable obj)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 // obsolete.
-OBJC_EXPORT id objc_retain_autorelease(id obj)
+OBJC_EXPORT id _Nullable
+objc_retain_autorelease(id _Nullable obj)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
-OBJC_EXPORT
-id
-objc_loadWeakRetained(id *location)
+OBJC_EXPORT id _Nullable
+objc_loadWeakRetained(id _Nullable * _Nonnull location)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
-OBJC_EXPORT
-id 
-objc_initWeak(id *location, id val) 
+OBJC_EXPORT id _Nullable 
+objc_initWeak(id _Nullable * _Nonnull location, id _Nullable val)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 // Like objc_storeWeak, but stores nil if the new object is deallocating 
 // or the new object's class does not support weak references.
 // Returns the value stored (either the new object or nil).
-OBJC_EXPORT
-id
-objc_storeWeakOrNil(id *location, id obj)
+OBJC_EXPORT id _Nullable
+objc_storeWeakOrNil(id _Nullable * _Nonnull location, id _Nullable obj)
     OBJC_AVAILABLE(10.11, 9.0, 9.0, 1.0, 2.0);
 
 // Like objc_initWeak, but stores nil if the new object is deallocating 
 // or the new object's class does not support weak references.
 // Returns the value stored (either the new object or nil).
-OBJC_EXPORT
-id 
-objc_initWeakOrNil(id *location, id val) 
+OBJC_EXPORT id _Nullable
+objc_initWeakOrNil(id _Nullable * _Nonnull location, id _Nullable val) 
     OBJC_AVAILABLE(10.11, 9.0, 9.0, 1.0, 2.0);
 
-OBJC_EXPORT
-void 
-objc_destroyWeak(id *location) 
+OBJC_EXPORT void
+objc_destroyWeak(id _Nullable * _Nonnull location) 
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
-OBJC_EXPORT
-void 
-objc_copyWeak(id *to, id *from)
+OBJC_EXPORT void 
+objc_copyWeak(id _Nullable * _Nonnull to, id _Nullable * _Nonnull from)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
-OBJC_EXPORT
-void 
-objc_moveWeak(id *to, id *from) 
+OBJC_EXPORT void 
+objc_moveWeak(id _Nullable * _Nonnull to, id _Nullable * _Nonnull from) 
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 
-OBJC_EXPORT
-void
+OBJC_EXPORT void
 _objc_autoreleasePoolPrint(void)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
-OBJC_EXPORT BOOL objc_should_deallocate(id object)
+OBJC_EXPORT BOOL
+objc_should_deallocate(id _Nonnull object)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
-OBJC_EXPORT void objc_clear_deallocating(id object)
+OBJC_EXPORT void
+objc_clear_deallocating(id _Nonnull object)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
  
 // to make CF link for now
 
-OBJC_EXPORT
-void *
+OBJC_EXPORT void * _Nonnull
 _objc_autoreleasePoolPush(void)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
-OBJC_EXPORT
-void
-_objc_autoreleasePoolPop(void *context)
+OBJC_EXPORT void
+_objc_autoreleasePoolPop(void * _Nonnull context)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 
 // Extra @encode data for XPC, or NULL
-OBJC_EXPORT const char *_protocol_getMethodTypeEncoding(Protocol *p, SEL sel, BOOL isRequiredMethod, BOOL isInstanceMethod)
+OBJC_EXPORT const char * _Nullable
+_protocol_getMethodTypeEncoding(Protocol * _Nonnull proto, SEL _Nonnull sel,
+                                BOOL isRequiredMethod, BOOL isInstanceMethod)
     OBJC_AVAILABLE(10.8, 6.0, 9.0, 1.0, 2.0);
 
 
 // API to only be called by classes that provide their own reference count storage
 
-OBJC_EXPORT
-void
-_objc_deallocOnMainThreadHelper(void *context)
+OBJC_EXPORT void
+_objc_deallocOnMainThreadHelper(void * _Nullable context)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 // On async versus sync deallocation and the _dealloc2main flag

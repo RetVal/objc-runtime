@@ -251,6 +251,22 @@ void SideTableLocksSucceedLock(const void *oldlock) {
     SideTables().succeedLock(oldlock);
 }
 
+void SideTableLocksPrecedeLocks(StripedMap<spinlock_t>& newlocks) {
+    int i = 0;
+    const void *newlock;
+    while ((newlock = newlocks.getLock(i++))) {
+        SideTables().precedeLock(newlock);
+    }
+}
+
+void SideTableLocksSucceedLocks(StripedMap<spinlock_t>& oldlocks) {
+    int i = 0;
+    const void *oldlock;
+    while ((oldlock = oldlocks.getLock(i++))) {
+        SideTables().succeedLock(oldlock);
+    }
+}
+
 //
 // The -fobjc-arc flag causes the compiler to issue calls to objc_{retain/release/autorelease/retain_block}
 //
@@ -1070,7 +1086,7 @@ public:
         // Error. For bincompat purposes this is not 
         // fatal in executables built with old SDKs.
 
-        if (DebugPoolAllocation  ||  sdkIsAtLeast(10_12, 10_0, 10_0, 3_0)) {
+        if (DebugPoolAllocation || sdkIsAtLeast(10_12, 10_0, 10_0, 3_0, 2_0)) {
             // OBJC_DEBUG_POOL_ALLOCATION or new SDK. Bad pop is fatal.
             _objc_fatal
                 ("Invalid or prematurely-freed autorelease pool %p.", token);

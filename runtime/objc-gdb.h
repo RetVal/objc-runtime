@@ -47,7 +47,8 @@ __BEGIN_DECLS
 **********************************************************************/
 
 // Return cls if it's a valid class, or crash.
-OBJC_EXPORT Class gdb_class_getClass(Class cls)
+OBJC_EXPORT Class _Nonnull
+gdb_class_getClass(Class _Nonnull cls)
 #if __OBJC2__
     OBJC_AVAILABLE(10.6, 3.1, 9.0, 1.0, 2.0);
 #else
@@ -55,7 +56,7 @@ OBJC_EXPORT Class gdb_class_getClass(Class cls)
 #endif
 
 // Same as gdb_class_getClass(object_getClass(cls)).
-OBJC_EXPORT Class gdb_object_getClass(id obj)
+OBJC_EXPORT Class _Nonnull gdb_object_getClass(id _Nullable obj)
     OBJC_AVAILABLE(10.7, 4.3, 9.0, 1.0, 2.0);
 
 
@@ -66,15 +67,16 @@ OBJC_EXPORT Class gdb_object_getClass(id obj)
 #if __OBJC2__
 
 // Maps class name to Class, for in-use classes only. NXStrValueMapPrototype.
-OBJC_EXPORT NXMapTable *gdb_objc_realized_classes
+OBJC_EXPORT NXMapTable * _Nullable gdb_objc_realized_classes
     OBJC_AVAILABLE(10.6, 3.1, 9.0, 1.0, 2.0);
 
 #else
 
 // Hashes Classes, for all known classes. Custom prototype.
-OBJC_EXPORT NXHashTable *_objc_debug_class_hash
+OBJC_EXPORT NXHashTable * _Nullable _objc_debug_class_hash
     __OSX_AVAILABLE(10.2) 
-    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
+    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 
 #endif
 
@@ -109,7 +111,7 @@ OBJC_EXPORT const uintptr_t objc_debug_indexed_isa_index_shift;
 // And then we can use that index to get the class from this array.  Note
 // the size is provided so that clients can ensure the index they get is in
 // bounds and not read off the end of the array.
-OBJC_EXPORT Class objc_indexed_classes[];
+OBJC_EXPORT Class _Nullable objc_indexed_classes[];
 
 // When we don't have enough bits to store a class*, we can instead store an
 // index in to this array.  Classes are added here when they are realized.
@@ -117,6 +119,20 @@ OBJC_EXPORT Class objc_indexed_classes[];
 OBJC_EXPORT uintptr_t objc_indexed_classes_count;
 
 // Absolute symbols for some of the above values are in objc-abi.h.
+
+#endif
+
+
+/***********************************************************************
+* Class structure decoding
+**********************************************************************/
+#if __OBJC2__
+
+// Mask for the pointer from class struct to class rw data.
+// Other bits may be used for flags.
+// Use 0x00007ffffffffff8UL or 0xfffffffcUL when this variable is unavailable.
+OBJC_EXPORT const uintptr_t objc_debug_class_rw_data_mask
+    OBJC_AVAILABLE(10.13, 11.0, 11.0, 4.0, 2.0);
 
 #endif
 
@@ -139,7 +155,7 @@ OBJC_EXPORT uintptr_t objc_debug_taggedpointer_slot_mask
     OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0, 2.0);
 
 // class = classes[tag_slot]
-OBJC_EXPORT Class objc_debug_taggedpointer_classes[]
+OBJC_EXPORT Class _Nullable objc_debug_taggedpointer_classes[]
     OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0, 2.0);
 
 // payload = (obj << payload_lshift) >> payload_rshift
@@ -168,7 +184,7 @@ OBJC_EXPORT uintptr_t objc_debug_taggedpointer_ext_slot_mask
     OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
 
 // class = ext_classes[ext_tag_slot]
-OBJC_EXPORT Class objc_debug_taggedpointer_ext_classes[]
+OBJC_EXPORT Class _Nullable objc_debug_taggedpointer_ext_classes[]
     OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
 
 // payload = (obj << ext_payload_lshift) >> ext_payload_rshift

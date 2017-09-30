@@ -24,8 +24,6 @@
 #ifndef _OBJC_AUTO_H_
 #define _OBJC_AUTO_H_
 
-#pragma GCC system_header
-
 #include <objc/objc.h>
 #include <malloc/malloc.h>
 #include <stdint.h>
@@ -57,7 +55,7 @@ enum {
     OBJC_EXHAUSTIVE_COLLECTION   = (3 << 0),
     
     OBJC_COLLECT_IF_NEEDED       = (1 << 3),
-    OBJC_WAIT_UNTIL_DONE         = (1 << 4),
+    OBJC_WAIT_UNTIL_DONE         = (1 << 4)
 };
 
 enum {
@@ -71,65 +69,65 @@ enum {
 /* Out-of-line declarations */
 
 OBJC_EXPORT void objc_collect(unsigned long options)
-    __OSX_DEPRECATED(10.6, 10.8, "it does nothing") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __OSX_DEPRECATED(10.6, 10.8, "it does nothing") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 OBJC_EXPORT BOOL objc_collectingEnabled(void)
-    __OSX_DEPRECATED(10.5, 10.8, "it always returns NO") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __OSX_DEPRECATED(10.5, 10.8, "it always returns NO") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 OBJC_EXPORT malloc_zone_t *objc_collectableZone(void) 
-    __OSX_DEPRECATED(10.7, 10.8, "it always returns nil") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __OSX_DEPRECATED(10.7, 10.8, "it always returns nil") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 OBJC_EXPORT void objc_setCollectionThreshold(size_t threshold)
-    __OSX_DEPRECATED(10.5, 10.8, "it does nothing") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __OSX_DEPRECATED(10.5, 10.8, "it does nothing") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 OBJC_EXPORT void objc_setCollectionRatio(size_t ratio)
-    __OSX_DEPRECATED(10.5, 10.8, "it does nothing") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __OSX_DEPRECATED(10.5, 10.8, "it does nothing") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 OBJC_EXPORT BOOL objc_atomicCompareAndSwapPtr(id predicate, id replacement, volatile id *objectLocation) 
-    __OSX_DEPRECATED(10.6, 10.8, "use OSAtomicCompareAndSwapPtr instead") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE OBJC_ARC_UNAVAILABLE;
+    __OSX_DEPRECATED(10.6, 10.8, "use OSAtomicCompareAndSwapPtr instead") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE OBJC_ARC_UNAVAILABLE;
 OBJC_EXPORT BOOL objc_atomicCompareAndSwapPtrBarrier(id predicate, id replacement, volatile id *objectLocation) 
-    __OSX_DEPRECATED(10.6, 10.8, "use OSAtomicCompareAndSwapPtrBarrier instead") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE OBJC_ARC_UNAVAILABLE;
+    __OSX_DEPRECATED(10.6, 10.8, "use OSAtomicCompareAndSwapPtrBarrier instead") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE OBJC_ARC_UNAVAILABLE;
 OBJC_EXPORT BOOL objc_atomicCompareAndSwapGlobal(id predicate, id replacement, volatile id *objectLocation)
-    __OSX_DEPRECATED(10.6, 10.8, "use OSAtomicCompareAndSwapPtr instead") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE OBJC_ARC_UNAVAILABLE;
+    __OSX_DEPRECATED(10.6, 10.8, "use OSAtomicCompareAndSwapPtr instead") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE OBJC_ARC_UNAVAILABLE;
 OBJC_EXPORT BOOL objc_atomicCompareAndSwapGlobalBarrier(id predicate, id replacement, volatile id *objectLocation)
-    __OSX_DEPRECATED(10.6, 10.8, "use OSAtomicCompareAndSwapPtrBarrier instead") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE OBJC_ARC_UNAVAILABLE;
+    __OSX_DEPRECATED(10.6, 10.8, "use OSAtomicCompareAndSwapPtrBarrier instead") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE OBJC_ARC_UNAVAILABLE;
 OBJC_EXPORT BOOL objc_atomicCompareAndSwapInstanceVariable(id predicate, id replacement, volatile id *objectLocation)
-    __OSX_DEPRECATED(10.6, 10.8, "use OSAtomicCompareAndSwapPtr instead") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE OBJC_ARC_UNAVAILABLE;
+    __OSX_DEPRECATED(10.6, 10.8, "use OSAtomicCompareAndSwapPtr instead") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE OBJC_ARC_UNAVAILABLE;
 OBJC_EXPORT BOOL objc_atomicCompareAndSwapInstanceVariableBarrier(id predicate, id replacement, volatile id *objectLocation)
-    __OSX_DEPRECATED(10.6, 10.8, "use OSAtomicCompareAndSwapPtrBarrier instead") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE OBJC_ARC_UNAVAILABLE;
+    __OSX_DEPRECATED(10.6, 10.8, "use OSAtomicCompareAndSwapPtrBarrier instead") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE OBJC_ARC_UNAVAILABLE;
 OBJC_EXPORT id objc_assign_strongCast(id val, id *dest)
-    __OSX_DEPRECATED(10.4, 10.8, "use a simple assignment instead") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __OSX_DEPRECATED(10.4, 10.8, "use a simple assignment instead") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 OBJC_EXPORT id objc_assign_global(id val, id *dest)
-    __OSX_DEPRECATED(10.4, 10.8, "use a simple assignment instead") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __OSX_DEPRECATED(10.4, 10.8, "use a simple assignment instead") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 OBJC_EXPORT id objc_assign_threadlocal(id val, id *dest)
-    __OSX_DEPRECATED(10.7, 10.8, "use a simple assignment instead") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __OSX_DEPRECATED(10.7, 10.8, "use a simple assignment instead") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 OBJC_EXPORT id objc_assign_ivar(id value, id dest, ptrdiff_t offset)
-    __OSX_DEPRECATED(10.4, 10.8, "use a simple assignment instead") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __OSX_DEPRECATED(10.4, 10.8, "use a simple assignment instead") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 OBJC_EXPORT void *objc_memmove_collectable(void *dst, const void *src, size_t size)
-    __OSX_DEPRECATED(10.4, 10.8, "use memmove instead") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __OSX_DEPRECATED(10.4, 10.8, "use memmove instead") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 OBJC_EXPORT id objc_read_weak(id *location)
-    __OSX_DEPRECATED(10.5, 10.8, "use a simple read instead, or convert to zeroing __weak") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __OSX_DEPRECATED(10.5, 10.8, "use a simple read instead, or convert to zeroing __weak") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 OBJC_EXPORT id objc_assign_weak(id value, id *location)
-    __OSX_DEPRECATED(10.5, 10.8, "use a simple assignment instead, or convert to zeroing __weak") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __OSX_DEPRECATED(10.5, 10.8, "use a simple assignment instead, or convert to zeroing __weak") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 OBJC_EXPORT void objc_registerThreadWithCollector(void)
-    __OSX_DEPRECATED(10.6, 10.8, "it does nothing") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __OSX_DEPRECATED(10.6, 10.8, "it does nothing") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 OBJC_EXPORT void objc_unregisterThreadWithCollector(void)
-    __OSX_DEPRECATED(10.6, 10.8, "it does nothing") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __OSX_DEPRECATED(10.6, 10.8, "it does nothing") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 OBJC_EXPORT void objc_assertRegisteredThreadWithCollector(void)
-    __OSX_DEPRECATED(10.6, 10.8, "it does nothing") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __OSX_DEPRECATED(10.6, 10.8, "it does nothing") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 OBJC_EXPORT void objc_clear_stack(unsigned long options)
-    __OSX_DEPRECATED(10.5, 10.8, "it does nothing") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __OSX_DEPRECATED(10.5, 10.8, "it does nothing") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 OBJC_EXPORT BOOL objc_is_finalized(void *ptr)
-    __OSX_DEPRECATED(10.4, 10.8, "it always returns NO") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __OSX_DEPRECATED(10.4, 10.8, "it always returns NO") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 OBJC_EXPORT void objc_finalizeOnMainThread(Class cls)
-    __OSX_DEPRECATED(10.5, 10.5, "it does nothing") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __OSX_DEPRECATED(10.5, 10.5, "it does nothing") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 OBJC_EXPORT BOOL objc_collecting_enabled(void)
-    __OSX_DEPRECATED(10.4, 10.5, "it always returns NO") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __OSX_DEPRECATED(10.4, 10.5, "it always returns NO") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 OBJC_EXPORT void objc_set_collection_threshold(size_t threshold)
-    __OSX_DEPRECATED(10.4, 10.5, "it does nothing") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __OSX_DEPRECATED(10.4, 10.5, "it does nothing") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 OBJC_EXPORT void objc_set_collection_ratio(size_t ratio)
-    __OSX_DEPRECATED(10.4, 10.5, "it does nothing") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __OSX_DEPRECATED(10.4, 10.5, "it does nothing") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 OBJC_EXPORT void objc_start_collector_thread(void)
-    __OSX_DEPRECATED(10.4, 10.5, "it does nothing") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __OSX_DEPRECATED(10.4, 10.5, "it does nothing") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 OBJC_EXPORT void objc_startCollectorThread(void)
-    __OSX_DEPRECATED(10.5, 10.7, "it does nothing") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __OSX_DEPRECATED(10.5, 10.7, "it does nothing") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 OBJC_EXPORT id objc_allocate_object(Class cls, int extra)
-    __OSX_DEPRECATED(10.4, 10.4, "use class_createInstance instead") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __OSX_DEPRECATED(10.4, 10.4, "use class_createInstance instead") __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 
 
 /* !defined(OBJC_NO_GC) */
@@ -199,7 +197,7 @@ static OBJC_INLINE id objc_assign_threadlocal(id val, id *dest)
 
 OBJC_GC_DEPRECATED("use a simple assignment instead")
 static OBJC_INLINE id objc_assign_ivar(id val, id dest, ptrdiff_t offset) 
-    { return (*(id*)((char *)dest+offset) = val); }
+    { return (*(id*)((intptr_t)(char *)dest+offset) = val); }
 
 OBJC_GC_DEPRECATED("use a simple read instead, or convert to zeroing __weak")
 static OBJC_INLINE id objc_read_weak(id *location) 
@@ -235,10 +233,10 @@ static OBJC_INLINE void objc_start_collector_thread(void) { }
 extern id objc_allocate_object(Class cls, int extra) UNAVAILABLE_ATTRIBUTE;
 #else
 OBJC_EXPORT id class_createInstance(Class cls, size_t extraBytes)
-    OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0, 2.0);
 OBJC_GC_DEPRECATED("use class_createInstance instead")
 static OBJC_INLINE id objc_allocate_object(Class cls, int extra) 
-    { return class_createInstance(cls, extra); }
+    { return class_createInstance(cls, (size_t)extra); }
 #endif
 
 OBJC_GC_DEPRECATED("it does nothing")

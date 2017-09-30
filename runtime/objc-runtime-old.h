@@ -300,6 +300,14 @@ struct objc_class : objc_object {
     const char *mangledName() { return name; }
     const char *demangledName() { return name; }
     const char *nameForLogging() { return name; }
+    
+    bool isRootClass() {
+        return superclass == nil;
+    }
+
+    bool isRootMetaclass() {
+        return ISA() == (Class)this;
+    }
 
     bool isMetaClass() {
         return info & CLS_META;

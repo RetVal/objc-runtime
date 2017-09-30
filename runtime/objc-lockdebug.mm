@@ -28,7 +28,7 @@
 
 #include "objc-private.h"
 
-#if DEBUG  &&  !TARGET_OS_WIN32
+#if LOCKDEBUG  &&  !TARGET_OS_WIN32
 
 #include <unordered_map>
 
@@ -65,23 +65,41 @@ inForkPrepare()
 struct lockorder {
     const void *l;
     std::vector<const lockorder *> predecessors;
+
+    mutable std::unordered_map<const lockorder *, bool> memo;
+
+    lockorder(const void *newl) : l(newl) { }
 };
 
-static std::unordered_map<const void*, lockorder> lockOrderList;
+static std::unordered_map<const void*, lockorder *> lockOrderList;
+// not mutex_t because we don't want lock debugging on this lock
+static mutex_tt<false> lockOrderLock;
 
 static bool 
-lockPrecedesLock(const lockorder& oldlock, const lockorder& newlock)
+lockPrecedesLock(const lockorder *oldlock, const lockorder *newlock)
 {
-    for (const auto *pre : newlock.predecessors) {
-        if (&oldlock == pre) return true;
-        if (lockPrecedesLock(oldlock, *pre)) return true;
+    auto memoed = newlock->memo.find(oldlock);
+    if (memoed != newlock->memo.end()) {
+        return memoed->second;
     }
-    return false;
+
+    bool result = false;
+    for (const auto *pre : newlock->predecessors) {
+        if (oldlock == pre  ||  lockPrecedesLock(oldlock, pre)) {
+            result = true;
+            break;
+        }
+    }
+
+    newlock->memo[oldlock] = result;
+    return result;
 }
 
 static bool 
 lockPrecedesLock(const void *oldlock, const void *newlock)
 {
+    mutex_tt<false>::locker lock(lockOrderLock);
+
     auto oldorder = lockOrderList.find(oldlock);
     auto neworder = lockOrderList.find(newlock);
     if (neworder == lockOrderList.end() || oldorder == lockOrderList.end()) {
@@ -93,6 +111,8 @@ lockPrecedesLock(const void *oldlock, const void *newlock)
 static bool
 lockUnorderedWithLock(const void *oldlock, const void *newlock)
 {
+    mutex_tt<false>::locker lock(lockOrderLock);
+    
     auto oldorder = lockOrderList.find(oldlock);
     auto neworder = lockOrderList.find(newlock);
     if (neworder == lockOrderList.end() || oldorder == lockOrderList.end()) {
@@ -114,18 +134,20 @@ void lockdebug_lock_precedes_lock(const void *oldlock, const void *newlock)
         _objc_fatal("contradiction in lock order declaration");
     }
 
+    mutex_tt<false>::locker lock(lockOrderLock);
+
     auto oldorder = lockOrderList.find(oldlock);
     auto neworder = lockOrderList.find(newlock);
     if (oldorder == lockOrderList.end()) {
-        lockOrderList[oldlock] = lockorder{oldlock, {}};
+        lockOrderList[oldlock] = new lockorder(oldlock);
         oldorder = lockOrderList.find(oldlock);
     }
     if (neworder == lockOrderList.end()) {
-        lockOrderList[newlock] = lockorder{newlock, {}};
+        lockOrderList[newlock] = new lockorder(newlock);
         neworder = lockOrderList.find(newlock);
     }
 
-    neworder->second.predecessors.push_back(&oldorder->second);
+    neworder->second->predecessors.push_back(oldorder->second);
 }
 
 
@@ -220,6 +242,11 @@ setLock(objc_lock_list& locks, const void *lock, lockkind kind)
     // Locks not in AllLocks are exempt (i.e. @synchronize locks)
     if (&locks != &AllLocks() && AllLocks().find(lock) != AllLocks().end()) {
         for (auto& oldlock : locks) {
+            if (AllLocks().find(oldlock.first) == AllLocks().end()) {
+                // oldlock is exempt
+                continue;
+            }
+
             if (lockPrecedesLock(lock, oldlock.first)) {
                 _objc_fatal("lock %p (%s) incorrectly acquired before %p (%s)",
                             oldlock.first, sym(oldlock.first), lock, sym(lock));

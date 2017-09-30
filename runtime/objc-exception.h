@@ -31,51 +31,71 @@
 
 // compiler reserves a setjmp buffer + 4 words as localExceptionData
 
-OBJC_EXPORT void objc_exception_throw(id exception)
+OBJC_EXPORT void
+objc_exception_throw(id _Nonnull exception)
     __OSX_AVAILABLE(10.3) 
-    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
-OBJC_EXPORT void objc_exception_try_enter(void *localExceptionData)
+    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
+    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
+
+OBJC_EXPORT void
+objc_exception_try_enter(void * _Nonnull localExceptionData)
     __OSX_AVAILABLE(10.3) 
-    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
-OBJC_EXPORT void objc_exception_try_exit(void *localExceptionData)
+    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
+    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
+
+OBJC_EXPORT void
+objc_exception_try_exit(void * _Nonnull localExceptionData)
     __OSX_AVAILABLE(10.3) 
-    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
-OBJC_EXPORT id objc_exception_extract(void *localExceptionData)
+    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
+    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
+
+OBJC_EXPORT id _Nonnull
+objc_exception_extract(void * _Nonnull localExceptionData)
     __OSX_AVAILABLE(10.3) 
-    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
-OBJC_EXPORT int objc_exception_match(Class exceptionClass, id exception)
+    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
+    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
+
+OBJC_EXPORT int objc_exception_match(Class _Nonnull exceptionClass,
+                                     id _Nonnull exception)
     __OSX_AVAILABLE(10.3) 
-    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
+    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 
 
 typedef struct {
     int version;
-    void (*throw_exc)(id);		// version 0
-    void (*try_enter)(void *);	// version 0
-    void (*try_exit)(void *);	// version 0
-    id	 (*extract)(void *);	// version 0
-    int	(*match)(Class, id);	// version 0
+    void (* _Nonnull throw_exc)(id _Nonnull);	          // version 0
+    void (* _Nonnull try_enter)(void * _Nonnull);         // version 0
+    void (* _Nonnull try_exit)(void * _Nonnull);          // version 0
+    id _Nonnull (* _Nonnull extract)(void * _Nonnull);    // version 0
+    int	(* _Nonnull match)(Class _Nonnull, id _Nonnull);  // version 0
 } objc_exception_functions_t;
 
 // get table; version tells how many
-OBJC_EXPORT void objc_exception_get_functions(objc_exception_functions_t *table)
+OBJC_EXPORT void
+objc_exception_get_functions(objc_exception_functions_t * _Nullable table)
     __OSX_AVAILABLE(10.3) 
-    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
+    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 
 // set table
-OBJC_EXPORT void objc_exception_set_functions(objc_exception_functions_t *table)
+OBJC_EXPORT void
+objc_exception_set_functions(objc_exception_functions_t * _Nullable table)
     __OSX_AVAILABLE(10.3) 
-    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
+    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 
 
 // !__OBJC2__
 #else
 // __OBJC2__
 
-typedef id (*objc_exception_preprocessor)(id exception);
-typedef int (*objc_exception_matcher)(Class catch_type, id exception);
-typedef void (*objc_uncaught_exception_handler)(id exception);
-typedef void (*objc_exception_handler)(id unused, void *context);
+typedef id _Nonnull (*objc_exception_preprocessor)(id _Nonnull exception);
+typedef int (*objc_exception_matcher)(Class _Nonnull catch_type,
+                                      id _Nonnull exception);
+typedef void (*objc_uncaught_exception_handler)(id _Null_unspecified /* _Nonnull */ exception);
+typedef void (*objc_exception_handler)(id _Nullable unused,
+                                       void * _Nullable context);
 
 /** 
  * Throw a runtime exception. This function is inserted by the compiler
@@ -83,31 +103,51 @@ typedef void (*objc_exception_handler)(id unused, void *context);
  * 
  * @param exception The exception to be thrown.
  */
-OBJC_EXPORT void objc_exception_throw(id exception)
-    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0);
-OBJC_EXPORT void objc_exception_rethrow(void)
-    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0);
-OBJC_EXPORT id objc_begin_catch(void *exc_buf)
-    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0);
-OBJC_EXPORT void objc_end_catch(void)
-    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0);
-OBJC_EXPORT void objc_terminate(void)
-    OBJC_AVAILABLE(10.8, 6.0, 9.0, 1.0);
+OBJC_EXPORT void
+objc_exception_throw(id _Nonnull exception)
+    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
 
-OBJC_EXPORT objc_exception_preprocessor objc_setExceptionPreprocessor(objc_exception_preprocessor fn)
-    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0);
-OBJC_EXPORT objc_exception_matcher objc_setExceptionMatcher(objc_exception_matcher fn)
-    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0);
-OBJC_EXPORT objc_uncaught_exception_handler objc_setUncaughtExceptionHandler(objc_uncaught_exception_handler fn)
-    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0);
+OBJC_EXPORT void
+objc_exception_rethrow(void)
+    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
+
+OBJC_EXPORT id _Nonnull
+objc_begin_catch(void * _Nonnull exc_buf)
+    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
+
+OBJC_EXPORT void
+objc_end_catch(void)
+    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
+
+OBJC_EXPORT void
+objc_terminate(void)
+    OBJC_AVAILABLE(10.8, 6.0, 9.0, 1.0, 2.0);
+
+OBJC_EXPORT objc_exception_preprocessor _Nonnull
+objc_setExceptionPreprocessor(objc_exception_preprocessor _Nonnull fn)
+    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
+
+OBJC_EXPORT objc_exception_matcher _Nonnull
+objc_setExceptionMatcher(objc_exception_matcher _Nonnull fn)
+    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
+
+OBJC_EXPORT objc_uncaught_exception_handler _Nonnull
+objc_setUncaughtExceptionHandler(objc_uncaught_exception_handler _Nonnull fn)
+    OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
 
 // Not for iOS.
-OBJC_EXPORT uintptr_t objc_addExceptionHandler(objc_exception_handler fn, void *context)
+OBJC_EXPORT uintptr_t
+objc_addExceptionHandler(objc_exception_handler _Nonnull fn,
+                         void * _Nullable context)
     __OSX_AVAILABLE(10.5) 
-    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
-OBJC_EXPORT void objc_removeExceptionHandler(uintptr_t token)
+    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
+    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
+
+OBJC_EXPORT void
+objc_removeExceptionHandler(uintptr_t token)
     __OSX_AVAILABLE(10.5) 
-    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE;
+    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
+    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 
 // __OBJC2__
 #endif

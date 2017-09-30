@@ -538,6 +538,39 @@ map_images_nolock(unsigned mhCount, const char * const mhPaths[],
             }
         }
 #endif
+
+#if TARGET_OS_OSX
+        // Disable +initialize fork safety if the app is too old (< 10.13).
+        // Disable +initialize fork safety if the app has a
+        //   __DATA,__objc_fork_ok section.
+
+        if (dyld_get_program_sdk_version() < DYLD_MACOSX_VERSION_10_13) {
+            DisableInitializeForkSafety = true;
+            if (PrintInitializing) {
+                _objc_inform("INITIALIZE: disabling +initialize fork "
+                             "safety enforcement because the app is "
+                             "too old (SDK version " SDK_FORMAT ")",
+                             FORMAT_SDK(dyld_get_program_sdk_version()));
+            }
+        }
+
+        for (uint32_t i = 0; i < hCount; i++) {
+            auto hi = hList[i];
+            auto mh = hi->mhdr();
+            if (mh->filetype != MH_EXECUTE) continue;
+            unsigned long size;
+            if (getsectiondata(hi->mhdr(), "__DATA", "__objc_fork_ok", &size)) {
+                DisableInitializeForkSafety = true;
+                if (PrintInitializing) {
+                    _objc_inform("INITIALIZE: disabling +initialize fork "
+                                 "safety enforcement because the app has "
+                                 "a __DATA,__objc_fork_ok section");
+                }
+            }
+            break;  // assume only one MH_EXECUTE image
+        }
+#endif
+
     }
 
     if (hCount > 0) {
@@ -618,7 +651,7 @@ static void static_init()
 **********************************************************************/
 
 // Declare lock ordering.
-#if DEBUG
+#if LOCKDEBUG
 __attribute__((constructor))
 static void defineLockOrder()
 {
@@ -667,37 +700,36 @@ static void defineLockOrder()
     StructLocks.succeedLock(&loadMethodLock);
     CppObjectLocks.succeedLock(&loadMethodLock);
 
-    // PropertyLocks and CppObjectLocks precede everything
-    // because they are held while objc_retain() or C++ copy are called.
+    // PropertyLocks and CppObjectLocks and AssociationManagerLock 
+    // precede everything because they are held while objc_retain() 
+    // or C++ copy are called.
     // (StructLocks do not precede everything because it calls memmove only.)
-    PropertyLocks.precedeLock(&classInitLock);
-    CppObjectLocks.precedeLock(&classInitLock);
+    auto PropertyAndCppObjectAndAssocLocksPrecedeLock = [&](const void *lock) {
+        PropertyLocks.precedeLock(lock);
+        CppObjectLocks.precedeLock(lock);
+        lockdebug_lock_precedes_lock(&AssociationsManagerLock, lock);
+    };
 #if __OBJC2__
-    PropertyLocks.precedeLock(&runtimeLock);
-    CppObjectLocks.precedeLock(&runtimeLock);
-    PropertyLocks.precedeLock(&DemangleCacheLock);
-    CppObjectLocks.precedeLock(&DemangleCacheLock);
+    PropertyAndCppObjectAndAssocLocksPrecedeLock(&runtimeLock);
+    PropertyAndCppObjectAndAssocLocksPrecedeLock(&DemangleCacheLock);
 #else
-    PropertyLocks.precedeLock(&methodListLock);
-    CppObjectLocks.precedeLock(&methodListLock);
-    PropertyLocks.precedeLock(&classLock);
-    CppObjectLocks.precedeLock(&classLock);
-    PropertyLocks.precedeLock(&NXUniqueStringLock);
-    CppObjectLocks.precedeLock(&NXUniqueStringLock);
-    PropertyLocks.precedeLock(&impLock);
-    CppObjectLocks.precedeLock(&impLock);
+    PropertyAndCppObjectAndAssocLocksPrecedeLock(&methodListLock);
+    PropertyAndCppObjectAndAssocLocksPrecedeLock(&classLock);
+    PropertyAndCppObjectAndAssocLocksPrecedeLock(&NXUniqueStringLock);
+    PropertyAndCppObjectAndAssocLocksPrecedeLock(&impLock);
 #endif
-    PropertyLocks.precedeLock(&selLock);
-    CppObjectLocks.precedeLock(&selLock);
-    PropertyLocks.precedeLock(&cacheUpdateLock);
-    CppObjectLocks.precedeLock(&cacheUpdateLock);
-    PropertyLocks.precedeLock(&objcMsgLogLock);
-    CppObjectLocks.precedeLock(&objcMsgLogLock);
-    PropertyLocks.precedeLock(&AltHandlerDebugLock);
-    CppObjectLocks.precedeLock(&AltHandlerDebugLock);
+    PropertyAndCppObjectAndAssocLocksPrecedeLock(&classInitLock);
+    PropertyAndCppObjectAndAssocLocksPrecedeLock(&selLock);
+    PropertyAndCppObjectAndAssocLocksPrecedeLock(&cacheUpdateLock);
+    PropertyAndCppObjectAndAssocLocksPrecedeLock(&objcMsgLogLock);
+    PropertyAndCppObjectAndAssocLocksPrecedeLock(&AltHandlerDebugLock);
+
+    SideTableLocksSucceedLocks(PropertyLocks);
+    SideTableLocksSucceedLocks(CppObjectLocks);
+    SideTableLocksSucceedLock(&AssociationsManagerLock);
+
     PropertyLocks.precedeLock(&AssociationsManagerLock);
     CppObjectLocks.precedeLock(&AssociationsManagerLock);
-    // fixme side table
     
 #if __OBJC2__
     lockdebug_lock_precedes_lock(&classInitLock, &runtimeLock);
@@ -707,6 +739,7 @@ static void defineLockOrder()
     // Runtime operations may occur inside SideTable locks
     // (such as storeWeak calling getMethodImplementation)
     SideTableLocksPrecedeLock(&runtimeLock);
+    SideTableLocksPrecedeLock(&classInitLock);
     // Some operations may occur inside runtimeLock.
     lockdebug_lock_precedes_lock(&runtimeLock, &selLock);
     lockdebug_lock_precedes_lock(&runtimeLock, &cacheUpdateLock);
@@ -715,6 +748,7 @@ static void defineLockOrder()
     // Runtime operations may occur inside SideTable locks
     // (such as storeWeak calling getMethodImplementation)
     SideTableLocksPrecedeLock(&methodListLock);
+    SideTableLocksPrecedeLock(&classInitLock);
     // Method lookup and fixup.
     lockdebug_lock_precedes_lock(&methodListLock, &classLock);
     lockdebug_lock_precedes_lock(&methodListLock, &selLock);
@@ -730,11 +764,15 @@ static void defineLockOrder()
     StructLocks.defineLockOrder();
     CppObjectLocks.defineLockOrder();
 }
-// DEBUG
+// LOCKDEBUG
 #endif
 
+static bool ForkIsMultithreaded;
 void _objc_atfork_prepare()
 {
+    // Save threaded-ness for the child's use.
+    ForkIsMultithreaded = pthread_is_threaded_np();
+
     lockdebug_assert_no_locks_locked();
     lockdebug_setInForkPrepare(true);
 
@@ -795,6 +833,11 @@ void _objc_atfork_parent()
 
 void _objc_atfork_child()
 {
+    // Turn on +initialize fork safety enforcement if applicable.
+    if (ForkIsMultithreaded  &&  !DisableInitializeForkSafety) {
+        MultithreadedForkChild = true;
+    }
+
     lockdebug_assert_all_locks_locked();
 
     CppObjectLocks.forceResetAll();

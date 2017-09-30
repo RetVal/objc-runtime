@@ -217,59 +217,40 @@ static TrampolineBlockPagePair *_allocateTrampolinesAndData(ArgumentMode aMode)
 
     TrampolineBlockPagePair *headPagePair = headPagePairs[aMode];
     
-    if (headPagePair) {
-        assert(headPagePair->nextAvailablePage == nil);
-    }
+    assert(headPagePair == nil  ||  headPagePair->nextAvailablePage == nil);
     
     kern_return_t result;
-    for (int i = 0; i < 5; i++) {
-         result = vm_allocate(mach_task_self(), &dataAddress, 
-                              PAGE_MAX_SIZE * 2,
-                              TRUE | VM_MAKE_TAG(VM_MEMORY_FOUNDATION));
-        if (result != KERN_SUCCESS) {
-            mach_error("vm_allocate failed", result);
-            return nil;
-        }
+    result = vm_allocate(mach_task_self(), &dataAddress, PAGE_MAX_SIZE * 2,
+                         VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_MEMORY_FOUNDATION));
+    if (result != KERN_SUCCESS) {
+        _objc_fatal("vm_allocate trampolines failed (%d)", result);
+    }
 
-        vm_address_t codeAddress = dataAddress + PAGE_MAX_SIZE;
-        result = vm_deallocate(mach_task_self(), codeAddress, PAGE_MAX_SIZE);
-        if (result != KERN_SUCCESS) {
-            mach_error("vm_deallocate failed", result);
-            return nil;
-        }
+    vm_address_t codeAddress = dataAddress + PAGE_MAX_SIZE;
         
-        uintptr_t codePage;
-        switch(aMode) {
-            case ReturnValueInRegisterArgumentMode:
-                codePage = a1a2_tramphead();
-                break;
+    uintptr_t codePage;
+    switch(aMode) {
+    case ReturnValueInRegisterArgumentMode:
+        codePage = a1a2_tramphead();
+        break;
 #if SUPPORT_STRET
-            case ReturnValueOnStackArgumentMode:
-                codePage = a2a3_tramphead();
-                break;
+    case ReturnValueOnStackArgumentMode:
+        codePage = a2a3_tramphead();
+        break;
 #endif
-            default:
-                _objc_fatal("unknown return mode %d", (int)aMode);
-                break;
-        }
-        vm_prot_t currentProtection, maxProtection;
-        result = vm_remap(mach_task_self(), &codeAddress, PAGE_MAX_SIZE, 
-                          0, FALSE, mach_task_self(), codePage, TRUE, 
-                          &currentProtection, &maxProtection, VM_INHERIT_SHARE);
-        if (result != KERN_SUCCESS) {
-            result = vm_deallocate(mach_task_self(), 
-                                   dataAddress, PAGE_MAX_SIZE);
-            if (result != KERN_SUCCESS) {
-                mach_error("vm_deallocate for retry failed.", result);
-                return nil;
-            } 
-        } else {
-            break;
-        }
+    default:
+        _objc_fatal("unknown return mode %d", (int)aMode);
+        break;
     }
     
+    vm_prot_t currentProtection, maxProtection;
+    result = vm_remap(mach_task_self(), &codeAddress, PAGE_MAX_SIZE, 
+                      0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE,
+                      mach_task_self(), codePage, TRUE, 
+                      &currentProtection, &maxProtection, VM_INHERIT_SHARE);
     if (result != KERN_SUCCESS) {
-        return nil; 
+        // vm_deallocate(mach_task_self(), dataAddress, PAGE_MAX_SIZE * 2);
+        _objc_fatal("vm_remap trampolines failed (%d)", result);
     }
     
     TrampolineBlockPagePair *pagePair = (TrampolineBlockPagePair *) dataAddress;
@@ -279,9 +260,9 @@ static TrampolineBlockPagePair *_allocateTrampolinesAndData(ArgumentMode aMode)
     
     if (headPagePair) {
         TrampolineBlockPagePair *lastPagePair = headPagePair;
-        while(lastPagePair->nextPagePair)
+        while(lastPagePair->nextPagePair) {
             lastPagePair = lastPagePair->nextPagePair;
-        
+        }
         lastPagePair->nextPagePair = pagePair;
         headPagePairs[aMode]->nextAvailablePage = pagePair;
     } else {

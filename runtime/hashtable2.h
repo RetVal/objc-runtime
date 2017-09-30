@@ -32,7 +32,8 @@
 #ifndef _OBJC_PRIVATE_H_
 #   define OBJC_HASH_AVAILABILITY                             \
     __OSX_DEPRECATED(10.0, 10.1, "NXHashTable is deprecated") \
-    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE
+    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE                      \
+    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE
 #else
 #   define OBJC_HASH_AVAILABILITY
 #endif
@@ -52,9 +53,13 @@ The objective C class HashTable is preferred when dealing with (key, values) ass
 As well-behaved scalable data structures, hash tables double in size when they start becoming full, thus guaranteeing both average constant time access and linear size. */
 
 typedef struct {
-    uintptr_t	(*hash)(const void *info, const void *data);
-    int		(*isEqual)(const void *info, const void *data1, const void *data2);
-    void	(*free)(const void *info, void *data);
+    uintptr_t	(* _Nonnull hash)(const void * _Nullable info,
+                                  const void * _Nullable data);
+    int		(* _Nonnull isEqual)(const void * _Nullable info,
+                                     const void * _Nullable data1,
+                                     const void * _Nullable data2);
+    void	(* _Nonnull free)(const void * _Nullable info,
+                                  void * _Nullable data);
     int		style; /* reserved for future expansion; currently 0 */
     } NXHashTablePrototype;
     
@@ -67,41 +72,63 @@ typedef struct {
  */
 
 typedef struct {
-    const NXHashTablePrototype	*prototype OBJC_HASH_AVAILABILITY;
+    const NXHashTablePrototype	* _Nonnull prototype OBJC_HASH_AVAILABILITY;
     unsigned			count OBJC_HASH_AVAILABILITY;
     unsigned			nbBuckets OBJC_HASH_AVAILABILITY;
-    void			*buckets OBJC_HASH_AVAILABILITY;
-    const void			*info OBJC_HASH_AVAILABILITY;
+    void			* _Nullable buckets OBJC_HASH_AVAILABILITY;
+    const void			* _Nullable info OBJC_HASH_AVAILABILITY;
    } NXHashTable OBJC_HASH_AVAILABILITY;
     /* private data structure; may change */
     
-OBJC_EXPORT NXHashTable *NXCreateHashTableFromZone (NXHashTablePrototype prototype, unsigned capacity, const void *info, void *z) OBJC_HASH_AVAILABILITY;
-OBJC_EXPORT NXHashTable *NXCreateHashTable (NXHashTablePrototype prototype, unsigned capacity, const void *info) OBJC_HASH_AVAILABILITY;
+OBJC_EXPORT NXHashTable * _Nonnull
+NXCreateHashTableFromZone (NXHashTablePrototype prototype, unsigned capacity,
+                           const void * _Nullable info, void * _Nullable z)
+    OBJC_HASH_AVAILABILITY;
+
+OBJC_EXPORT NXHashTable * _Nonnull
+NXCreateHashTable (NXHashTablePrototype prototype, unsigned capacity,
+                   const void * _Nullable info)
+    OBJC_HASH_AVAILABILITY;
     /* if hash is 0, pointer hash is assumed */
     /* if isEqual is 0, pointer equality is assumed */
     /* if free is 0, elements are not freed */
     /* capacity is only a hint; 0 creates a small table */
     /* info allows call backs to be very general */
 
-OBJC_EXPORT void NXFreeHashTable (NXHashTable *table) OBJC_HASH_AVAILABILITY;
+OBJC_EXPORT void
+NXFreeHashTable (NXHashTable * _Nonnull table)
+    OBJC_HASH_AVAILABILITY;
     /* calls free for each data, and recovers table */
 	
-OBJC_EXPORT void NXEmptyHashTable (NXHashTable *table) OBJC_HASH_AVAILABILITY;
+OBJC_EXPORT void
+NXEmptyHashTable (NXHashTable * _Nonnull table)
+    OBJC_HASH_AVAILABILITY;
     /* does not deallocate table nor data; keeps current capacity */
 
-OBJC_EXPORT void NXResetHashTable (NXHashTable *table) OBJC_HASH_AVAILABILITY;
+OBJC_EXPORT void
+NXResetHashTable (NXHashTable * _Nonnull table)
+    OBJC_HASH_AVAILABILITY;
     /* frees each entry; keeps current capacity */
 
-OBJC_EXPORT BOOL NXCompareHashTables (NXHashTable *table1, NXHashTable *table2) OBJC_HASH_AVAILABILITY;
+OBJC_EXPORT BOOL
+NXCompareHashTables (NXHashTable * _Nonnull table1,
+                     NXHashTable * _Nonnull table2)
+    OBJC_HASH_AVAILABILITY;
     /* Returns YES if the two sets are equal (each member of table1 in table2, and table have same size) */
 
-OBJC_EXPORT NXHashTable *NXCopyHashTable (NXHashTable *table) OBJC_HASH_AVAILABILITY;
+OBJC_EXPORT NXHashTable * _Nonnull 
+NXCopyHashTable (NXHashTable * _Nonnull table)
+    OBJC_HASH_AVAILABILITY;
     /* makes a fresh table, copying data pointers, not data itself.  */
 	
-OBJC_EXPORT unsigned NXCountHashTable (NXHashTable *table) OBJC_HASH_AVAILABILITY;
+OBJC_EXPORT unsigned
+NXCountHashTable (NXHashTable * _Nonnull table)
+    OBJC_HASH_AVAILABILITY;
     /* current number of data in table */
 	
-OBJC_EXPORT int NXHashMember (NXHashTable *table, const void *data) OBJC_HASH_AVAILABILITY;
+OBJC_EXPORT int
+NXHashMember (NXHashTable * _Nonnull table, const void * _Nullable data)
+    OBJC_HASH_AVAILABILITY;
     /* returns non-0 iff data is present in table.
     Example of use when the hashed data is a struct containing the key,
     and when the callee only has a key:
@@ -110,7 +137,9 @@ OBJC_EXPORT int NXHashMember (NXHashTable *table, const void *data) OBJC_HASH_AV
 	return NXHashMember (myTable, &pseudo)
     */
 	
-OBJC_EXPORT void *NXHashGet (NXHashTable *table, const void *data) OBJC_HASH_AVAILABILITY;
+OBJC_EXPORT void * _Nullable
+NXHashGet (NXHashTable * _Nonnull table, const void * _Nullable data)
+    OBJC_HASH_AVAILABILITY;
     /* return original table data or NULL.
     Example of use when the hashed data is a struct containing the key,
     and when the callee only has a key:
@@ -120,14 +149,20 @@ OBJC_EXPORT void *NXHashGet (NXHashTable *table, const void *data) OBJC_HASH_AVA
 	original = NXHashGet (myTable, &pseudo)
     */
 	
-OBJC_EXPORT void *NXHashInsert (NXHashTable *table, const void *data) OBJC_HASH_AVAILABILITY;
+OBJC_EXPORT void * _Nullable 
+NXHashInsert (NXHashTable * _Nonnull table, const void * _Nullable data)
+    OBJC_HASH_AVAILABILITY;
     /* previous data or NULL is returned. */
 	
-OBJC_EXPORT void *NXHashInsertIfAbsent (NXHashTable *table, const void *data) OBJC_HASH_AVAILABILITY;
+OBJC_EXPORT void * _Nullable
+NXHashInsertIfAbsent (NXHashTable * _Nonnull table, const void * _Nullable data)
+    OBJC_HASH_AVAILABILITY;
     /* If data already in table, returns the one in table
     else adds argument to table and returns argument. */
 
-OBJC_EXPORT void *NXHashRemove (NXHashTable *table, const void *data) OBJC_HASH_AVAILABILITY;
+OBJC_EXPORT void * _Nullable
+NXHashRemove (NXHashTable * _Nonnull table, const void * _Nullable data)
+    OBJC_HASH_AVAILABILITY;
     /* previous data or NULL is returned */
 	
 /* Iteration over all elements of a table consists in setting up an iteration state and then to progress until all entries have been visited.  An example of use for counting elements in a table is:
@@ -142,9 +177,13 @@ OBJC_EXPORT void *NXHashRemove (NXHashTable *table, const void *data) OBJC_HASH_
 typedef struct {int i; int j;} NXHashState OBJC_HASH_AVAILABILITY;
     /* callers should not rely on actual contents of the struct */
 
-OBJC_EXPORT NXHashState NXInitHashState(NXHashTable *table) OBJC_HASH_AVAILABILITY;
+OBJC_EXPORT NXHashState
+NXInitHashState(NXHashTable * _Nonnull table)
+    OBJC_HASH_AVAILABILITY;
 
-OBJC_EXPORT int NXNextHashState(NXHashTable *table, NXHashState *state, void **data) OBJC_HASH_AVAILABILITY;
+OBJC_EXPORT int
+NXNextHashState(NXHashTable * _Nonnull table, NXHashState * _Nonnull state,
+                void * _Nullable * _Nonnull data) OBJC_HASH_AVAILABILITY;
     /* returns 0 when all elements have been visited */
 
 /*************************************************************************
@@ -152,23 +191,45 @@ OBJC_EXPORT int NXNextHashState(NXHashTable *table, NXHashState *state, void **d
  *	and common prototypes
  *************************************************************************/
 
-OBJC_EXPORT uintptr_t NXPtrHash(const void *info, const void *data) OBJC_HASH_AVAILABILITY;
+OBJC_EXPORT uintptr_t
+NXPtrHash(const void * _Nullable info, const void * _Nullable data)
+    OBJC_HASH_AVAILABILITY;
     /* scrambles the address bits; info unused */
-OBJC_EXPORT uintptr_t NXStrHash(const void *info, const void *data) OBJC_HASH_AVAILABILITY;
+
+OBJC_EXPORT uintptr_t
+NXStrHash(const void * _Nullable info, const void * _Nullable data)
+    OBJC_HASH_AVAILABILITY;
     /* string hashing; info unused */
-OBJC_EXPORT int NXPtrIsEqual(const void *info, const void *data1, const void *data2) OBJC_HASH_AVAILABILITY;
+
+OBJC_EXPORT int
+NXPtrIsEqual(const void * _Nullable info, const void * _Nullable data1,
+             const void * _Nullable data2)
+    OBJC_HASH_AVAILABILITY;
     /* pointer comparison; info unused */
-OBJC_EXPORT int NXStrIsEqual(const void *info, const void *data1, const void *data2) OBJC_HASH_AVAILABILITY;
+
+OBJC_EXPORT int
+NXStrIsEqual(const void * _Nullable info, const void * _Nullable data1,
+             const void * _Nullable data2)
+    OBJC_HASH_AVAILABILITY;
     /* string comparison; NULL ok; info unused */
-OBJC_EXPORT void NXNoEffectFree(const void *info, void *data) OBJC_HASH_AVAILABILITY;
+
+OBJC_EXPORT void
+NXNoEffectFree(const void * _Nullable info, void * _Nullable data)
+    OBJC_HASH_AVAILABILITY;
     /* no effect; info unused */
-OBJC_EXPORT void NXReallyFree(const void *info, void *data) OBJC_HASH_AVAILABILITY;
+
+OBJC_EXPORT void
+NXReallyFree(const void * _Nullable info, void * _Nullable data)
+    OBJC_HASH_AVAILABILITY;
     /* frees it; info unused */
 
 /* The two following prototypes are useful for manipulating set of pointers or set of strings; For them free is defined as NXNoEffectFree */
-OBJC_EXPORT const NXHashTablePrototype NXPtrPrototype OBJC_HASH_AVAILABILITY;
+OBJC_EXPORT const NXHashTablePrototype NXPtrPrototype
+    OBJC_HASH_AVAILABILITY;
     /* prototype when data is a pointer (void *) */
-OBJC_EXPORT const NXHashTablePrototype NXStrPrototype OBJC_HASH_AVAILABILITY;
+
+OBJC_EXPORT const NXHashTablePrototype NXStrPrototype
+    OBJC_HASH_AVAILABILITY;
     /* prototype when data is a string (char *) */
 
 /* following prototypes help describe mappings where the key is the first element of a struct and is either a pointer or a string.
@@ -181,8 +242,10 @@ For example NXStrStructKeyPrototype can be used to hash pointers to Example, whe
     
 For the following prototypes, free is defined as NXReallyFree.
  */
-OBJC_EXPORT const NXHashTablePrototype NXPtrStructKeyPrototype OBJC_HASH_AVAILABILITY;
-OBJC_EXPORT const NXHashTablePrototype NXStrStructKeyPrototype OBJC_HASH_AVAILABILITY;
+OBJC_EXPORT const NXHashTablePrototype NXPtrStructKeyPrototype
+    OBJC_HASH_AVAILABILITY;
+OBJC_EXPORT const NXHashTablePrototype NXStrStructKeyPrototype
+    OBJC_HASH_AVAILABILITY;
 
 
 #if !__OBJC2__  &&  !TARGET_OS_WIN32
@@ -196,29 +259,39 @@ A unique string is a string that is allocated once for all (never de-allocated) 
 
 typedef const char *NXAtom OBJC_HASH_AVAILABILITY;
 
-OBJC_EXPORT NXAtom NXUniqueString(const char *buffer) OBJC_HASH_AVAILABILITY;
+OBJC_EXPORT NXAtom _Nullable
+NXUniqueString(const char * _Nullable buffer)
+    OBJC_HASH_AVAILABILITY;
     /* assumes that buffer is \0 terminated, and returns
      a previously created string or a new string that is a copy of buffer.
     If NULL is passed returns NULL.
     Returned string should never be modified.  To ensure this invariant,
     allocations are made in a special read only zone. */
 	
-OBJC_EXPORT NXAtom NXUniqueStringWithLength(const char *buffer, int length) OBJC_HASH_AVAILABILITY;
+OBJC_EXPORT NXAtom _Nonnull
+NXUniqueStringWithLength(const char * _Nullable buffer, int length)
+    OBJC_HASH_AVAILABILITY;
     /* assumes that buffer is a non NULL buffer of at least 
     length characters.  Returns a previously created string or 
     a new string that is a copy of buffer. 
     If buffer contains \0, string will be truncated.
     As for NXUniqueString, returned string should never be modified.  */
 	
-OBJC_EXPORT NXAtom NXUniqueStringNoCopy(const char *string) OBJC_HASH_AVAILABILITY;
+OBJC_EXPORT NXAtom _Nullable
+NXUniqueStringNoCopy(const char * _Nullable string)
+    OBJC_HASH_AVAILABILITY;
     /* If there is already a unique string equal to string, returns the original.  
     Otherwise, string is entered in the table, without making a copy.  Argument should then never be modified.  */
 	
-OBJC_EXPORT char *NXCopyStringBuffer(const char *buffer) OBJC_HASH_AVAILABILITY;
+OBJC_EXPORT char * _Nullable
+NXCopyStringBuffer(const char * _Nullable buffer)
+    OBJC_HASH_AVAILABILITY;
     /* given a buffer, allocates a new string copy of buffer.  
     Buffer should be \0 terminated; returned string is \0 terminated. */
 
-OBJC_EXPORT char *NXCopyStringBufferFromZone(const char *buffer, void *z) OBJC_HASH_AVAILABILITY;
+OBJC_EXPORT char * _Nullable
+NXCopyStringBufferFromZone(const char * _Nullable buffer, void * _Nullable z)
+    OBJC_HASH_AVAILABILITY;
     /* given a buffer, allocates a new string copy of buffer.  
     Buffer should be \0 terminated; returned string is \0 terminated. */
 

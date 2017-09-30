@@ -603,14 +603,6 @@ class monitor_locker_t : nocopy_t {
     ~monitor_locker_t() { lock.leave(); }
 };
 
-class mutex_locker_t : nocopy_t {
-    mutex_t& lock;
-  public:
-    mutex_locker_t(mutex_t& newLock) 
-        : lock(newLock) { lock.lock(); }
-    ~mutex_locker_t() { lock.unlock(); }
-};
-
 class recursive_mutex_locker_t : nocopy_t {
     recursive_mutex_t& lock;
   public:
@@ -715,6 +707,8 @@ extern void layout_bitmap_print(layout_bitmap bits);
 
 
 // fixme runtime
+extern bool MultithreadedForkChild;
+extern id objc_noop_imp(id self, SEL _cmd);
 extern Class look_up_class(const char *aClassName, bool includeUnconnected, bool includeClassHandler);
 extern "C" void map_images(unsigned count, const char * const paths[],
                            const struct mach_header * const mhdrs[]);
@@ -919,6 +913,11 @@ class StripedMap {
     void succeedLock(const void *oldlock) {
         // assumes defineLockOrder is also called
         lockdebug_lock_precedes_lock(oldlock, &array[0].value);
+    }
+
+    const void *getLock(int i) {
+        if (i < StripeCount) return &array[i].value;
+        else return nil;
     }
     
 #if DEBUG

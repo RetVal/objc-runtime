@@ -94,6 +94,19 @@ header_info *LastHeader  = 0;  // NULL means invalid; recompute it
 int HeaderCount = 0;
 
 
+// Set to true on the child side of fork() 
+// if the parent process was multithreaded when fork() was called.
+bool MultithreadedForkChild = false;
+
+
+/***********************************************************************
+* objc_noop_imp. Used when we need to install a do-nothing method somewhere.
+**********************************************************************/
+id objc_noop_imp(id self, SEL _cmd __unused) {
+    return self;
+}
+
+
 /***********************************************************************
 * objc_getClass.  Return the id of the named class.  If the class does
 * not exist, call _objc_classLoader and then objc_classHandler, either of 

@@ -21,23 +21,30 @@ __objc_opt_data:
 .space PAGE_MAX_SIZE-28
 
 /* space for selopt, smax/capacity=524288, blen/mask=262143+1 */
-.space 262144    /* mask tab */
-.space 524288    /* checkbytes */
-.space 524288*4  /* offsets */
+.space 4*(8+256)  /* header and scramble */
+.space 262144     /* mask tab */
+.space 524288     /* checkbytes */
+.space 524288*4   /* offsets */
 
 /* space for clsopt, smax/capacity=65536, blen/mask=16383+1 */
+.space 4*(8+256)        /* header and scramble */
 .space 16384            /* mask tab */
 .space 65536            /* checkbytes */
 .space 65536*12         /* offsets to name and class and header_info */
-.space PAGE_MAX_SIZE    /* some duplicate classes */
+.space 512*8            /* some duplicate classes */
 
-/* space for protocolopt, smax/capacity=8192, blen/mask=4095+1 */
-.space 4096             /* mask tab */
-.space 8192             /* checkbytes */
-.space 8192*4           /* offsets */
+/* space for some demangled protocol names */
+.space 1024
+
+/* space for protocolopt, smax/capacity=16384, blen/mask=8191+1 */
+.space 4*(8+256)        /* header and scramble */
+.space 8192             /* mask tab */
+.space 16384             /* checkbytes */
+.space 16384*8           /* offsets */
 
 /* space for header_info (RO) structures */
 .space 16384
+
 
 .section __DATA,__objc_opt_rw
 .align 3
@@ -46,11 +53,11 @@ __objc_opt_rw_data:
 /* space for header_info (RW) structures */
 .space 16384
 
-/* space for 8192 protocols */
+/* space for 16384 protocols */
 #if __LP64__
-.space 8192 * 11 * 8
+.space 16384 * 12 * 8
 #else
-.space 8192 * 11 * 4
+.space 16384 * 12 * 4
 #endif
 
 

@@ -199,6 +199,7 @@
 		3082F17F1BCF4C7000104AE9 /* a1a2-blocktramps-arm64.s */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.asm; name = "a1a2-blocktramps-arm64.s"; path = "runtime/a1a2-blocktramps-arm64.s"; sourceTree = "<group>"; };
 		3082F1801BCF4C7000104AE9 /* objc-sel-old.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; name = "objc-sel-old.mm"; path = "runtime/objc-sel-old.mm"; sourceTree = "<group>"; };
 		3082F1821BCF4C7000104AE9 /* objc-file-old.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; name = "objc-file-old.mm"; path = "runtime/objc-file-old.mm"; sourceTree = "<group>"; };
+		3089D15D1F7F6564008E36B5 /* ObjectiveC.apinotes */ = {isa = PBXFileReference; lastKnownFileType = text; name = ObjectiveC.apinotes; path = runtime/Module/ObjectiveC.apinotes; sourceTree = "<group>"; };
 		393CEABF0DC69E3E000B69DE /* objc-references.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; name = "objc-references.mm"; path = "runtime/objc-references.mm"; sourceTree = "<group>"; };
 		393CEAC50DC69E67000B69DE /* objc-references.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = "objc-references.h"; path = "runtime/objc-references.h"; sourceTree = "<group>"; };
 		39ABD71F12F0B61800D1054C /* objc-weak.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = "objc-weak.h"; path = "runtime/objc-weak.h"; sourceTree = "<group>"; };
@@ -354,6 +355,7 @@
 		08FB7794FE84155DC02AAC07 /* objc */ = {
 			isa = PBXGroup;
 			children = (
+				3089D15D1F7F6564008E36B5 /* ObjectiveC.apinotes */,
 				513A033F19B4B13000448729 /* include */,
 				838485C60D6D687700CEA253 /* Public Headers */,
 				838485C70D6D688200CEA253 /* Private Headers */,
@@ -1003,6 +1005,7 @@
 				CLANG_CXX_LANGUAGE_STANDARD = "c++0x";
 				COMBINE_HIDPI_IMAGES = YES;
 				COPY_PHASE_STRIP = NO;
+				DEFINES_MODULE = YES;
 				DYLIB_CURRENT_VERSION = 228;
 				EXECUTABLE_PREFIX = lib;
 				GCC_CW_ASM_SYNTAX = NO;
@@ -1024,6 +1027,7 @@
 				);
 				INSTALL_PATH = /usr/lib;
 				MACH_O_TYPE = mh_dylib;
+				MODULEMAP_FILE = "${SRCROOT}/runtime/Module/module.modulemap";
 				ONLY_ACTIVE_ARCH = NO;
 				ORDER_FILE = libobjc.order;
 				OTHER_CFLAGS = (
@@ -1049,6 +1053,7 @@
 			buildSettings = {
 				CLANG_CXX_LANGUAGE_STANDARD = "c++0x";
 				COMBINE_HIDPI_IMAGES = YES;
+				DEFINES_MODULE = YES;
 				DYLIB_CURRENT_VERSION = 228;
 				EXECUTABLE_PREFIX = lib;
 				GCC_CW_ASM_SYNTAX = NO;
@@ -1068,6 +1073,7 @@
 				);
 				INSTALL_PATH = /usr/lib;
 				MACH_O_TYPE = mh_dylib;
+				MODULEMAP_FILE = "${SRCROOT}/runtime/Module/module.modulemap";
 				ORDER_FILE = libobjc.order;
 				OTHER_CFLAGS = (
 					"-fdollars-in-identifiers",

@@ -40,3 +40,4 @@ OPTION( DisableVtables,           OBJC_DISABLE_VTABLES,            "disable vtab
 OPTION( DisablePreopt,            OBJC_DISABLE_PREOPTIMIZATION,    "disable preoptimization courtesy of dyld shared cache")
 OPTION( DisableTaggedPointers,    OBJC_DISABLE_TAGGED_POINTERS,    "disable tagged pointer optimization of NSNumber et al.") 
 OPTION( DisableNonpointerIsa,     OBJC_DISABLE_NONPOINTER_ISA,     "disable non-pointer isa fields")
+OPTION( DisableInitializeForkSafety, OBJC_DISABLE_INITIALIZE_FORK_SAFETY, "disable safety checks for +initialize after fork")

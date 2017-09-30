@@ -193,7 +193,8 @@ extern const struct mach_header* dyld_image_header_containing_address(const void
 #define DYLD_MACOSX_VERSION_10_10		0x000A0A00
 #define DYLD_MACOSX_VERSION_10_11		0x000A0B00
 #define DYLD_MACOSX_VERSION_10_12		0x000A0C00
-
+#define DYLD_MACOSX_VERSION_10_13       0x000A0D00
+    
 #define DYLD_IOS_VERSION_2_0		0x00020000
 #define DYLD_IOS_VERSION_2_1		0x00020100
 #define DYLD_IOS_VERSION_2_2		0x00020200
