@@ -235,7 +235,7 @@ static OBJC_INLINE void objc_start_collector_thread(void) { }
 extern id objc_allocate_object(Class cls, int extra) UNAVAILABLE_ATTRIBUTE;
 #else
 OBJC_EXPORT id class_createInstance(Class cls, size_t extraBytes)
-    OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0);
+    OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0, 2.0);
 OBJC_GC_DEPRECATED("use class_createInstance instead")
 static OBJC_INLINE id objc_allocate_object(Class cls, int extra) 
     { return class_createInstance(cls, extra); }
