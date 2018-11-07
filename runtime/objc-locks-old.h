@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2007 Apple Inc.  All Rights Reserved.
+ * Copyright (c) 2017 Apple Inc.  All Rights Reserved.
  * 
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -21,24 +21,20 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
-#ifndef _OBJC_ACCESSORS_H_
-#define _OBJC_ACCESSORS_H_
+/***********************************************************************
+* objc-locks-old.h
+* Declarations of all locks used in the runtime.
+**********************************************************************/
 
-#include <objc/objc.h>
-#include <stddef.h>
+#ifndef _OBJC_LOCKS_OLD_H
+#define _OBJC_LOCKS_OLD_H
 
-__BEGIN_DECLS
+// fork() safety requires careful tracking of all locks used in the runtime.
+// Thou shalt not declare any locks outside this file.
 
-#if SUPPORT_GC
-
-extern void objc_setProperty_non_gc(id self, SEL _cmd, ptrdiff_t offset, id newValue, BOOL atomic, signed char shouldCopy);
-extern id objc_getProperty_non_gc(id self, SEL _cmd, ptrdiff_t offset, BOOL atomic);
-
-extern void objc_setProperty_gc(id self, SEL _cmd, ptrdiff_t offset, id newValue, BOOL atomic, signed char shouldCopy);
-extern id objc_getProperty_gc(id self, SEL _cmd, ptrdiff_t offset, BOOL atomic);
-
-#endif
-
-__END_DECLS
+extern mutex_t classLock;
+extern mutex_t methodListLock;
+extern mutex_t NXUniqueStringLock;
+extern spinlock_t impLock;
 
 #endif

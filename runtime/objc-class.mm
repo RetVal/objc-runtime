@@ -158,7 +158,6 @@
 
 #include "objc-private.h"
 #include "objc-abi.h"
-#include "objc-auto.h"
 #include <objc/message.h>
 
 
@@ -256,17 +255,173 @@ IMP object_getMethodImplementation_stret(id obj, SEL name)
 #endif
 
 
-Ivar object_setInstanceVariable(id obj, const char *name, void *value)
+static bool isScanned(ptrdiff_t ivar_offset, const uint8_t *layout) 
+{
+    if (!layout) return NO;
+
+    ptrdiff_t index = 0, ivar_index = ivar_offset / sizeof(void*);
+    uint8_t byte;
+    while ((byte = *layout++)) {
+        unsigned skips = (byte >> 4);
+        unsigned scans = (byte & 0x0F);
+        index += skips;
+        if (index > ivar_index) return NO;
+        index += scans;
+        if (index > ivar_index) return YES;
+    }
+    return NO;
+}
+
+
+/***********************************************************************
+* _class_lookUpIvar
+* Given an object and an ivar in it, look up some data about that ivar:
+* - its offset
+* - its memory management behavior
+* The ivar is assumed to be word-aligned and of of object type.
+**********************************************************************/
+static void 
+_class_lookUpIvar(Class cls, Ivar ivar, ptrdiff_t& ivarOffset, 
+                  objc_ivar_memory_management_t& memoryManagement)
+{
+    ivarOffset = ivar_getOffset(ivar);
+    
+    // Look for ARC variables and ARC-style weak.
+
+    // Preflight the hasAutomaticIvars check
+    // because _class_getClassForIvar() may need to take locks.
+    bool hasAutomaticIvars = NO;
+    for (Class c = cls; c; c = c->superclass) {
+        if (c->hasAutomaticIvars()) {
+            hasAutomaticIvars = YES;
+            break;
+        }
+    }
+
+    if (hasAutomaticIvars) {
+        Class ivarCls = _class_getClassForIvar(cls, ivar);
+        if (ivarCls->hasAutomaticIvars()) {
+            // ARC layout bitmaps encode the class's own ivars only.
+            // Use alignedInstanceStart() because unaligned bytes at the start
+            // of this class's ivars are not represented in the layout bitmap.
+            ptrdiff_t localOffset = 
+                ivarOffset - ivarCls->alignedInstanceStart();
+
+            if (isScanned(localOffset, class_getIvarLayout(ivarCls))) {
+                memoryManagement = objc_ivar_memoryStrong;
+                return;
+            }
+            
+            if (isScanned(localOffset, class_getWeakIvarLayout(ivarCls))) {
+                memoryManagement = objc_ivar_memoryWeak;
+                return;
+            }
+
+            // Unretained is only for true ARC classes.
+            if (ivarCls->isARC()) {
+                memoryManagement = objc_ivar_memoryUnretained;
+                return;
+            }
+        }
+    }
+    
+    memoryManagement = objc_ivar_memoryUnknown;
+}
+
+
+/***********************************************************************
+* _class_getIvarMemoryManagement
+* SPI for KVO and others to decide what memory management to use 
+* when setting instance variables directly.
+**********************************************************************/
+objc_ivar_memory_management_t 
+_class_getIvarMemoryManagement(Class cls, Ivar ivar)
+{
+    ptrdiff_t offset;
+    objc_ivar_memory_management_t memoryManagement;
+    _class_lookUpIvar(cls, ivar, offset, memoryManagement);
+    return memoryManagement;
+}
+
+
+static ALWAYS_INLINE 
+void _object_setIvar(id obj, Ivar ivar, id value, bool assumeStrong)
+{
+    if (!obj  ||  !ivar  ||  obj->isTaggedPointer()) return;
+
+    ptrdiff_t offset;
+    objc_ivar_memory_management_t memoryManagement;
+    _class_lookUpIvar(obj->ISA(), ivar, offset, memoryManagement);
+
+    if (memoryManagement == objc_ivar_memoryUnknown) {
+        if (assumeStrong) memoryManagement = objc_ivar_memoryStrong;
+        else memoryManagement = objc_ivar_memoryUnretained;
+    }
+
+    id *location = (id *)((char *)obj + offset);
+
+    switch (memoryManagement) {
+    case objc_ivar_memoryWeak:       objc_storeWeak(location, value); break;
+    case objc_ivar_memoryStrong:     objc_storeStrong(location, value); break;
+    case objc_ivar_memoryUnretained: *location = value; break;
+    case objc_ivar_memoryUnknown:    _objc_fatal("impossible");
+    }
+}
+
+void object_setIvar(id obj, Ivar ivar, id value)
+{
+    return _object_setIvar(obj, ivar, value, false /*not strong default*/);
+}
+
+void object_setIvarWithStrongDefault(id obj, Ivar ivar, id value)
+{
+    return _object_setIvar(obj, ivar, value, true /*strong default*/);
+}
+
+
+id object_getIvar(id obj, Ivar ivar)
+{
+    if (!obj  ||  !ivar  ||  obj->isTaggedPointer()) return nil;
+
+    ptrdiff_t offset;
+    objc_ivar_memory_management_t memoryManagement;
+    _class_lookUpIvar(obj->ISA(), ivar, offset, memoryManagement);
+
+    id *location = (id *)((char *)obj + offset);
+
+    if (memoryManagement == objc_ivar_memoryWeak) {
+        return objc_loadWeak(location);
+    } else {
+        return *location;
+    }
+}
+
+
+static ALWAYS_INLINE 
+Ivar _object_setInstanceVariable(id obj, const char *name, void *value, 
+                                 bool assumeStrong)
 {
     Ivar ivar = nil;
 
     if (obj  &&  name  &&  !obj->isTaggedPointer()) {
-        if ((ivar = class_getInstanceVariable(obj->ISA(), name))) {
-            object_setIvar(obj, ivar, (id)value);
+        if ((ivar = _class_getVariable(obj->ISA(), name))) {
+            _object_setIvar(obj, ivar, (id)value, assumeStrong);
         }
     }
     return ivar;
 }
+
+Ivar object_setInstanceVariable(id obj, const char *name, void *value)
+{
+    return _object_setInstanceVariable(obj, name, value, false);
+}
+
+Ivar object_setInstanceVariableWithStrongDefault(id obj, const char *name, 
+                                                 void *value)
+{
+    return _object_setInstanceVariable(obj, name, value, true);
+}
+
 
 Ivar object_getInstanceVariable(id obj, const char *name, void **value)
 {
@@ -278,105 +433,6 @@ Ivar object_getInstanceVariable(id obj, const char *name, void **value)
         }
     }
     if (value) *value = nil;
-    return nil;
-}
-
-static bool is_scanned_offset(ptrdiff_t ivar_offset, const uint8_t *layout) {
-    ptrdiff_t index = 0, ivar_index = ivar_offset / sizeof(void*);
-    uint8_t byte;
-    while ((byte = *layout++)) {
-        unsigned skips = (byte >> 4);
-        unsigned scans = (byte & 0x0F);
-        index += skips;
-        while (scans--) {
-            if (index == ivar_index) return YES;
-            if (index > ivar_index) return NO;
-            ++index;
-        }
-    }
-    return NO;
-}
-
-// FIXME:  this could be optimized.
-
-static Class _ivar_getClass(Class cls, Ivar ivar) {
-    Class ivar_class = nil;
-    const char *ivar_name = ivar_getName(ivar);
-    Ivar named_ivar = _class_getVariable(cls, ivar_name, &ivar_class);
-    if (named_ivar) {
-        // the same ivar name can appear multiple times along the superclass chain.
-        while (named_ivar != ivar && ivar_class != nil) {
-            ivar_class = ivar_class->superclass;
-            named_ivar = _class_getVariable(cls, ivar_getName(ivar), &ivar_class);
-        }
-    }
-    return ivar_class;
-}
-
-void object_setIvar(id obj, Ivar ivar, id value)
-{
-    if (obj  &&  ivar  &&  !obj->isTaggedPointer()) {
-        Class cls = _ivar_getClass(obj->ISA(), ivar);
-        ptrdiff_t ivar_offset = ivar_getOffset(ivar);
-        id *location = (id *)((char *)obj + ivar_offset);
-        // if this ivar is a member of an ARR compiled class, then issue the correct barrier according to the layout.
-        if (_class_usesAutomaticRetainRelease(cls)) {
-            // for ARR, layout strings are relative to the instance start.
-            uint32_t instanceStart = _class_getInstanceStart(cls);
-            const uint8_t *weak_layout = class_getWeakIvarLayout(cls);
-            if (weak_layout && is_scanned_offset(ivar_offset - instanceStart, weak_layout)) {
-                // use the weak system to write to this variable.
-                objc_storeWeak(location, value);
-                return;
-            }
-            const uint8_t *strong_layout = class_getIvarLayout(cls);
-            if (strong_layout && is_scanned_offset(ivar_offset - instanceStart, strong_layout)) {
-                objc_storeStrong(location, value);
-                return;
-            }
-        }
-#if SUPPORT_GC
-        if (UseGC) {
-            // for GC, check for weak references.
-            const uint8_t *weak_layout = class_getWeakIvarLayout(cls);
-            if (weak_layout && is_scanned_offset(ivar_offset, weak_layout)) {
-                objc_assign_weak(value, location);
-            }
-        }
-        objc_assign_ivar(value, obj, ivar_offset);
-#else
-        *location = value;
-#endif
-    }
-}
-
-
-id object_getIvar(id obj, Ivar ivar)
-{
-    if (obj  &&  ivar  &&  !obj->isTaggedPointer()) {
-        Class cls = obj->ISA();
-        ptrdiff_t ivar_offset = ivar_getOffset(ivar);
-        if (_class_usesAutomaticRetainRelease(cls)) {
-            // for ARR, layout strings are relative to the instance start.
-            uint32_t instanceStart = _class_getInstanceStart(cls);
-            const uint8_t *weak_layout = class_getWeakIvarLayout(cls);
-            if (weak_layout && is_scanned_offset(ivar_offset - instanceStart, weak_layout)) {
-                // use the weak system to read this variable.
-                id *location = (id *)((char *)obj + ivar_offset);
-                return objc_loadWeak(location);
-            }
-        }
-        id *idx = (id *)((char *)obj + ivar_offset);
-#if SUPPORT_GC
-        if (UseGC) {
-            const uint8_t *weak_layout = class_getWeakIvarLayout(cls);
-            if (weak_layout && is_scanned_offset(ivar_offset, weak_layout)) {
-                return objc_read_weak(idx);
-            }
-        }
-#endif
-        return *idx;
-    }
     return nil;
 }
 
@@ -468,6 +524,55 @@ object_cxxConstructFromClass(id obj, Class cls)
     // Call superclasses's dtors to clean up.
     if (supercls) object_cxxDestructFromClass(obj, supercls);
     return nil;
+}
+
+
+/***********************************************************************
+* fixupCopiedIvars
+* Fix up ARC strong and ARC-style weak variables 
+* after oldObject was memcpy'd to newObject.
+**********************************************************************/
+void fixupCopiedIvars(id newObject, id oldObject)
+{
+    for (Class cls = oldObject->ISA(); cls; cls = cls->superclass) {
+        if (cls->hasAutomaticIvars()) {
+            // Use alignedInstanceStart() because unaligned bytes at the start
+            // of this class's ivars are not represented in the layout bitmap.
+            size_t instanceStart = cls->alignedInstanceStart();
+
+            const uint8_t *strongLayout = class_getIvarLayout(cls);
+            if (strongLayout) {
+                id *newPtr = (id *)((char*)newObject + instanceStart);
+                unsigned char byte;
+                while ((byte = *strongLayout++)) {
+                    unsigned skips = (byte >> 4);
+                    unsigned scans = (byte & 0x0F);
+                    newPtr += skips;
+                    while (scans--) {
+                        // ensure strong references are properly retained.
+                        id value = *newPtr++;
+                        if (value) objc_retain(value);
+                    }
+                }
+            }
+
+            const uint8_t *weakLayout = class_getWeakIvarLayout(cls);
+            // fix up weak references if any.
+            if (weakLayout) {
+                id *newPtr = (id *)((char*)newObject + instanceStart), *oldPtr = (id *)((char*)oldObject + instanceStart);
+                unsigned char byte;
+                while ((byte = *weakLayout++)) {
+                    unsigned skips = (byte >> 4);
+                    unsigned weaks = (byte & 0x0F);
+                    newPtr += skips, oldPtr += skips;
+                    while (weaks--) {
+                        objc_copyWeak(newPtr, oldPtr);
+                        ++newPtr, ++oldPtr;
+                    }
+                }
+            }
+        }
+    }
 }
 
 
@@ -602,7 +707,7 @@ Ivar class_getInstanceVariable(Class cls, const char *name)
 {
     if (!cls  ||  !name) return nil;
 
-    return _class_getVariable(cls, name, nil);
+    return _class_getVariable(cls, name);
 }
 
 
@@ -711,6 +816,9 @@ IMP class_getMethodImplementation_stret(Class cls, SEL sel)
 /***********************************************************************
 * instrumentObjcMessageSends
 **********************************************************************/
+// Define this everywhere even if it isn't used to simplify fork() safety code.
+spinlock_t objcMsgLogLock;
+
 #if !SUPPORT_MESSAGE_LOGGING
 
 void	instrumentObjcMessageSends(BOOL flag)
@@ -749,10 +857,9 @@ bool logMessageSend(bool isClassMethod,
             implementingClass,
             sel_getName(selector));
 
-    static spinlock_t lock;
-    lock.lock();
+    objcMsgLogLock.lock();
     write (objcMsgLogFD, buf, strlen(buf));
-    lock.unlock();
+    objcMsgLogLock.unlock();
 
     // Tell caller to not cache the method
     return false;
@@ -783,9 +890,6 @@ void instrumentObjcMessageSends(BOOL flag)
 
 Class _calloc_class(size_t size)
 {
-#if SUPPORT_GC
-    if (UseGC) return (Class) malloc_zone_calloc(gc_zone, 1, size);
-#endif
     return (Class) calloc(1, size);
 }
 
@@ -858,14 +962,7 @@ _objc_constructOrFree(id bytes, Class cls)
     assert(cls->hasCxxCtor());  // for performance, not correctness
 
     id obj = object_cxxConstructFromClass(bytes, cls);
-    if (!obj) {
-#if SUPPORT_GC
-        if (UseGC) {
-            auto_zone_retain(gc_zone, bytes);  // gc free expects rc==1
-        }
-#endif
-        free(bytes);
-    }
+    if (!obj) free(bytes);
 
     return obj;
 }
@@ -887,31 +984,20 @@ _class_createInstancesFromZone(Class cls, size_t extraBytes, void *zone,
 
     size_t size = cls->instanceSize(extraBytes);
 
-#if SUPPORT_GC
-    if (UseGC) {
-        num_allocated = 
-            auto_zone_batch_allocate(gc_zone, size, AUTO_OBJECT_SCANNED, 0, 1, 
-                                     (void**)results, num_requested);
-    } else 
-#endif
-    {
-        unsigned i;
-        num_allocated = 
-            malloc_zone_batch_malloc((malloc_zone_t *)(zone ? zone : malloc_default_zone()), 
-                                     size, (void**)results, num_requested);
-        for (i = 0; i < num_allocated; i++) {
-            bzero(results[i], size);
-        }
+    num_allocated = 
+        malloc_zone_batch_malloc((malloc_zone_t *)(zone ? zone : malloc_default_zone()), 
+                                 size, (void**)results, num_requested);
+    for (unsigned i = 0; i < num_allocated; i++) {
+        bzero(results[i], size);
     }
 
     // Construct each object, and delete any that fail construction.
 
     unsigned shift = 0;
-    unsigned i;
     bool ctor = cls->hasCxxCtor();
-    for (i = 0; i < num_allocated; i++) {
+    for (unsigned i = 0; i < num_allocated; i++) {
         id obj = results[i];
-        obj->initIsa(cls);    // fixme allow indexed
+        obj->initIsa(cls);    // fixme allow nonpointer
         if (ctor) obj = _objc_constructOrFree(obj, cls);
 
         if (obj) {
@@ -929,21 +1015,21 @@ _class_createInstancesFromZone(Class cls, size_t extraBytes, void *zone,
 * inform_duplicate. Complain about duplicate class implementations.
 **********************************************************************/
 void 
-inform_duplicate(const char *name, Class oldCls, Class cls)
+inform_duplicate(const char *name, Class oldCls, Class newCls)
 {
 #if TARGET_OS_WIN32
     (DebugDuplicateClasses ? _objc_fatal : _objc_inform)
         ("Class %s is implemented in two different images.", name);
 #else
     const header_info *oldHeader = _headerForClass(oldCls);
-    const header_info *newHeader = _headerForClass(cls);
-    const char *oldName = oldHeader ? oldHeader->fname : "??";
-    const char *newName = newHeader ? newHeader->fname : "??";
+    const header_info *newHeader = _headerForClass(newCls);
+    const char *oldName = oldHeader ? oldHeader->fname() : "??";
+    const char *newName = newHeader ? newHeader->fname() : "??";
 
     (DebugDuplicateClasses ? _objc_fatal : _objc_inform)
-        ("Class %s is implemented in both %s and %s. "
+        ("Class %s is implemented in both %s (%p) and %s (%p). "
          "One of the two will be used. Which one is undefined.",
-         name, oldName, newName);
+         name, oldName, oldCls, newName, newCls);
 #endif
 }
 

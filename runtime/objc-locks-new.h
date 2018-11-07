@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009 Apple Inc.  All Rights Reserved.
+ * Copyright (c) 2017 Apple Inc.  All Rights Reserved.
  * 
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -21,30 +21,18 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
-#ifndef _OBJC_FILE_OLD_H
-#define _OBJC_FILE_OLD_H
+/***********************************************************************
+* objc-locks-new.h
+* Declarations of all locks used in the runtime.
+**********************************************************************/
 
-#if !__OBJC2__
+#ifndef _OBJC_LOCKS_NEW_H
+#define _OBJC_LOCKS_NEW_H
 
-#include "objc-os.h"
+// fork() safety requires careful tracking of all locks used in the runtime.
+// Thou shalt not declare any locks outside this file.
 
-struct objc_module;
-struct old_protocol;
-struct old_class;
-
-__BEGIN_DECLS
-
-extern struct objc_module *_getObjcModules(const header_info *hi, size_t *nmodules);
-extern SEL *_getObjcSelectorRefs(const header_info *hi, size_t *nmess);
-extern struct old_protocol **_getObjcProtocols(const header_info *hi, size_t *nprotos);
-extern Class *_getObjcClassRefs(const header_info *hi, size_t *nclasses);
-extern const char *_getObjcClassNames(const header_info *hi, size_t *size);
-
-using Initializer = void(*)(void);
-extern Initializer* getLibobjcInitializers(const headerType *mhdr, size_t *count);
-
-__END_DECLS
-
-#endif
+extern rwlock_t runtimeLock;
+extern mutex_t DemangleCacheLock;
 
 #endif

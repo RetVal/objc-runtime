@@ -577,58 +577,6 @@ void _cache_addForwardEntry(Class cls, SEL sel)
 
 
 /***********************************************************************
-* _cache_addIgnoredEntry
-* Add an entry for the ignored selector to cls's method cache.
-* Does nothing if the cache addition fails for any reason.
-* Returns the ignored IMP.
-* Cache locks: cacheUpdateLock must not be held.
-**********************************************************************/
-#if SUPPORT_GC  &&  !SUPPORT_IGNORED_SELECTOR_CONSTANT
-static cache_entry *alloc_ignored_entries(void)
-{
-    cache_entry *e = (cache_entry *)malloc(5 * sizeof(cache_entry));
-    e[0] = (cache_entry){ @selector(retain),     0,(IMP)&_objc_ignored_method};
-    e[1] = (cache_entry){ @selector(release),    0,(IMP)&_objc_ignored_method};
-    e[2] = (cache_entry){ @selector(autorelease),0,(IMP)&_objc_ignored_method};
-    e[3] = (cache_entry){ @selector(retainCount),0,(IMP)&_objc_ignored_method};
-    e[4] = (cache_entry){ @selector(dealloc),    0,(IMP)&_objc_ignored_method};
-    return e;
-}
-#endif
-
-IMP _cache_addIgnoredEntry(Class cls, SEL sel)
-{
-    cache_entry *entryp = NULL;
-
-#if !SUPPORT_GC
-    _objc_fatal("selector ignored with GC off");
-#elif SUPPORT_IGNORED_SELECTOR_CONSTANT
-    static cache_entry entry = { (SEL)kIgnore, 0, (IMP)&_objc_ignored_method };
-    entryp = &entry;
-    assert(sel == (SEL)kIgnore);
-#else
-    // hack
-    int i;
-    static cache_entry *entries;
-    INIT_ONCE_PTR(entries, alloc_ignored_entries(), free(v));
-
-    assert(ignoreSelector(sel));
-    for (i = 0; i < 5; i++) {
-        if (sel == entries[i].name) { 
-            entryp = &entries[i];
-            break;
-        }
-    }
-    if (!entryp) _objc_fatal("selector %s (%p) is not ignored", 
-                             sel_getName(sel), sel);
-#endif
-
-    _cache_fill(cls, (Method)entryp, sel);
-    return entryp->imp;
-}
-
-
-/***********************************************************************
 * _cache_flush.  Invalidate all valid entries in the given class' cache.
 *
 * Called from flush_caches() and _cache_fill()

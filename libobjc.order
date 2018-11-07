@@ -341,7 +341,6 @@ __class_getMethodNoSuper
 _object_cxxDestruct
 _object_cxxDestructFromClass
 _class_copyIvarList
-__object_addExternalReference_rr
 __objc_rootRetain_slow
 __objc_rootReleaseWasZero_slow
 _object_copy

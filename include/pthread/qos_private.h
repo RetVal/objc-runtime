@@ -39,21 +39,45 @@ typedef unsigned long pthread_priority_t;
 
 // masks for splitting the handling the contents of a pthread_priority_t, the mapping from
 // qos_class_t to the class bits, however, is intentionally not exposed.
-#define _PTHREAD_PRIORITY_FLAGS_MASK		(~0xffffff)
-#define _PTHREAD_PRIORITY_QOS_CLASS_MASK	0x00ffff00
-#define _PTHREAD_PRIORITY_QOS_CLASS_SHIFT	(8ull)
-#define _PTHREAD_PRIORITY_PRIORITY_MASK		0x000000ff
-#define _PTHREAD_PRIORITY_PRIORITY_SHIFT	(0)
+#define _PTHREAD_PRIORITY_FLAGS_MASK			0xff000000
+#define _PTHREAD_PRIORITY_FLAGS_SHIFT			(24ull)
+#define _PTHREAD_PRIORITY_ENCODING_MASK			0x00a00000
+#define _PTHREAD_PRIORITY_ENCODING_SHIFT		(22ull)
+#define _PTHREAD_PRIORITY_ENCODING_V0			0x00000000
+#define _PTHREAD_PRIORITY_ENCODING_V1			0x00400000 /* unused */
+#define _PTHREAD_PRIORITY_ENCODING_V2			0x00800000 /* unused */
+#define _PTHREAD_PRIORITY_ENCODING_V3			0x00a00000 /* unused */
+#define _PTHREAD_PRIORITY_QOS_CLASS_MASK		0x003fff00
+#define _PTHREAD_PRIORITY_QOS_CLASS_SHIFT		(8ull)
+#define _PTHREAD_PRIORITY_PRIORITY_MASK			0x000000ff
+#define _PTHREAD_PRIORITY_PRIORITY_SHIFT		(0)
 
-#define _PTHREAD_PRIORITY_OVERCOMMIT_FLAG	0x80000000
-#define _PTHREAD_PRIORITY_INHERIT_FLAG		0x40000000
-#define _PTHREAD_PRIORITY_ROOTQUEUE_FLAG	0x20000000
-#define _PTHREAD_PRIORITY_ENFORCE_FLAG		0x10000000
-#define _PTHREAD_PRIORITY_OVERRIDE_FLAG		0x08000000
+#define _PTHREAD_PRIORITY_OVERCOMMIT_FLAG		0x80000000
+#define _PTHREAD_PRIORITY_INHERIT_FLAG			0x40000000
+#define _PTHREAD_PRIORITY_ROOTQUEUE_FLAG		0x20000000
+// Used to indicate to the pthread kext that the provided event manager thread
+// priority is actually a scheduling priority not a QoS.  We can have ROOTQUEUE_FLAG
+// perform double duty because it's never provided to the kernel.
+#define _PTHREAD_PRIORITY_SCHED_PRI_FLAG		0x20000000
+#define _PTHREAD_PRIORITY_ENFORCE_FLAG			0x10000000
+#define _PTHREAD_PRIORITY_OVERRIDE_FLAG			0x08000000
+
+// libdispatch defines the following, so it's not safe to use for anything we
+// expect to be passed in from userspace
+//#define _PTHREAD_PRIORITY_DEFAULTQUEUE_FLAG 0x04000000
+
+// The event manager flag indicates that this thread/request is for a event
+// manager thread.  There can only ever be one event manager thread at a time and
+// it is brought up at the highest of all event manager priorities passed to the
+// kext.
+#define _PTHREAD_PRIORITY_EVENT_MANAGER_FLAG	0x02000000
+#define _PTHREAD_PRIORITY_NEEDS_UNBIND_FLAG		0x01000000
 
 // redeffed here to avoid leaving __QOS_ENUM defined in the public header
 #define __QOS_ENUM(name, type, ...) enum { __VA_ARGS__ }; typedef type name##_t
-#define __QOS_AVAILABLE_STARTING(x, y)
+#define __QOS_AVAILABLE_10_10
+#define __QOS_AVAILABLE_10_11
+#define __QOS_AVAILABLE_10_12
 
 #if defined(__has_feature) && defined(__has_extension)
 #if __has_feature(objc_fixed_enum) || __has_extension(cxx_strong_enums)
@@ -61,22 +85,27 @@ typedef unsigned long pthread_priority_t;
 #define __QOS_ENUM(name, type, ...) typedef enum : type { __VA_ARGS__ } name##_t
 #endif
 #if __has_feature(enumerator_attributes)
-#undef __QOS_AVAILABLE_STARTING
-#define __QOS_AVAILABLE_STARTING __OSX_AVAILABLE_STARTING
+#undef __QOS_AVAILABLE_10_10
+#define __QOS_AVAILABLE_10_10 __OSX_AVAILABLE(10.10) __IOS_AVAILABLE(8.0)
+#undef __QOS_AVAILABLE_10_11
+#define __QOS_AVAILABLE_10_11 __OSX_AVAILABLE(10.11) __IOS_AVAILABLE(9.0)  __WATCHOS_AVAILABLE(2.0) __TVOS_AVAILABLE(9.0)
+#undef __QOS_AVAILABLE_10_12
+#define __QOS_AVAILABLE_10_12 __OSX_AVAILABLE(10.12) __IOS_AVAILABLE(10.0) __WATCHOS_AVAILABLE(3.0) __TVOS_AVAILABLE(10.0)
 #endif
 #endif
 
 __QOS_ENUM(_pthread_set_flags, unsigned int,
-   _PTHREAD_SET_SELF_QOS_FLAG
-		   __QOS_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_8_0) = 0x1,
-   _PTHREAD_SET_SELF_VOUCHER_FLAG
-		   __QOS_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_8_0) = 0x2,
-   _PTHREAD_SET_SELF_FIXEDPRIORITY_FLAG
-		   __QOS_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_8_0) = 0x4,
+   _PTHREAD_SET_SELF_QOS_FLAG __QOS_AVAILABLE_10_10 = 0x1,
+   _PTHREAD_SET_SELF_VOUCHER_FLAG __QOS_AVAILABLE_10_10 = 0x2,
+   _PTHREAD_SET_SELF_FIXEDPRIORITY_FLAG __QOS_AVAILABLE_10_11 = 0x4,
+   _PTHREAD_SET_SELF_TIMESHARE_FLAG __QOS_AVAILABLE_10_11 = 0x8,
+   _PTHREAD_SET_SELF_WQ_KEVENT_UNBIND __QOS_AVAILABLE_10_12 = 0x10,
 );
 
 #undef __QOS_ENUM
-#undef __QOS_AVAILABLE_STARTING
+#undef __QOS_AVAILABLE_10_10
+#undef __QOS_AVAILABLE_10_11
+#undef __QOS_AVAILABLE_10_12
 
 #ifndef KERNEL
 
@@ -156,6 +185,11 @@ _pthread_set_properties_self(_pthread_set_flags_t flags, pthread_priority_t prio
 __OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_8_0)
 int
 pthread_set_fixedpriority_self(void);
+
+// Inverse of pthread_set_fixedpriority_self()
+__OSX_AVAILABLE_STARTING(__MAC_10_11, __IPHONE_9_0)
+int
+pthread_set_timeshare_self(void);
 
 #endif
 

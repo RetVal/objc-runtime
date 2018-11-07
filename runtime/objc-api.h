@@ -28,6 +28,7 @@
 #include <Availability.h>
 #include <AvailabilityMacros.h>
 #include <TargetConditionals.h>
+#include <sys/types.h>
 
 #ifndef __has_feature
 #   define __has_feature(x) 0
@@ -41,6 +42,27 @@
 #   define __has_attribute(x) 0
 #endif
 
+#if !__has_feature(nullability)
+#   ifndef _Nullable
+#       define _Nullable
+#   endif
+#   ifndef _Nonnull
+#       define _Nonnull
+#   endif
+#   ifndef _Null_unspecified
+#       define _Null_unspecified
+#   endif
+#endif
+
+#ifndef __BRIDGEOS_AVAILABLE
+#   define __BRIDGEOS_AVAILABLE(v)
+#endif
+#ifndef __BRIDGEOS_DEPRECATED
+#   define __BRIDGEOS_DEPRECATED(v1, v2, m)
+#endif
+#ifndef __BRIDGEOS_UNAVAILABLE
+#   define __BRIDGEOS_UNAVAILABLE
+#endif
 
 /*
  * OBJC_API_VERSION 0 or undef: Tiger and earlier API only
@@ -57,24 +79,22 @@
 
 /*
  * OBJC_NO_GC 1: GC is not supported
- * OBJC_NO_GC undef: GC is supported
+ * OBJC_NO_GC undef: GC is supported. This SDK no longer supports this mode.
  *
  * OBJC_NO_GC_API undef: Libraries must export any symbols that 
  *                       dual-mode code may links to.
  * OBJC_NO_GC_API 1: Libraries need not export GC-related symbols.
  */
-#if TARGET_OS_EMBEDDED  ||  TARGET_OS_IPHONE  ||  TARGET_OS_WIN32
-    /* GC is unsupported. GC API symbols are not exported. */
-#   define OBJC_NO_GC 1
-#   define OBJC_NO_GC_API 1
-#elif TARGET_OS_MAC && __x86_64h__
+#if defined(__OBJC_GC__)
+#   error Objective-C garbage collection is not supported.
+#elif TARGET_OS_OSX
     /* GC is unsupported. GC API symbols are exported. */
 #   define OBJC_NO_GC 1
 #   undef  OBJC_NO_GC_API
 #else
-    /* GC is supported. */
-#   undef  OBJC_NO_GC
-#   undef  OBJC_GC_API
+    /* GC is unsupported. GC API symbols are not exported. */
+#   define OBJC_NO_GC 1
+#   define OBJC_NO_GC_API 1
 #endif
 
 
@@ -89,6 +109,14 @@
  * functions must be cast to an appropriate function pointer type. */
 #if !defined(OBJC_OLD_DISPATCH_PROTOTYPES)
 #   define OBJC_OLD_DISPATCH_PROTOTYPES 1
+#endif
+
+
+/* OBJC_AVAILABLE: shorthand for all-OS availability */
+#if !defined(OBJC_AVAILABLE)
+#   define OBJC_AVAILABLE(x, i, t, w, b)                            \
+        __OSX_AVAILABLE(x)  __IOS_AVAILABLE(i)  __TVOS_AVAILABLE(t) \
+        __WATCHOS_AVAILABLE(w)  __BRIDGEOS_AVAILABLE(b)
 #endif
 
 
@@ -109,18 +137,35 @@
 #       define OBJC2_UNAVAILABLE UNAVAILABLE_ATTRIBUTE
 #   else
         /* plain C code also falls here, but this is close enough */
-#       define OBJC2_UNAVAILABLE __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_5,__MAC_10_5, __IPHONE_2_0,__IPHONE_2_0)
+#       define OBJC2_UNAVAILABLE                                       \
+            __OSX_DEPRECATED(10.5, 10.5, "not available in __OBJC2__") \
+            __IOS_DEPRECATED(2.0, 2.0, "not available in __OBJC2__")   \
+            __TVOS_UNAVAILABLE __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE
+#   endif
+#endif
+
+/* OBJC_UNAVAILABLE: unavailable, with a message where supported */
+#if !defined(OBJC_UNAVAILABLE)
+#   if __has_extension(attribute_unavailable_with_message)
+#       define OBJC_UNAVAILABLE(_msg) __attribute__((unavailable(_msg)))
+#   else
+#       define OBJC_UNAVAILABLE(_msg) __attribute__((unavailable))
+#   endif
+#endif
+
+/* OBJC_DEPRECATED: deprecated, with a message where supported */
+#if !defined(OBJC_DEPRECATED)
+#   if __has_extension(attribute_deprecated_with_message)
+#       define OBJC_DEPRECATED(_msg) __attribute__((deprecated(_msg)))
+#   else
+#       define OBJC_DEPRECATED(_msg) __attribute__((deprecated))
 #   endif
 #endif
 
 /* OBJC_ARC_UNAVAILABLE: unavailable with -fobjc-arc */
 #if !defined(OBJC_ARC_UNAVAILABLE)
 #   if __has_feature(objc_arc)
-#       if __has_extension(attribute_unavailable_with_message)
-#           define OBJC_ARC_UNAVAILABLE __attribute__((unavailable("not available in automatic reference counting mode")))
-#       else
-#           define OBJC_ARC_UNAVAILABLE __attribute__((unavailable))
-#       endif
+#       define OBJC_ARC_UNAVAILABLE OBJC_UNAVAILABLE("not available in automatic reference counting mode")
 #   else
 #       define OBJC_ARC_UNAVAILABLE
 #   endif
@@ -138,7 +183,7 @@
 /* OBJC_ARM64_UNAVAILABLE: unavailable on arm64 (i.e. stret dispatch) */
 #if !defined(OBJC_ARM64_UNAVAILABLE)
 #   if defined(__arm64__)
-#       define OBJC_ARM64_UNAVAILABLE __attribute__((unavailable("not available in arm64")))
+#       define OBJC_ARM64_UNAVAILABLE OBJC_UNAVAILABLE("not available in arm64")
 #   else
 #       define OBJC_ARM64_UNAVAILABLE 
 #   endif
@@ -146,15 +191,7 @@
 
 /* OBJC_GC_UNAVAILABLE: unavailable with -fobjc-gc or -fobjc-gc-only */
 #if !defined(OBJC_GC_UNAVAILABLE)
-#   if __OBJC_GC__
-#       if __has_extension(attribute_unavailable_with_message)
-#           define OBJC_GC_UNAVAILABLE __attribute__((unavailable("not available in garbage collecting mode")))
-#       else
-#           define OBJC_GC_UNAVAILABLE __attribute__((unavailable))
-#       endif
-#   else
-#       define OBJC_GC_UNAVAILABLE
-#   endif
+#   define OBJC_GC_UNAVAILABLE
 #endif
 
 #if !defined(OBJC_EXTERN)
@@ -212,6 +249,14 @@
 #else
 #define OBJC_ENUM(_type, _name) _type _name; enum
 #define OBJC_OPTIONS(_type, _name) _type _name; enum
+#endif
+
+#if !defined(OBJC_RETURNS_RETAINED)
+#   if __OBJC__ && __has_attribute(ns_returns_retained)
+#       define OBJC_RETURNS_RETAINED __attribute__((ns_returns_retained))
+#   else
+#       define OBJC_RETURNS_RETAINED
+#   endif
 #endif
 
 #endif

@@ -60,7 +60,7 @@ struct SyncList {
     SyncData *data;
     spinlock_t lock;
 
-    SyncList() : data(nil) { }
+    SyncList() : data(nil), lock(fork_unsafe_lock) { }
 };
 
 // Use multiple parallel lists to decrease contention among unrelated objects.
@@ -235,7 +235,7 @@ static SyncData* id2data(id object, enum usage why)
     result = (SyncData*)calloc(sizeof(SyncData), 1);
     result->object = (objc_object *)object;
     result->threadCount = 1;
-    new (&result->mutex) recursive_mutex_t();
+    new (&result->mutex) recursive_mutex_t(fork_unsafe_lock);
     result->nextData = *listp;
     *listp = result;
     

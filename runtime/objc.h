@@ -39,7 +39,7 @@ typedef struct objc_class *Class;
 
 /// Represents an instance of a class.
 struct objc_object {
-    Class isa  OBJC_ISA_AVAILABILITY;
+    Class _Nonnull isa  OBJC_ISA_AVAILABILITY;
 };
 
 /// A pointer to an instance of a class.
@@ -53,21 +53,37 @@ typedef struct objc_selector *SEL;
 #if !OBJC_OLD_DISPATCH_PROTOTYPES
 typedef void (*IMP)(void /* id, SEL, ... */ ); 
 #else
-typedef id (*IMP)(id, SEL, ...); 
+typedef id _Nullable (*IMP)(id _Nonnull, SEL _Nonnull, ...); 
+#endif
+
+/// Type to represent a boolean value.
+
+#if defined(__OBJC_BOOL_IS_BOOL)
+    // Honor __OBJC_BOOL_IS_BOOL when available.
+#   if __OBJC_BOOL_IS_BOOL
+#       define OBJC_BOOL_IS_BOOL 1
+#   else
+#       define OBJC_BOOL_IS_BOOL 0
+#   endif
+#else
+    // __OBJC_BOOL_IS_BOOL not set.
+#   if TARGET_OS_OSX || (TARGET_OS_IOS && !__LP64__ && !__ARM_ARCH_7K)
+#      define OBJC_BOOL_IS_BOOL 0
+#   else
+#      define OBJC_BOOL_IS_BOOL 1
+#   endif
+#endif
+
+#if OBJC_BOOL_IS_BOOL
+    typedef bool BOOL;
+#else
+#   define OBJC_BOOL_IS_CHAR 1
+    typedef signed char BOOL; 
+    // BOOL is explicitly signed so @encode(BOOL) == "c" rather than "C" 
+    // even if -funsigned-char is used.
 #endif
 
 #define OBJC_BOOL_DEFINED
-
-/// Type to represent a boolean value.
-#if (TARGET_OS_IPHONE && __LP64__)  ||  TARGET_OS_WATCH
-#define OBJC_BOOL_IS_BOOL 1
-typedef bool BOOL;
-#else
-#define OBJC_BOOL_IS_CHAR 1
-typedef signed char BOOL; 
-// BOOL is explicitly signed so @encode(BOOL) == "c" rather than "C" 
-// even if -funsigned-char is used.
-#endif
 
 #if __has_feature(objc_bool)
 #define YES __objc_yes
@@ -93,13 +109,22 @@ typedef signed char BOOL;
 # endif
 #endif
 
-#if ! (defined(__OBJC_GC__)  ||  __has_feature(objc_arc))
-#define __strong /* empty */
+#ifndef __strong
+# if !__has_feature(objc_arc)
+#   define __strong /* empty */
+# endif
 #endif
 
-#if !__has_feature(objc_arc)
-#define __unsafe_unretained /* empty */
-#define __autoreleasing /* empty */
+#ifndef __unsafe_unretained
+# if !__has_feature(objc_arc)
+#   define __unsafe_unretained /* empty */
+# endif
+#endif
+
+#ifndef __autoreleasing
+# if !__has_feature(objc_arc)
+#   define __autoreleasing /* empty */
+# endif
 #endif
 
 
@@ -110,8 +135,8 @@ typedef signed char BOOL;
  * 
  * @return A C string indicating the name of the selector.
  */
-OBJC_EXPORT const char *sel_getName(SEL sel)
-    __OSX_AVAILABLE_STARTING(__MAC_10_0, __IPHONE_2_0);
+OBJC_EXPORT const char * _Nonnull sel_getName(SEL _Nonnull sel)
+    OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0, 2.0);
 
 /** 
  * Registers a method with the Objective-C runtime system, maps the method 
@@ -125,8 +150,8 @@ OBJC_EXPORT const char *sel_getName(SEL sel)
  *  method’s selector before you can add the method to a class definition. If the method name
  *  has already been registered, this function simply returns the selector.
  */
-OBJC_EXPORT SEL sel_registerName(const char *str)
-    __OSX_AVAILABLE_STARTING(__MAC_10_0, __IPHONE_2_0);
+OBJC_EXPORT SEL _Nonnull sel_registerName(const char * _Nonnull str)
+    OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0, 2.0);
 
 /** 
  * Returns the class name of a given object.
@@ -135,8 +160,8 @@ OBJC_EXPORT SEL sel_registerName(const char *str)
  * 
  * @return The name of the class of which \e obj is an instance.
  */
-OBJC_EXPORT const char *object_getClassName(id obj)
-    __OSX_AVAILABLE_STARTING(__MAC_10_0, __IPHONE_2_0);
+OBJC_EXPORT const char * _Nonnull object_getClassName(id _Nullable obj)
+    OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0, 2.0);
 
 /** 
  * Returns a pointer to any extra bytes allocated with an instance given object.
@@ -154,8 +179,9 @@ OBJC_EXPORT const char *object_getClassName(id obj)
  *  guaranteed, even if the area following the object's last ivar is more aligned than that.
  * @note In a garbage-collected environment, the memory is scanned conservatively.
  */
-OBJC_EXPORT void *object_getIndexedIvars(id obj)
-    __OSX_AVAILABLE_STARTING(__MAC_10_0, __IPHONE_2_0);
+OBJC_EXPORT void * _Nullable object_getIndexedIvars(id _Nullable obj)
+    OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0, 2.0)
+    OBJC_ARC_UNAVAILABLE;
 
 /** 
  * Identifies a selector as being valid or invalid.
@@ -167,8 +193,8 @@ OBJC_EXPORT void *object_getIndexedIvars(id obj)
  * @warning On some platforms, an invalid reference (to invalid memory addresses) can cause
  *  a crash. 
  */
-OBJC_EXPORT BOOL sel_isMapped(SEL sel)
-    __OSX_AVAILABLE_STARTING(__MAC_10_0, __IPHONE_2_0);
+OBJC_EXPORT BOOL sel_isMapped(SEL _Nonnull sel)
+    OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0, 2.0);
 
 /** 
  * Registers a method name with the Objective-C runtime system.
@@ -182,24 +208,20 @@ OBJC_EXPORT BOOL sel_isMapped(SEL sel)
  *  and returned \c NULL if the selector was not found. This was changed for safety, because it was
  *  observed that many of the callers of this function did not check the return value for \c NULL.
  */
-OBJC_EXPORT SEL sel_getUid(const char *str)
-    __OSX_AVAILABLE_STARTING(__MAC_10_0, __IPHONE_2_0);
-
-
-// Obsolete ARC conversions. Deprecation forthcoming.
-// Use CFBridgingRetain, CFBridgingRelease, and __bridge casts instead.
+OBJC_EXPORT SEL _Nonnull sel_getUid(const char * _Nonnull str)
+    OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0, 2.0);
 
 typedef const void* objc_objectptr_t;
 
-#if __has_feature(objc_arc)
-#   define objc_retainedObject(o) ((__bridge_transfer id)(objc_objectptr_t)(o))
-#   define objc_unretainedObject(o) ((__bridge id)(objc_objectptr_t)(o))
-#   define objc_unretainedPointer(o) ((__bridge objc_objectptr_t)(id)(o))
-#else
-#   define objc_retainedObject(o) ((id)(objc_objectptr_t)(o))
-#   define objc_unretainedObject(o) ((id)(objc_objectptr_t)(o))
-#   define objc_unretainedPointer(o) ((objc_objectptr_t)(id)(o))
-#endif
+
+// Obsolete ARC conversions.
+
+OBJC_EXPORT id _Nullable objc_retainedObject(objc_objectptr_t _Nullable obj)
+    OBJC_UNAVAILABLE("use CFBridgingRelease() or a (__bridge_transfer id) cast instead");
+OBJC_EXPORT id _Nullable objc_unretainedObject(objc_objectptr_t _Nullable obj)
+    OBJC_UNAVAILABLE("use a (__bridge id) cast instead");
+OBJC_EXPORT objc_objectptr_t _Nullable objc_unretainedPointer(id _Nullable obj)
+    OBJC_UNAVAILABLE("use a __bridge cast instead");
 
 
 #if !__OBJC2__

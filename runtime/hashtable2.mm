@@ -562,7 +562,7 @@ static int accessUniqueString = 0;
 
 static char		*z = NULL;
 static size_t	zSize = 0;
-static mutex_t		uniquerLock;
+mutex_t		NXUniqueStringLock;
 
 static const char *CopyIntoReadOnly (const char *str) {
     size_t	len = strlen (str) + 1;
@@ -574,7 +574,7 @@ static const char *CopyIntoReadOnly (const char *str) {
 	return result;
     }
 
-    mutex_locker_t lock(uniquerLock);
+    mutex_locker_t lock(NXUniqueStringLock);
     if (zSize < len) {
 	zSize = CHUNK_SIZE *((len + CHUNK_SIZE - 1) / CHUNK_SIZE);
 	/* not enough room, we try to allocate.  If no room left, too bad */

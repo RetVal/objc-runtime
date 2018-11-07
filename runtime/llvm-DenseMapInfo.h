@@ -48,7 +48,7 @@ struct DenseMapInfo<T*> {
 
 // Provide DenseMapInfo for disguised pointers.
 template<typename T>
-struct DenseMapInfo<DisguisedPtr<T> > {
+struct DenseMapInfo<DisguisedPtr<T>> {
   static inline DisguisedPtr<T> getEmptyKey() {
     return DisguisedPtr<T>((T*)(uintptr_t)-1);
   }

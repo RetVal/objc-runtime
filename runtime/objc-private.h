@@ -56,6 +56,15 @@ namespace {
 };
 
 
+#if (!SUPPORT_NONPOINTER_ISA && !SUPPORT_PACKED_ISA && !SUPPORT_INDEXED_ISA) ||\
+    ( SUPPORT_NONPOINTER_ISA &&  SUPPORT_PACKED_ISA && !SUPPORT_INDEXED_ISA) ||\
+    ( SUPPORT_NONPOINTER_ISA && !SUPPORT_PACKED_ISA &&  SUPPORT_INDEXED_ISA)
+    // good config
+#else
+#   error bad config
+#endif
+
+
 union isa_t 
 {
     isa_t() { }
@@ -64,10 +73,10 @@ union isa_t
     Class cls;
     uintptr_t bits;
 
-#if SUPPORT_NONPOINTER_ISA
+#if SUPPORT_PACKED_ISA
 
     // extra_rc must be the MSB-most field (so it matches carry/overflow flags)
-    // indexed must be the LSB (fixme or get rid of it)
+    // nonpointer must be the LSB (fixme or get rid of it)
     // shiftcls must occupy the same bits that a real class pointer would
     // bits + RC_ONE is equivalent to extra_rc + 1
     // RC_HALF is the high bit of extra_rc (i.e. half of its range)
@@ -82,7 +91,7 @@ union isa_t
 #   define ISA_MAGIC_MASK  0x000003f000000001ULL
 #   define ISA_MAGIC_VALUE 0x000001a000000001ULL
     struct {
-        uintptr_t indexed           : 1;
+        uintptr_t nonpointer        : 1;
         uintptr_t has_assoc         : 1;
         uintptr_t has_cxx_dtor      : 1;
         uintptr_t shiftcls          : 33; // MACH_VM_MAX_ADDRESS 0x1000000000
@@ -100,7 +109,7 @@ union isa_t
 #   define ISA_MAGIC_MASK  0x001f800000000001ULL
 #   define ISA_MAGIC_VALUE 0x001d800000000001ULL
     struct {
-        uintptr_t indexed           : 1;
+        uintptr_t nonpointer        : 1;
         uintptr_t has_assoc         : 1;
         uintptr_t has_cxx_dtor      : 1;
         uintptr_t shiftcls          : 44; // MACH_VM_MAX_ADDRESS 0x7fffffe00000
@@ -114,11 +123,43 @@ union isa_t
     };
 
 # else
-    // Available bits in isa field are architecture-specific.
-#   error unknown architecture
+#   error unknown architecture for packed isa
 # endif
 
-// SUPPORT_NONPOINTER_ISA
+// SUPPORT_PACKED_ISA
+#endif
+
+
+#if SUPPORT_INDEXED_ISA
+
+# if  __ARM_ARCH_7K__ >= 2
+
+#   define ISA_INDEX_IS_NPI      1
+#   define ISA_INDEX_MASK        0x0001FFFC
+#   define ISA_INDEX_SHIFT       2
+#   define ISA_INDEX_BITS        15
+#   define ISA_INDEX_COUNT       (1 << ISA_INDEX_BITS)
+#   define ISA_INDEX_MAGIC_MASK  0x001E0001
+#   define ISA_INDEX_MAGIC_VALUE 0x001C0001
+    struct {
+        uintptr_t nonpointer        : 1;
+        uintptr_t has_assoc         : 1;
+        uintptr_t indexcls          : 15;
+        uintptr_t magic             : 4;
+        uintptr_t has_cxx_dtor      : 1;
+        uintptr_t weakly_referenced : 1;
+        uintptr_t deallocating      : 1;
+        uintptr_t has_sidetable_rc  : 1;
+        uintptr_t extra_rc          : 7;
+#       define RC_ONE   (1ULL<<25)
+#       define RC_HALF  (1ULL<<6)
+    };
+
+# else
+#   error unknown architecture for indexed isa
+# endif
+
+// SUPPORT_INDEXED_ISA
 #endif
 
 };
@@ -142,17 +183,19 @@ public:
     // initClassIsa(): class objects
     // initProtocolIsa(): protocol objects
     // initIsa(): other objects
-    void initIsa(Class cls /*indexed=false*/);
-    void initClassIsa(Class cls /*indexed=maybe*/);
-    void initProtocolIsa(Class cls /*indexed=maybe*/);
+    void initIsa(Class cls /*nonpointer=false*/);
+    void initClassIsa(Class cls /*nonpointer=maybe*/);
+    void initProtocolIsa(Class cls /*nonpointer=maybe*/);
     void initInstanceIsa(Class cls, bool hasCxxDtor);
 
     // changeIsa() should be used to change the isa of existing objects.
     // If this is a new object, use initIsa() for performance.
     Class changeIsa(Class newCls);
 
-    bool hasIndexedIsa();
+    bool hasNonpointerIsa();
     bool isTaggedPointer();
+    bool isBasicTaggedPointer();
+    bool isExtTaggedPointer();
     bool isClass();
 
     // object may have associated objects?
@@ -185,7 +228,7 @@ public:
     void rootDealloc();
 
 private:
-    void initIsa(Class newCls, bool indexed, bool hasCxxDtor);
+    void initIsa(Class newCls, bool nonpointer, bool hasCxxDtor);
 
     // Slow paths for inline control
     id rootAutorelease2();
@@ -256,10 +299,6 @@ typedef struct old_property *objc_property_t;
 #include "maptable.h"
 #include "hashtable2.h"
 
-#if SUPPORT_GC
-#include "objc-auto.h"
-#endif
-
 /* Do not include message.h here. */
 /* #include "message.h" */
 
@@ -289,87 +328,122 @@ struct objc_selopt_t;
 #endif
 
 
+#define STRINGIFY(x) #x
+#define STRINGIFY2(x) STRINGIFY(x)
+
 __BEGIN_DECLS
 
+struct header_info;
 
-#if (defined(OBJC_NO_GC) && SUPPORT_GC)  ||  \
-    (!defined(OBJC_NO_GC) && !SUPPORT_GC)
-#   error OBJC_NO_GC and SUPPORT_GC inconsistent
-#endif
+// Split out the rw data from header info.  For now put it in a huge array
+// that more than exceeds the space needed.  In future we'll just allocate
+// this in the shared cache builder.
+typedef struct header_info_rw {
 
-#if SUPPORT_GC
-#   include <auto_zone.h>
-    // PRIVATE_EXTERN is needed to help the compiler know "how" extern these are
-    PRIVATE_EXTERN extern int8_t UseGC;          // equivalent to calling objc_collecting_enabled()
-    PRIVATE_EXTERN extern auto_zone_t *gc_zone;  // the GC zone, or NULL if no GC
-    extern void objc_addRegisteredClass(Class c);
-    extern void objc_removeRegisteredClass(Class c);
+    bool getLoaded() const {
+        return isLoaded;
+    }
+
+    void setLoaded(bool v) {
+        isLoaded = v ? 1: 0;
+    }
+
+    bool getAllClassesRealized() const {
+        return allClassesRealized;
+    }
+
+    void setAllClassesRealized(bool v) {
+        allClassesRealized = v ? 1: 0;
+    }
+
+    header_info *getNext() const {
+        return (header_info *)(next << 2);
+    }
+
+    void setNext(header_info *v) {
+        next = ((uintptr_t)v) >> 2;
+    }
+
+private:
+#ifdef __LP64__
+    uintptr_t isLoaded              : 1;
+    uintptr_t allClassesRealized    : 1;
+    uintptr_t next                  : 62;
 #else
-#   define UseGC NO
-#   define gc_zone NULL
-#   define objc_addRegisteredClass(c) do {} while(0)
-#   define objc_removeRegisteredClass(c) do {} while(0)
-    /* Uses of the following must be protected with UseGC. */
-    extern id gc_unsupported_dont_call();
-#   define auto_zone_allocate_object gc_unsupported_dont_call
-#   define auto_zone_retain gc_unsupported_dont_call
-#   define auto_zone_release gc_unsupported_dont_call
-#   define auto_zone_is_valid_pointer gc_unsupported_dont_call
-#   define auto_zone_write_barrier_memmove gc_unsupported_dont_call
-#   define AUTO_OBJECT_SCANNED 0
+    uintptr_t isLoaded              : 1;
+    uintptr_t allClassesRealized    : 1;
+    uintptr_t next                  : 30;
 #endif
+} header_info_rw;
 
-
-#define _objcHeaderIsReplacement(h)  ((h)->info  &&  ((h)->info->flags & OBJC_IMAGE_IS_REPLACEMENT))
-
-/* OBJC_IMAGE_IS_REPLACEMENT:
-   Don't load any classes
-   Don't load any categories
-   Do fix up selector refs (@selector points to them)
-   Do fix up class refs (@class and objc_msgSend points to them)
-   Do fix up protocols (@protocol points to them)
-   Do fix up superclass pointers in classes ([super ...] points to them)
-   Future: do load new classes?
-   Future: do load new categories?
-   Future: do insert new methods on existing classes?
-   Future: do insert new methods on existing categories?
-*/
-
-#define _objcInfoSupportsGC(info) (((info)->flags & OBJC_IMAGE_SUPPORTS_GC) ? 1 : 0)
-#define _objcInfoRequiresGC(info) (((info)->flags & OBJC_IMAGE_REQUIRES_GC) ? 1 : 0)
-#define _objcHeaderSupportsGC(h) ((h)->info && _objcInfoSupportsGC((h)->info))
-#define _objcHeaderRequiresGC(h) ((h)->info && _objcInfoRequiresGC((h)->info))
-
-/* OBJC_IMAGE_SUPPORTS_GC:
-    was compiled with -fobjc-gc flag, regardless of whether write-barriers were issued
-    if executable image compiled this way, then all subsequent libraries etc. must also be this way
-*/
-
-#define _objcHeaderOptimizedByDyld(h)  ((h)->info  &&  ((h)->info->flags & OBJC_IMAGE_OPTIMIZED_BY_DYLD))
-
-/* OBJC_IMAGE_OPTIMIZED_BY_DYLD:
-   Assorted metadata precooked in the dyld shared cache.
-   Never set for images outside the shared cache file itself.
-*/
-   
+struct header_info_rw* getPreoptimizedHeaderRW(const struct header_info *const hdr);
 
 typedef struct header_info {
-    struct header_info *next;
-    const headerType *mhdr;
-    const objc_image_info *info;
-    const char *fname;  // same as Dl_info.dli_fname
-    bool loaded;
-    bool inSharedCache;
-    bool allClassesRealized;
+private:
+    // Note, this is no longer a pointer, but instead an offset to a pointer
+    // from this location.
+    intptr_t mhdr_offset;
+
+    // Note, this is no longer a pointer, but instead an offset to a pointer
+    // from this location.
+    intptr_t info_offset;
 
     // Do not add fields without editing ObjCModernAbstraction.hpp
+public:
+
+    header_info_rw *getHeaderInfoRW() {
+        header_info_rw *preopt =
+            isPreoptimized() ? getPreoptimizedHeaderRW(this) : nil;
+        if (preopt) return preopt;
+        else return &rw_data[0];
+    }
+
+    const headerType *mhdr() const {
+        return (const headerType *)(((intptr_t)&mhdr_offset) + mhdr_offset);
+    }
+
+    void setmhdr(const headerType *mhdr) {
+        mhdr_offset = (intptr_t)mhdr - (intptr_t)&mhdr_offset;
+    }
+
+    const objc_image_info *info() const {
+        return (const objc_image_info *)(((intptr_t)&info_offset) + info_offset);
+    }
+
+    void setinfo(const objc_image_info *info) {
+        info_offset = (intptr_t)info - (intptr_t)&info_offset;
+    }
 
     bool isLoaded() {
-        return loaded;
+        return getHeaderInfoRW()->getLoaded();
+    }
+
+    void setLoaded(bool v) {
+        getHeaderInfoRW()->setLoaded(v);
+    }
+
+    bool areAllClassesRealized() {
+        return getHeaderInfoRW()->getAllClassesRealized();
+    }
+
+    void setAllClassesRealized(bool v) {
+        getHeaderInfoRW()->setAllClassesRealized(v);
+    }
+
+    header_info *getNext() {
+        return getHeaderInfoRW()->getNext();
+    }
+
+    void setNext(header_info *v) {
+        getHeaderInfoRW()->setNext(v);
     }
 
     bool isBundle() {
-        return mhdr->filetype == MH_BUNDLE;
+        return mhdr()->filetype == MH_BUNDLE;
+    }
+
+    const char *fname() const {
+        return dyld_image_path_containing_address(mhdr());
     }
 
     bool isPreoptimized() const;
@@ -392,6 +466,11 @@ typedef struct header_info {
     TCHAR *moduleName;
 # endif
 #endif
+
+private:
+    // Images in the shared cache will have an empty array here while those
+    // allocated at run time will allocate a single entry.
+    header_info_rw rw_data[];
 } header_info;
 
 extern header_info *FirstHeader;
@@ -405,8 +484,27 @@ extern objc_image_info *_getObjcImageInfo(const headerType *head, size_t *size);
 extern bool _hasObjcContents(const header_info *hi);
 
 
+// Mach-O segment and section names are 16 bytes and may be un-terminated.
+
+static inline bool segnameEquals(const char *lhs, const char *rhs) {
+    return 0 == strncmp(lhs, rhs, 16);
+}
+
+static inline bool segnameStartsWith(const char *segname, const char *prefix) {
+    return 0 == strncmp(segname, prefix, strlen(prefix));
+}
+
+static inline bool sectnameEquals(const char *lhs, const char *rhs) {
+    return segnameEquals(lhs, rhs);
+}
+
+static inline bool sectnameStartsWith(const char *sectname, const char *prefix){
+    return segnameStartsWith(sectname, prefix);
+}
+
+
 /* selectors */
-extern void sel_init(bool gc, size_t selrefCount);
+extern void sel_init(size_t selrefCount);
 extern SEL sel_registerNameNoLock(const char *str, bool copy);
 extern void sel_lock(void);
 extern void sel_unlock(void);
@@ -426,7 +524,6 @@ extern SEL SEL_allocWithZone;
 extern SEL SEL_dealloc;
 extern SEL SEL_copy;
 extern SEL SEL_new;
-extern SEL SEL_finalize;
 extern SEL SEL_forwardInvocation;
 extern SEL SEL_tryRetain;
 extern SEL SEL_isDeallocating;
@@ -437,12 +534,14 @@ extern SEL SEL_allowsWeakReference;
 extern void preopt_init(void);
 extern void disableSharedCacheOptimizations(void);
 extern bool isPreoptimized(void);
+extern bool noMissingWeakSuperclasses(void);
 extern header_info *preoptimizedHinfoForHeader(const headerType *mhdr);
 
 extern objc_selopt_t *preoptimizedSelectors(void);
 
 extern Protocol *getPreoptimizedProtocol(const char *name);
 
+extern unsigned getPreoptimizedClassUnreasonableCount();
 extern Class getPreoptimizedClass(const char *name);
 extern Class* copyPreoptimizedClasses(const char *name, int *outCount);
 
@@ -466,12 +565,8 @@ extern IMP _class_lookupMethodAndLoadCache3(id, SEL, Class);
 
 #if !OBJC_OLD_DISPATCH_PROTOTYPES
 extern void _objc_msgForward_impcache(void);
-extern void _objc_ignored_method(void);
-extern void _objc_msgSend_uncached_impcache(void);
 #else
 extern id _objc_msgForward_impcache(id, SEL, ...);
-extern id _objc_ignored_method(id, SEL, ...);
-extern id _objc_msgSend_uncached_impcache(id, SEL, ...);
 #endif
 
 /* errors */
@@ -481,8 +576,6 @@ extern void _objc_inform_on_crash(const char *fmt, ...) __attribute__((format (p
 extern void _objc_inform_now_and_on_crash(const char *fmt, ...) __attribute__((format (printf, 1, 2)));
 extern void _objc_inform_deprecated(const char *oldname, const char *newname) __attribute__((noinline));
 extern void inform_duplicate(const char *name, Class oldCls, Class cls);
-extern bool crashlog_header_name(header_info *hi);
-extern bool crashlog_header_name_string(const char *name);
 
 /* magic */
 extern Class _objc_getFreedObjectClass (void);
@@ -502,29 +595,12 @@ extern char *copyPropertyAttributeValue(const char *attrs, const char *name);
 
 /* locking */
 extern void lock_init(void);
-extern rwlock_t selLock;
-extern mutex_t cacheUpdateLock;
-extern recursive_mutex_t loadMethodLock;
-#if __OBJC2__
-extern rwlock_t runtimeLock;
-#else
-extern mutex_t classLock;
-extern mutex_t methodListLock;
-#endif
 
 class monitor_locker_t : nocopy_t {
     monitor_t& lock;
   public:
     monitor_locker_t(monitor_t& newLock) : lock(newLock) { lock.enter(); }
     ~monitor_locker_t() { lock.leave(); }
-};
-
-class mutex_locker_t : nocopy_t {
-    mutex_t& lock;
-  public:
-    mutex_locker_t(mutex_t& newLock) 
-        : lock(newLock) { lock.lock(); }
-    ~mutex_locker_t() { lock.unlock(); }
 };
 
 class recursive_mutex_locker_t : nocopy_t {
@@ -549,51 +625,6 @@ class rwlock_writer_t : nocopy_t {
     ~rwlock_writer_t() { lock.unlockWrite(); }
 };
 
-/* ignored selector support */
-
-/* Non-GC: no ignored selectors
-   GC (i386 Mac): some selectors ignored, remapped to kIgnore
-   GC (others): some selectors ignored, but not remapped 
-*/
-
-static inline int ignoreSelector(SEL sel)
-{
-#if !SUPPORT_GC
-    return NO;
-#elif SUPPORT_IGNORED_SELECTOR_CONSTANT
-    return UseGC  &&  sel == (SEL)kIgnore;
-#else
-    return UseGC  &&  
-        (sel == @selector(retain)       ||  
-         sel == @selector(release)      ||  
-         sel == @selector(autorelease)  ||  
-         sel == @selector(retainCount)  ||  
-         sel == @selector(dealloc));
-#endif
-}
-
-static inline int ignoreSelectorNamed(const char *sel)
-{
-#if !SUPPORT_GC
-    return NO;
-#else
-    // release retain retainCount dealloc autorelease
-    return (UseGC &&
-            (  (sel[0] == 'r' && sel[1] == 'e' &&
-                (strcmp(&sel[2], "lease") == 0 || 
-                 strcmp(&sel[2], "tain") == 0 ||
-                 strcmp(&sel[2], "tainCount") == 0 ))
-               ||
-               (strcmp(sel, "dealloc") == 0)
-               || 
-               (sel[0] == 'a' && sel[1] == 'u' && 
-                strcmp(&sel[2], "torelease") == 0)));
-#endif
-}
-
-/* GC startup */
-extern void gc_init(bool wantsGC);
-extern void gc_init2(void);
 
 /* Exceptions */
 struct alt_handler_list;
@@ -607,36 +638,6 @@ extern void _destroyAltHandlerList(struct alt_handler_list *list);
 #define OBJC_CLASS_METHODS_CHANGED (1<<3)
 extern void gdb_objc_class_changed(Class cls, unsigned long changes, const char *classname)
     __attribute__((noinline));
-
-#if SUPPORT_GC
-
-/* Write barrier implementations */
-extern id objc_getAssociatedObject_non_gc(id object, const void *key);
-extern void objc_setAssociatedObject_non_gc(id object, const void *key, id value, objc_AssociationPolicy policy);
-
-extern id objc_getAssociatedObject_gc(id object, const void *key);
-extern void objc_setAssociatedObject_gc(id object, const void *key, id value, objc_AssociationPolicy policy);
-
-/* xrefs */
-extern objc_xref_t _object_addExternalReference_non_gc(id obj, objc_xref_t type);
-extern id _object_readExternalReference_non_gc(objc_xref_t ref);
-extern void _object_removeExternalReference_non_gc(objc_xref_t ref);
-
-extern objc_xref_t _object_addExternalReference_gc(id obj, objc_xref_t type);
-extern id _object_readExternalReference_gc(objc_xref_t ref);
-extern void _object_removeExternalReference_gc(objc_xref_t ref);
-
-/* GC weak reference fixup. */
-extern void gc_fixup_weakreferences(id newObject, id oldObject);
-
-/* GC datasegment registration. */
-extern void gc_register_datasegment(uintptr_t base, size_t size);
-extern void gc_unregister_datasegment(uintptr_t base, size_t size);
-
-/* objc_dumpHeap implementation */
-extern bool _objc_dumpHeap(auto_zone_t *zone, const char *filename);
-
-#endif
 
 
 // Settings from environment variables
@@ -706,16 +707,17 @@ extern void layout_bitmap_print(layout_bitmap bits);
 
 
 // fixme runtime
+extern bool MultithreadedForkChild;
+extern id objc_noop_imp(id self, SEL _cmd);
 extern Class look_up_class(const char *aClassName, bool includeUnconnected, bool includeClassHandler);
-extern "C" const char *map_2_images(enum dyld_image_states state, uint32_t infoCount, const struct dyld_image_info infoList[]);
-extern const char *map_images_nolock(enum dyld_image_states state, uint32_t infoCount, const struct dyld_image_info infoList[]);
-extern const char * load_images(enum dyld_image_states state, uint32_t infoCount, const struct dyld_image_info infoList[]);
-extern bool load_images_nolock(enum dyld_image_states state, uint32_t infoCount, const struct dyld_image_info infoList[]);
-extern void unmap_image(const struct mach_header *mh, intptr_t vmaddr_slide);
+extern "C" void map_images(unsigned count, const char * const paths[],
+                           const struct mach_header * const mhdrs[]);
+extern void map_images_nolock(unsigned count, const char * const paths[],
+                              const struct mach_header * const mhdrs[]);
+extern void load_images(const char *path, const struct mach_header *mh);
+extern void unmap_image(const char *path, const struct mach_header *mh);
 extern void unmap_image_nolock(const struct mach_header *mh);
-extern void _read_images(header_info **hList, uint32_t hCount);
-extern void prepare_load_methods(const headerType *mhdr);
-extern bool hasLoadMethods(const headerType *mhdr);
+extern void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int unoptimizedTotalClass);
 extern void _unload_image(header_info *hi);
 extern const char ** _objc_copyClassNamesForImage(header_info *hi, unsigned int *outCount);
 
@@ -724,8 +726,7 @@ extern const header_info *_headerForClass(Class cls);
 
 extern Class _class_remap(Class cls);
 extern Class _class_getNonMetaClass(Class cls, id obj);
-extern Ivar _class_getVariable(Class cls, const char *name, Class *memberOf);
-extern uint32_t _class_getInstanceStart(Class cls);
+extern Ivar _class_getVariable(Class cls, const char *name);
 
 extern unsigned _class_createInstancesFromZone(Class cls, size_t extraBytes, void *zone, id *results, unsigned num_requested);
 extern id _objc_constructOrFree(id bytes, Class cls);
@@ -739,6 +740,10 @@ extern id object_cxxConstructFromClass(id obj, Class cls);
 extern void object_cxxDestruct(id obj);
 
 extern void _class_resolveMethod(Class cls, SEL sel, id inst);
+
+extern void fixupCopiedIvars(id newObject, id oldObject);
+extern Class _class_getClassForIvar(Class cls, Ivar ivar);
+
 
 #define OBJC_WARN_DEPRECATED \
     do { \
@@ -792,6 +797,16 @@ static T exp2m1u(T x) {
 }
 
 #endif
+
+// Misalignment-safe integer types
+__attribute__((aligned(1))) typedef uintptr_t unaligned_uintptr_t;
+__attribute__((aligned(1))) typedef  intptr_t unaligned_intptr_t;
+__attribute__((aligned(1))) typedef  uint64_t unaligned_uint64_t;
+__attribute__((aligned(1))) typedef   int64_t unaligned_int64_t;
+__attribute__((aligned(1))) typedef  uint32_t unaligned_uint32_t;
+__attribute__((aligned(1))) typedef   int32_t unaligned_int32_t;
+__attribute__((aligned(1))) typedef  uint16_t unaligned_uint16_t;
+__attribute__((aligned(1))) typedef   int16_t unaligned_int16_t;
 
 
 // Global operator new and delete. We must not use any app overrides.
@@ -862,9 +877,49 @@ class StripedMap {
         return array[indexForPointer(p)].value; 
     }
     const T& operator[] (const void *p) const { 
-        return const_cast<StripedMap<T> >(this)[p];
+        return const_cast<StripedMap<T>>(this)[p]; 
     }
 
+    // Shortcuts for StripedMaps of locks.
+    void lockAll() {
+        for (unsigned int i = 0; i < StripeCount; i++) {
+            array[i].value.lock();
+        }
+    }
+
+    void unlockAll() {
+        for (unsigned int i = 0; i < StripeCount; i++) {
+            array[i].value.unlock();
+        }
+    }
+
+    void forceResetAll() {
+        for (unsigned int i = 0; i < StripeCount; i++) {
+            array[i].value.forceReset();
+        }
+    }
+
+    void defineLockOrder() {
+        for (unsigned int i = 1; i < StripeCount; i++) {
+            lockdebug_lock_precedes_lock(&array[i-1].value, &array[i].value);
+        }
+    }
+
+    void precedeLock(const void *newlock) {
+        // assumes defineLockOrder is also called
+        lockdebug_lock_precedes_lock(&array[StripeCount-1].value, newlock);
+    }
+
+    void succeedLock(const void *oldlock) {
+        // assumes defineLockOrder is also called
+        lockdebug_lock_precedes_lock(oldlock, &array[0].value);
+    }
+
+    const void *getLock(int i) {
+        if (i < StripeCount) return &array[i].value;
+        else return nil;
+    }
+    
 #if DEBUG
     StripedMap() {
         // Verify alignment expectations.
@@ -880,7 +935,8 @@ class StripedMap {
 // DisguisedPtr<T> acts like pointer type T*, except the 
 // stored value is disguised to hide it from tools like `leaks`.
 // nil is disguised as itself so zero-filled memory works as expected, 
-// which means 0x80..00 is also diguised as itself but we don't care
+// which means 0x80..00 is also disguised as itself but we don't care.
+// Note that weak_entry_t knows about this encoding.
 template <typename T>
 class DisguisedPtr {
     uintptr_t value;
@@ -984,6 +1040,10 @@ static uint32_t ptr_hash(uint32_t key)
 #endif
 */
 
+
+
+// Lock declarations
+#include "objc-locks.h"
 
 // Inlined parts of objc_object's implementation
 #include "objc-object.h"

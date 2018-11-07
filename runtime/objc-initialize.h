@@ -34,6 +34,8 @@ extern void _class_initialize(Class cls);
 
 extern void _destroyInitializingClassList(struct _objc_initializing_classes *list);
 
+extern bool _thisThreadIsInitializingClass(Class cls);
+
 __END_DECLS
 
 #endif

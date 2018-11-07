@@ -57,7 +57,7 @@ struct option_t {
 };
 
 const option_t Settings[] = {
-#define OPTION(var, env, help) {&var, #env, help, strlen(#env)}, 
+#define OPTION(var, env, help) option_t{&var, #env, help, strlen(#env)}, 
 #include "objc-env.h"
 #undef OPTION
 };
@@ -82,7 +82,6 @@ SEL SEL_allocWithZone = NULL;
 SEL SEL_dealloc = NULL;
 SEL SEL_copy = NULL;
 SEL SEL_new = NULL;
-SEL SEL_finalize = NULL;
 SEL SEL_forwardInvocation = NULL;
 SEL SEL_tryRetain = NULL;
 SEL SEL_isDeallocating = NULL;
@@ -93,6 +92,19 @@ SEL SEL_allowsWeakReference = NULL;
 header_info *FirstHeader = 0;  // NULL means empty list
 header_info *LastHeader  = 0;  // NULL means invalid; recompute it
 int HeaderCount = 0;
+
+
+// Set to true on the child side of fork() 
+// if the parent process was multithreaded when fork() was called.
+bool MultithreadedForkChild = false;
+
+
+/***********************************************************************
+* objc_noop_imp. Used when we need to install a do-nothing method somewhere.
+**********************************************************************/
+id objc_noop_imp(id self, SEL _cmd __unused) {
+    return self;
+}
 
 
 /***********************************************************************
@@ -169,7 +181,7 @@ void appendHeader(header_info *hi)
     // Add the header to the header list. 
     // The header is appended to the list, to preserve the bottom-up order.
     HeaderCount++;
-    hi->next = NULL;
+    hi->setNext(NULL);
     if (!FirstHeader) {
         // list is empty
         FirstHeader = LastHeader = hi;
@@ -177,10 +189,10 @@ void appendHeader(header_info *hi)
         if (!LastHeader) {
             // list is not empty, but LastHeader is invalid - recompute it
             LastHeader = FirstHeader;
-            while (LastHeader->next) LastHeader = LastHeader->next;
+            while (LastHeader->getNext()) LastHeader = LastHeader->getNext();
         }
         // LastHeader is now valid
-        LastHeader->next = hi;
+        LastHeader->setNext(hi);
         LastHeader = hi;
     }
 }
@@ -195,14 +207,18 @@ void appendHeader(header_info *hi)
 **********************************************************************/
 void removeHeader(header_info *hi)
 {
-    header_info **hiP;
+    header_info *prev = NULL;
+    header_info *current = NULL;
 
-    for (hiP = &FirstHeader; *hiP != NULL; hiP = &(**hiP).next) {
-        if (*hiP == hi) {
-            header_info *deadHead = *hiP;
+    for (current = FirstHeader; current != NULL; current = current->getNext()) {
+        if (current == hi) {
+            header_info *deadHead = current;
 
-            // Remove from the linked list (updating FirstHeader if necessary).
-            *hiP = (**hiP).next;
+            // Remove from the linked list.
+            if (prev)
+                prev->setNext(current->getNext());
+            else
+                FirstHeader = current->getNext(); // no prev so removing head
             
             // Update LastHeader if necessary.
             if (LastHeader == deadHead) {
@@ -212,6 +228,7 @@ void removeHeader(header_info *hi)
             HeaderCount--;
             break;
         }
+        prev = current;
     }
 }
 
@@ -518,14 +535,15 @@ const char **objc_copyImageNames(unsigned int *outCount)
     const char **names = (const char **)calloc(max+1, sizeof(char *));
 #endif
     
-    for (hi = FirstHeader; hi != NULL && count < max; hi = hi->next) {
+    for (hi = FirstHeader; hi != NULL && count < max; hi = hi->getNext()) {
 #if TARGET_OS_WIN32
         if (hi->moduleName) {
             names[count++] = hi->moduleName;
         }
 #else
-        if (hi->fname) {
-            names[count++] = hi->fname;
+        const char *fname = hi->fname();
+        if (fname) {
+            names[count++] = fname;
         }
 #endif
     }
@@ -556,11 +574,11 @@ objc_copyClassNamesForImage(const char *image, unsigned int *outCount)
     }
 
     // Find the image.
-    for (hi = FirstHeader; hi != NULL; hi = hi->next) {
+    for (hi = FirstHeader; hi != NULL; hi = hi->getNext()) {
 #if TARGET_OS_WIN32
         if (0 == wcscmp((TCHAR *)image, hi->moduleName)) break;
 #else
-        if (0 == strcmp(image, hi->fname)) break;
+        if (0 == strcmp(image, hi->fname())) break;
 #endif
     }
     
@@ -604,67 +622,425 @@ void objc_setEnumerationMutationHandler(void (*handler)(id)) {
 * Associative Reference Support
 **********************************************************************/
 
-id objc_getAssociatedObject_non_gc(id object, const void *key) {
+id objc_getAssociatedObject(id object, const void *key) {
     return _object_get_associative_reference(object, (void *)key);
 }
 
 
-void objc_setAssociatedObject_non_gc(id object, const void *key, id value, objc_AssociationPolicy policy) {
+void objc_setAssociatedObject(id object, const void *key, id value, objc_AssociationPolicy policy) {
     _object_set_associative_reference(object, (void *)key, value, policy);
 }
 
 
-#if SUPPORT_GC
-
-id objc_getAssociatedObject_gc(id object, const void *key) {
-    // auto_zone doesn't handle tagged pointer objects. Track it ourselves.
-    if (object->isTaggedPointer()) return objc_getAssociatedObject_non_gc(object, key);
-
-    return (id)auto_zone_get_associative_ref(gc_zone, object, (void *)key);
-}
-
-void objc_setAssociatedObject_gc(id object, const void *key, id value, objc_AssociationPolicy policy) {
-    // auto_zone doesn't handle tagged pointer objects. Track it ourselves.
-    if (object->isTaggedPointer()) return objc_setAssociatedObject_non_gc(object, key, value, policy);
-
-    if ((policy & OBJC_ASSOCIATION_COPY_NONATOMIC) == OBJC_ASSOCIATION_COPY_NONATOMIC) {
-        value = ((id(*)(id, SEL))objc_msgSend)(value, SEL_copy);
-    }
-    auto_zone_set_associative_ref(gc_zone, object, (void *)key, value);
-}
-
-// objc_setAssociatedObject and objc_getAssociatedObject are 
-// resolver functions in objc-auto.mm.
-
-#else
-
-id 
-objc_getAssociatedObject(id object, const void *key) 
-{
-    return objc_getAssociatedObject_non_gc(object, key);
-}
-
-void 
-objc_setAssociatedObject(id object, const void *key, id value, 
-                         objc_AssociationPolicy policy) 
-{
-    objc_setAssociatedObject_non_gc(object, key, value, policy);
-}
-
-#endif
-
-
 void objc_removeAssociatedObjects(id object) 
 {
-#if SUPPORT_GC
-    if (UseGC) {
-        auto_zone_erase_associative_refs(gc_zone, object);
-    } else 
-#endif
-    {
-        if (object && object->hasAssociatedObjects()) {
-            _object_remove_assocations(object);
-        }
+    if (object && object->hasAssociatedObjects()) {
+        _object_remove_assocations(object);
     }
 }
 
+
+
+#if SUPPORT_GC_COMPAT
+
+#include <mach-o/fat.h>
+
+// GC preflight for an app executable.
+
+enum GCness {
+    WithGC = 1, 
+    WithoutGC = 0, 
+    Error = -1
+};
+
+// Overloaded template wrappers around clang's overflow-checked arithmetic.
+
+template <typename T> bool uadd_overflow(T x, T y, T* sum);
+template <typename T> bool usub_overflow(T x, T y, T* diff);
+template <typename T> bool umul_overflow(T x, T y, T* prod);
+
+template <typename T> bool sadd_overflow(T x, T y, T* sum);
+template <typename T> bool ssub_overflow(T x, T y, T* diff);
+template <typename T> bool smul_overflow(T x, T y, T* prod);
+
+template <> bool uadd_overflow(unsigned x, unsigned y, unsigned* sum) { return __builtin_uadd_overflow(x, y, sum); }
+template <> bool uadd_overflow(unsigned long x, unsigned long y, unsigned long* sum) { return __builtin_uaddl_overflow(x, y, sum); }
+template <> bool uadd_overflow(unsigned long long x, unsigned long long y, unsigned long long* sum) { return __builtin_uaddll_overflow(x, y, sum); }
+
+template <> bool usub_overflow(unsigned x, unsigned y, unsigned* diff) { return __builtin_usub_overflow(x, y, diff); }
+template <> bool usub_overflow(unsigned long x, unsigned long y, unsigned long* diff) { return __builtin_usubl_overflow(x, y, diff); }
+template <> bool usub_overflow(unsigned long long x, unsigned long long y, unsigned long long* diff) { return __builtin_usubll_overflow(x, y, diff); }
+
+template <> bool umul_overflow(unsigned x, unsigned y, unsigned* prod) { return __builtin_umul_overflow(x, y, prod); }
+template <> bool umul_overflow(unsigned long x, unsigned long y, unsigned long* prod) { return __builtin_umull_overflow(x, y, prod); }
+template <> bool umul_overflow(unsigned long long x, unsigned long long y, unsigned long long* prod) { return __builtin_umulll_overflow(x, y, prod); }
+
+template <> bool sadd_overflow(signed x, signed y, signed* sum) { return __builtin_sadd_overflow(x, y, sum); }
+template <> bool sadd_overflow(signed long x, signed long y, signed long* sum) { return __builtin_saddl_overflow(x, y, sum); }
+template <> bool sadd_overflow(signed long long x, signed long long y, signed long long* sum) { return __builtin_saddll_overflow(x, y, sum); }
+
+template <> bool ssub_overflow(signed x, signed y, signed* diff) { return __builtin_ssub_overflow(x, y, diff); }
+template <> bool ssub_overflow(signed long x, signed long y, signed long* diff) { return __builtin_ssubl_overflow(x, y, diff); }
+template <> bool ssub_overflow(signed long long x, signed long long y, signed long long* diff) { return __builtin_ssubll_overflow(x, y, diff); }
+
+template <> bool smul_overflow(signed x, signed y, signed* prod) { return __builtin_smul_overflow(x, y, prod); }
+template <> bool smul_overflow(signed long x, signed long y, signed long* prod) { return __builtin_smull_overflow(x, y, prod); }
+template <> bool smul_overflow(signed long long x, signed long long y, signed long long* prod) { return __builtin_smulll_overflow(x, y, prod); }
+
+
+// Range-checking subview of a file.
+class FileSlice {
+    int fd;
+    uint64_t sliceOffset;
+    uint64_t sliceSize;
+
+public:
+    FileSlice() : fd(-1), sliceOffset(0), sliceSize(0) { }
+
+    FileSlice(int newfd, uint64_t newOffset, uint64_t newSize) 
+        : fd(newfd) , sliceOffset(newOffset) , sliceSize(newSize) { }
+
+    // Read bytes from this slice. 
+    // Returns YES if all bytes were read successfully.
+    bool pread(void *buf, uint64_t readSize, uint64_t readOffset = 0) {
+        uint64_t readEnd;
+        if (uadd_overflow(readOffset, readSize, &readEnd)) return NO;
+        if (readEnd > sliceSize) return NO;
+
+        uint64_t preadOffset;
+        if (uadd_overflow(sliceOffset, readOffset, &preadOffset)) return NO;
+
+        int64_t readed = ::pread(fd, buf, (size_t)readSize, preadOffset);
+        if (readed < 0  ||  (uint64_t)readed != readSize) return NO;
+        return YES;
+    }
+
+    // Create a new slice that is a subset of this slice.
+    // Returnes YES if successful.
+    bool slice(uint64_t newOffset, uint64_t newSize, FileSlice& result) {
+        // fixme arithmetic overflow
+        uint64_t newEnd;
+        if (uadd_overflow(newOffset, newSize, &newEnd)) return NO;
+        if (newEnd > sliceSize) return NO;
+
+        if (uadd_overflow(sliceOffset, newOffset, &result.sliceOffset)) {
+            return NO;
+        }
+        result.sliceSize = newSize;
+        result.fd = fd;
+        return YES;
+    }
+
+    // Shorten this slice in place by removing a range from the start.
+    bool advance(uint64_t distance) {
+        if (distance > sliceSize) return NO;
+        if (uadd_overflow(sliceOffset, distance, &sliceOffset)) return NO;
+        if (usub_overflow(sliceSize, distance, &sliceSize)) return NO;
+        return YES;
+    }
+};
+
+
+// Arch32 and Arch64 are used to specialize sliceRequiresGC()
+// to interrogate old-ABI i386 and new-ABI x86_64 files.
+
+struct Arch32 {
+    using mh_t = struct mach_header;
+    using segment_command_t = struct segment_command;
+    using section_t = struct section;
+
+    enum : cpu_type_t { cputype = CPU_TYPE_X86 };
+    enum : int { segment_cmd = LC_SEGMENT };
+
+    static bool isObjCSegment(const char *segname) {
+        return segnameEquals(segname, "__OBJC");
+    }
+
+    static bool isImageInfoSection(const char *sectname) {
+        return sectnameEquals(sectname, "__image_info");
+    }
+
+    static bool countClasses(FileSlice file, section_t& sect, 
+                             int& classCount, int& classrefCount)
+    {
+        if (sectnameEquals(sect.sectname, "__cls_refs")) {
+            classrefCount += sect.size / 4;
+        }
+        else if (sectnameEquals(sect.sectname, "__module_info")) {
+            struct module_t {
+                uint32_t version;
+                uint32_t size;
+                uint32_t name;    // not bound
+                uint32_t symtab;  // not bound
+            };
+            size_t mod_count = sect.size / sizeof(module_t);
+            if (mod_count == 0) {
+                // no classes defined
+            } else if (mod_count > 1) {
+                // AppleScriptObjC apps only have one module.
+                // Disqualify this app by setting classCount to non-zero.
+                // We don't actually need an accurate count.
+                classCount = 1;
+            } else if (mod_count == 1) {
+                FileSlice moduleSlice;
+                if (!file.slice(sect.offset, sect.size, moduleSlice)) return NO;
+                module_t module;
+                if (!moduleSlice.pread(&module, sizeof(module))) return NO;
+                if (module.symtab) {
+                    // AppleScriptObjC apps only have a module with no symtab.
+                    // Disqualify this app by setting classCount to non-zero.
+                    // We don't actually need an accurate count.
+                    classCount = 1;
+                }
+            }
+            
+        }
+        return YES;
+    }
+
+};
+
+struct Arch64 {
+    using mh_t = struct mach_header_64;
+    using segment_command_t = struct segment_command_64;
+    using section_t = struct section_64;
+
+    enum : cpu_type_t { cputype = CPU_TYPE_X86_64 };
+    enum : int { segment_cmd = LC_SEGMENT_64 };
+
+    static bool isObjCSegment(const char *segname) {
+        return 
+            segnameEquals(segname, "__DATA")  ||  
+            segnameEquals(segname, "__DATA_CONST")  ||  
+            segnameEquals(segname, "__DATA_DIRTY");
+    }
+
+    static bool isImageInfoSection(const char *sectname) {
+        return sectnameEquals(sectname, "__objc_imageinfo");
+    }
+
+    static bool countClasses(FileSlice, section_t& sect, 
+                             int& classCount, int& classrefCount)
+    {
+        if (sectnameEquals(sect.sectname, "__objc_classlist")) {
+            classCount += sect.size / 8;
+        }
+        else if (sectnameEquals(sect.sectname, "__objc_classrefs")) {
+            classrefCount += sect.size / 8;
+        }
+        return YES;
+    }
+};
+
+
+#define SANE_HEADER_SIZE (32*1024)
+
+template <typename Arch>
+static int sliceRequiresGC(typename Arch::mh_t mh, FileSlice file)
+{
+    // We assume there is only one arch per pointer size that can support GC.
+    // (i386 and x86_64)
+    if (mh.cputype != Arch::cputype) return 0;
+
+    // We only check the main executable.
+    if (mh.filetype != MH_EXECUTE) return 0;
+
+    // Look for ObjC segment.
+    // Look for AppleScriptObjC linkage.
+    FileSlice cmds;
+    if (!file.slice(sizeof(mh), mh.sizeofcmds, cmds)) return Error;
+
+    // Exception: Some AppleScriptObjC apps built for GC can run without GC.
+    // 1. executable defines no classes
+    // 2. executable references NSBundle only
+    // 3. executable links to AppleScriptObjC.framework
+    // Note that shouldRejectGCApp() also knows about this.
+    bool wantsGC = NO;
+    bool linksToAppleScriptObjC = NO;
+    int classCount = 0;
+    int classrefCount = 0;
+
+    // Disallow abusively-large executables that could hang this checker.
+    // dyld performs similar checks (MAX_MACH_O_HEADER_AND_LOAD_COMMANDS_SIZE)
+    if (mh.sizeofcmds > SANE_HEADER_SIZE) return Error;
+    if (mh.ncmds > mh.sizeofcmds / sizeof(struct load_command)) return Error;
+
+    for (uint32_t cmdindex = 0; cmdindex < mh.ncmds; cmdindex++) {
+        struct load_command lc;
+        if (!cmds.pread(&lc, sizeof(lc))) return Error;
+
+        // Disallow abusively-small load commands that could hang this checker.
+        // dyld performs a similar check.
+        if (lc.cmdsize < sizeof(lc)) return Error;
+
+        if (lc.cmd == LC_LOAD_DYLIB  ||  lc.cmd == LC_LOAD_UPWARD_DYLIB  ||  
+            lc.cmd == LC_LOAD_WEAK_DYLIB  ||  lc.cmd == LC_REEXPORT_DYLIB) 
+        {
+            // Look for AppleScriptObjC linkage.
+            FileSlice dylibSlice;
+            if (!cmds.slice(0, lc.cmdsize, dylibSlice)) return Error;
+            struct dylib_command dylib;
+            if (!dylibSlice.pread(&dylib, sizeof(dylib))) return Error;
+
+            const char *asoFramework = 
+                "/System/Library/Frameworks/AppleScriptObjC.framework"
+                "/Versions/A/AppleScriptObjC";
+            size_t asoLen = strlen(asoFramework);
+
+            FileSlice nameSlice;
+            if (dylibSlice.slice(dylib.dylib.name.offset, asoLen, nameSlice)) {
+                char name[asoLen];
+                if (!nameSlice.pread(name, asoLen)) return Error;
+                if (0 == memcmp(name, asoFramework, asoLen)) {
+                    linksToAppleScriptObjC = YES;
+                }
+            }
+        }
+        else if (lc.cmd == Arch::segment_cmd) {
+            typename Arch::segment_command_t seg;
+            if (!cmds.pread(&seg, sizeof(seg))) return Error;
+
+            if (Arch::isObjCSegment(seg.segname)) {
+                // ObjC segment. 
+                // Look for image info section.
+                // Look for class implementations and class references.
+                FileSlice sections;
+                if (!cmds.slice(0, seg.cmdsize, sections)) return Error;
+                if (!sections.advance(sizeof(seg))) return Error;
+                
+                for (uint32_t segindex = 0; segindex < seg.nsects; segindex++) {
+                    typename Arch::section_t sect;
+                    if (!sections.pread(&sect, sizeof(sect))) return Error;
+                    if (!Arch::isObjCSegment(sect.segname)) return Error;
+
+                    if (!Arch::countClasses(file, sect, 
+                                            classCount, classrefCount)) 
+                    {
+                        return Error;
+                    }
+
+                    if ((sect.flags & SECTION_TYPE) == S_REGULAR  &&  
+                        Arch::isImageInfoSection(sect.sectname))
+                    {
+                        // ObjC image info section.
+                        // Check its contents.
+                        FileSlice section;
+                        if (!file.slice(sect.offset, sect.size, section)) {
+                            return Error;
+                        }
+                        // The subset of objc_image_info that was in use for GC.
+                        struct {
+                            uint32_t version;
+                            uint32_t flags;
+                        } ii;
+                        if (!section.pread(&ii, sizeof(ii))) return Error;
+                        if (ii.flags & (1<<1)) {
+                            // App wants GC. 
+                            // Don't return yet because we need to 
+                            // check the AppleScriptObjC exception.
+                            wantsGC = YES;
+                        }
+                    }
+
+                    if (!sections.advance(sizeof(sect))) return Error;
+                }
+            }
+        }
+
+        if (!cmds.advance(lc.cmdsize)) return Error;
+    }
+
+    if (!wantsGC) {
+        // No GC bit set.
+        return WithoutGC;
+    }
+    else if (linksToAppleScriptObjC && classCount == 0 && classrefCount == 1) {
+        // Has GC bit but falls under the AppleScriptObjC exception.
+        return WithoutGC;
+    }
+    else {
+        // Has GC bit and is not AppleScriptObjC.
+        return WithGC;
+    }
+}
+
+
+static int sliceRequiresGC(FileSlice file)
+{
+    // Read mach-o header.
+    struct mach_header_64 mh;
+    if (!file.pread(&mh, sizeof(mh))) return Error;
+
+    // Check header magic. We assume only host-endian slices can support GC.
+    switch (mh.magic) {
+    case MH_MAGIC:
+        return sliceRequiresGC<Arch32>(*(struct mach_header *)&mh, file);
+    case MH_MAGIC_64:
+        return sliceRequiresGC<Arch64>(mh, file);
+    default:
+        return WithoutGC;
+    }
+}
+
+
+// Returns 1 if any slice requires GC.
+// Returns 0 if no slice requires GC.
+// Returns -1 on any I/O or file format error.
+int objc_appRequiresGC(int fd)
+{
+    struct stat st;
+    if (fstat(fd, &st) < 0) return Error;
+
+    FileSlice file(fd, 0, st.st_size);
+
+    // Read fat header, if any.
+    struct fat_header fh;
+
+    if (! file.pread(&fh, sizeof(fh))) return Error;
+
+    int result;
+
+    if (OSSwapBigToHostInt32(fh.magic) == FAT_MAGIC) {
+        // Fat header.
+
+        size_t nfat_arch = OSSwapBigToHostInt32(fh.nfat_arch);
+        // Disallow abusively-large files that could hang this checker.
+        if (nfat_arch > SANE_HEADER_SIZE/sizeof(struct fat_arch)) return Error;
+
+        size_t fat_size;
+        if (umul_overflow(nfat_arch, sizeof(struct fat_arch), &fat_size)) {
+            return Error;
+        }
+
+        FileSlice archlist;
+        if (!file.slice(sizeof(fh), fat_size, archlist)) return Error;
+
+        result = WithoutGC;
+        for (size_t i = 0; i < nfat_arch; i++) {
+            struct fat_arch fa;
+            if (!archlist.pread(&fa, sizeof(fa))) return Error;
+            if (!archlist.advance(sizeof(fa))) return Error;
+
+            FileSlice thin;
+            if (!file.slice(OSSwapBigToHostInt32(fa.offset), 
+                            OSSwapBigToHostInt32(fa.size), thin)) 
+            {
+                return Error;
+            }
+            switch (sliceRequiresGC(thin)) {
+            case WithoutGC: break; // no change
+            case WithGC: if (result != Error) result = WithGC; break;
+            case Error: result = Error; break;
+            }
+        }
+    }
+    else {
+        // Thin header or not a header.
+        result = sliceRequiresGC(file);
+    }
+    
+    return result;
+}
+
+// SUPPORT_GC_COMPAT
+#endif

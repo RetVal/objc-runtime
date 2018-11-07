@@ -32,7 +32,7 @@
 #ifndef _OBJC_LIST_H_
 #define _OBJC_LIST_H_
 
-#if __OBJC__  &&  !__OBJC2__  &&  !__cplusplus
+#if __OBJC__  &&  !__OBJC2__  &&  !__cplusplus  &&  !__has_feature(objc_arc)
 
 #include <objc/Object.h>
 #include <Availability.h>

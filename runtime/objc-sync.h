@@ -35,33 +35,25 @@
  * 
  * @return OBJC_SYNC_SUCCESS once lock is acquired.  
  */
-OBJC_EXPORT  int objc_sync_enter(id obj)
-    __OSX_AVAILABLE_STARTING(__MAC_10_3, __IPHONE_2_0);
+OBJC_EXPORT int
+objc_sync_enter(id _Nonnull obj)
+    OBJC_AVAILABLE(10.3, 2.0, 9.0, 1.0, 2.0);
 
 /** 
  * End synchronizing on 'obj'. 
  * 
- * @param obj The objet to end synchronizing on.
+ * @param obj The object to end synchronizing on.
  * 
  * @return OBJC_SYNC_SUCCESS or OBJC_SYNC_NOT_OWNING_THREAD_ERROR
  */
-OBJC_EXPORT  int objc_sync_exit(id obj)
-    __OSX_AVAILABLE_STARTING(__MAC_10_3, __IPHONE_2_0);
-
-// The wait/notify functions have never worked correctly and no longer exist.
-OBJC_EXPORT  int objc_sync_wait(id obj, long long milliSecondsMaxWait) 
-    UNAVAILABLE_ATTRIBUTE;
-OBJC_EXPORT  int objc_sync_notify(id obj) 
-    UNAVAILABLE_ATTRIBUTE;
-OBJC_EXPORT  int objc_sync_notifyAll(id obj) 
-    UNAVAILABLE_ATTRIBUTE;
+OBJC_EXPORT int
+objc_sync_exit(id _Nonnull obj)
+    OBJC_AVAILABLE(10.3, 2.0, 9.0, 1.0, 2.0);
 
 enum {
-	OBJC_SYNC_SUCCESS                 = 0,
-	OBJC_SYNC_NOT_OWNING_THREAD_ERROR = -1,
-	OBJC_SYNC_TIMED_OUT               = -2,
-	OBJC_SYNC_NOT_INITIALIZED         = -3		
+    OBJC_SYNC_SUCCESS                 = 0,
+    OBJC_SYNC_NOT_OWNING_THREAD_ERROR = -1
 };
 
 
-#endif // __OBJC_SNYC_H_
+#endif // __OBJC_SYNC_H_

@@ -173,11 +173,6 @@ static inline mask_t cache_next(mask_t i, mask_t mask) {
 #endif
 
 
-#if SUPPORT_IGNORED_SELECTOR_CONSTANT
-#error sorry not implemented
-#endif
-
-
 // copied from dispatch_atomic_maximally_synchronizing_barrier
 // fixme verify that this barrier hack does in fact work here
 #if __x86_64__
@@ -494,7 +489,8 @@ void cache_t::bad_cache(id receiver, SEL sel, Class isa)
     _objc_inform_now_and_on_crash
         ("isa '%s'", isa->nameForLogging());
     _objc_fatal
-        ("Method cache corrupted.");
+        ("Method cache corrupted. This may be a message to an "
+         "invalid object, or a memory error somewhere else.");
 }
 
 
@@ -853,8 +849,11 @@ void cache_collect(bool collectALot)
     }
     
     // Dispose all refs now in the garbage
+    // Erase each entry so debugging tools don't see stale pointers.
     while (garbage_count--) {
-        free(garbage_refs[garbage_count]);
+        auto dead = garbage_refs[garbage_count];
+        garbage_refs[garbage_count] = nil;
+        free(dead);
     }
     
     // Clear the garbage count and total size indicator

@@ -18,7 +18,7 @@
 @property (readonly) NSUInteger hash;
 
 @property (readonly) Class superclass;
-- (Class)class OBJC_SWIFT_UNAVAILABLE("use 'anObject.dynamicType' instead");
+- (Class)class OBJC_SWIFT_UNAVAILABLE("use 'type(of: anObject)' instead");
 - (instancetype)self;
 
 - (id)performSelector:(SEL)aSelector;
@@ -47,11 +47,14 @@
 @end
 
 
-__OSX_AVAILABLE_STARTING(__MAC_10_0, __IPHONE_2_0)
+OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0, 2.0)
 OBJC_ROOT_CLASS
 OBJC_EXPORT
 @interface NSObject <NSObject> {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wobjc-interface-ivars"
     Class isa  OBJC_ISA_AVAILABILITY;
+#pragma clang diagnostic pop
 }
 
 + (void)load;
@@ -68,7 +71,7 @@ OBJC_EXPORT
 + (instancetype)alloc OBJC_SWIFT_UNAVAILABLE("use object initializers instead");
 - (void)dealloc OBJC_SWIFT_UNAVAILABLE("use 'deinit' to define a de-initializer");
 
-- (void)finalize;
+- (void)finalize OBJC_DEPRECATED("Objective-C garbage collection is no longer supported");
 
 - (id)copy;
 - (id)mutableCopy;
@@ -82,7 +85,7 @@ OBJC_EXPORT
 + (IMP)instanceMethodForSelector:(SEL)aSelector;
 - (void)doesNotRecognizeSelector:(SEL)aSelector;
 
-- (id)forwardingTargetForSelector:(SEL)aSelector __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0);
+- (id)forwardingTargetForSelector:(SEL)aSelector OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
 - (void)forwardInvocation:(NSInvocation *)anInvocation OBJC_SWIFT_UNAVAILABLE("");
 - (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector OBJC_SWIFT_UNAVAILABLE("");
 
@@ -93,8 +96,8 @@ OBJC_EXPORT
 
 + (BOOL)isSubclassOfClass:(Class)aClass;
 
-+ (BOOL)resolveClassMethod:(SEL)sel __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0);
-+ (BOOL)resolveInstanceMethod:(SEL)sel __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0);
++ (BOOL)resolveClassMethod:(SEL)sel OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
++ (BOOL)resolveInstanceMethod:(SEL)sel OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
 
 + (NSUInteger)hash;
 + (Class)superclass;
