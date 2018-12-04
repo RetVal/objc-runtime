@@ -64,6 +64,18 @@
 #define __TSD_THREAD_QOS_CLASS 4
 #endif
 
+#ifndef __TSD_RETURN_TO_KERNEL
+#define __TSD_RETURN_TO_KERNEL 5
+#endif
+
+#ifndef __TSD_PTR_MUNGE
+#define __TSD_PTR_MUNGE 7
+#endif
+
+#ifndef __TSD_MACH_SPECIAL_REPLY
+#define __TSD_MACH_SPECIAL_REPLY 8
+#endif
+
 /* Constant TSD slots for inline pthread_getspecific() usage. */
 
 /* Keys 0 - 9 are for Libsyscall/libplatform usage */
@@ -72,7 +84,10 @@
 #define _PTHREAD_TSD_SLOT_MIG_REPLY __TSD_MIG_REPLY
 #define _PTHREAD_TSD_SLOT_MACH_THREAD_SELF __TSD_MACH_THREAD_SELF
 #define _PTHREAD_TSD_SLOT_PTHREAD_QOS_CLASS	__TSD_THREAD_QOS_CLASS
-//#define _PTHREAD_TSD_SLOT_SEMAPHORE_CACHE__TSD_SEMAPHORE_CACHE
+#define _PTHREAD_TSD_SLOT_RETURN_TO_KERNEL __TSD_RETURN_TO_KERNEL
+#define _PTHREAD_TSD_SLOT_PTR_MUNGE __TSD_PTR_MUNGE
+#define _PTHREAD_TSD_SLOT_MACH_SPECIAL_REPLY __TSD_MACH_SPECIAL_REPLY
+//#define _PTHREAD_TSD_SLOT_SEMAPHORE_CACHE __TSD_SEMAPHORE_CACHE
 
 /*
  * Windows 64-bit ABI bakes %gs relative accesses into its code in the same
@@ -208,17 +223,14 @@ extern int pthread_setspecific(unsigned long, const void *);
 /* setup destructor function for static key as it is not created with pthread_key_create() */
 extern int pthread_key_init_np(int, void (*)(void *));
 
-__OSX_AVAILABLE(10.12)
-__IOS_AVAILABLE(10.0)
-__TVOS_AVAILABLE(10.0)
-__WATCHOS_AVAILABLE(3.0)
+__API_AVAILABLE(macos(10.12), ios(10.0), tvos(10.0), watchos(3.0))
 extern int _pthread_setspecific_static(unsigned long, void *);
 
 #if PTHREAD_LAYOUT_SPI
 
 /* SPI intended for CoreSymbolication only */
 
-__OSX_AVAILABLE_STARTING(__MAC_10_10,__IPHONE_8_0)
+__API_AVAILABLE(macos(10.10), ios(8.0))
 extern const struct pthread_layout_offsets_s {
 	// always add new fields at the end
 	const uint16_t plo_version;

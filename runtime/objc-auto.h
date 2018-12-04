@@ -63,7 +63,8 @@ enum {
 };
 
 
-#ifndef OBJC_NO_GC
+#if !defined(OBJC_NO_GC)  ||  \
+    (OBJC_DECLARE_SYMBOLS && !defined(OBJC_NO_GC_API))
 
 
 /* Out-of-line declarations */

@@ -67,7 +67,7 @@ void sel_init(size_t selrefCount)
 #define s(x) SEL_##x = sel_registerNameNoLock(#x, NO)
 #define t(x,y) SEL_##y = sel_registerNameNoLock(#x, NO)
 
-    sel_lock();
+    mutex_locker_t lock(selLock);
 
     s(load);
     s(initialize);
@@ -90,8 +90,6 @@ void sel_init(size_t selrefCount)
     s(retainWeakReference);
     s(allowsWeakReference);
 
-    sel_unlock();
-
 #undef s
 #undef t
 }
@@ -99,7 +97,7 @@ void sel_init(size_t selrefCount)
 
 static SEL sel_alloc(const char *name, bool copy)
 {
-    selLock.assertWriting();
+    selLock.assertLocked();
     return (SEL)(copy ? strdupIfMutable(name) : name);    
 }
 
@@ -119,7 +117,7 @@ BOOL sel_isMapped(SEL sel)
 
     if (sel == search_builtins(name)) return YES;
 
-    rwlock_reader_t lock(selLock);
+    mutex_locker_t lock(selLock);
     if (namedSelectors) {
         return (sel == (SEL)NXMapGet(namedSelectors, name));
     }
@@ -136,36 +134,29 @@ static SEL search_builtins(const char *name)
 }
 
 
-static SEL __sel_registerName(const char *name, int lock, int copy) 
+static SEL __sel_registerName(const char *name, bool shouldLock, bool copy) 
 {
     SEL result = 0;
 
-    if (lock) selLock.assertUnlocked();
-    else selLock.assertWriting();
+    if (shouldLock) selLock.assertUnlocked();
+    else selLock.assertLocked();
 
     if (!name) return (SEL)0;
 
     result = search_builtins(name);
     if (result) return result;
     
-    if (lock) selLock.read();
+    conditional_mutex_locker_t lock(selLock, shouldLock);
     if (namedSelectors) {
         result = (SEL)NXMapGet(namedSelectors, name);
     }
-    if (lock) selLock.unlockRead();
     if (result) return result;
 
     // No match. Insert.
 
-    if (lock) selLock.write();
-
     if (!namedSelectors) {
         namedSelectors = NXCreateMapTable(NXStrValueMapPrototype, 
                                           (unsigned)SelrefCount);
-    }
-    if (lock) {
-        // Rescan in case it was added while we dropped the lock
-        result = (SEL)NXMapGet(namedSelectors, name);
     }
     if (!result) {
         result = sel_alloc(name, copy);
@@ -173,7 +164,6 @@ static SEL __sel_registerName(const char *name, int lock, int copy)
         NXMapInsert(namedSelectors, sel_getName(result), result);
     }
 
-    if (lock) selLock.unlockWrite();
     return result;
 }
 
@@ -184,16 +174,6 @@ SEL sel_registerName(const char *name) {
 
 SEL sel_registerNameNoLock(const char *name, bool copy) {
     return __sel_registerName(name, 0, copy);  // NO lock, maybe copy
-}
-
-void sel_lock(void)
-{
-    selLock.write();
-}
-
-void sel_unlock(void)
-{
-    selLock.unlockWrite();
 }
 
 

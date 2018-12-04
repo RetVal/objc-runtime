@@ -41,9 +41,9 @@
 #include <objc/runtime.h>
 #include <Availability.h>
 #include <malloc/malloc.h>
+#include <mach-o/loader.h>
 #include <dispatch/dispatch.h>
 
-__BEGIN_DECLS
 
 // Termination reasons in the OS_REASON_OBJC namespace.
 #define OBJC_EXIT_REASON_UNSPECIFIED 1
@@ -53,6 +53,9 @@ __BEGIN_DECLS
 // with objc_initializeClassPair() and objc_readClassPair().
 // The runtime's class structure will never grow beyond this.
 #define OBJC_MAX_CLASS_SIZE (32*sizeof(void*))
+
+
+__BEGIN_DECLS
 
 // In-place construction of an Objective-C class.
 // cls and metacls must each be OBJC_MAX_CLASS_SIZE bytes.
@@ -126,6 +129,13 @@ objc_isAuto(id _Nullable object)
     __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
     __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
 
+// GC debugging
+OBJC_EXPORT BOOL
+objc_dumpHeap(char * _Nonnull filename, unsigned long length)
+    __OSX_DEPRECATED(10.4, 10.8, "it always returns NO") 
+    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
+    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
+
 // GC startup callback from Foundation
 OBJC_EXPORT malloc_zone_t * _Nullable
 objc_collect_init(int (* _Nonnull callback)(void))
@@ -166,21 +176,20 @@ OBJC_EXPORT void
 _objc_setClassLoader(BOOL (* _Nonnull newClassLoader)(const char * _Nonnull))
     OBJC2_UNAVAILABLE;
 
+#if !(TARGET_OS_OSX && !TARGET_OS_IOSMAC && __i386__)
+OBJC_EXPORT void
+_objc_setClassCopyFixupHandler(void (* _Nonnull newFixupHandler)
+    (Class _Nonnull oldClass, Class _Nonnull newClass));
+// fixme work around bug in Swift
+//    OBJC_AVAILABLE(10.14, 12.0, 12.0, 5.0, 3.0)
+#endif
+
 // Install handler for allocation failures. 
 // Handler may abort, or throw, or provide an object to return.
 OBJC_EXPORT void
 _objc_setBadAllocHandler(id _Nullable (* _Nonnull newHandler)
                            (Class _Nullable isa))
     OBJC_AVAILABLE(10.8, 6.0, 9.0, 1.0, 2.0);
-
-// This can go away when AppKit stops calling it (rdar://7811851)
-#if __OBJC2__
-OBJC_EXPORT void
-objc_setMultithreaded (BOOL flag)
-    __OSX_DEPRECATED(10.0, 10.5, "multithreading is always available") 
-    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
-    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
-#endif
 
 // Used by ExceptionHandling.framework
 #if !__OBJC2__
@@ -193,6 +202,19 @@ _objc_error(id _Nullable rcv, const char * _Nonnull fmt, va_list args)
 
 #endif
 
+
+/**
+ * Returns the names of all the classes within a library.
+ *
+ * @param image The mach header for library or framework you are inquiring about.
+ * @param outCount The number of class names returned.
+ *
+ * @return An array of C strings representing the class names.
+ */
+OBJC_EXPORT const char * _Nonnull * _Nullable
+objc_copyClassNamesForImageHeader(const struct mach_header * _Nonnull mh,
+                                  unsigned int * _Nullable outCount)
+    OBJC_AVAILABLE(10.14, 12.0, 12.0, 5.0, 3.0);
 
 // Tagged pointer objects.
 
@@ -216,14 +238,27 @@ typedef uint16_t objc_tag_index_t;
 enum
 #endif
 {
+    // 60-bit payloads
     OBJC_TAG_NSAtom            = 0, 
     OBJC_TAG_1                 = 1, 
     OBJC_TAG_NSString          = 2, 
     OBJC_TAG_NSNumber          = 3, 
     OBJC_TAG_NSIndexPath       = 4, 
     OBJC_TAG_NSManagedObjectID = 5, 
-    OBJC_TAG_NSDate            = 6, 
+    OBJC_TAG_NSDate            = 6,
+
+    // 60-bit reserved
     OBJC_TAG_RESERVED_7        = 7, 
+
+    // 52-bit payloads
+    OBJC_TAG_Photos_1          = 8,
+    OBJC_TAG_Photos_2          = 9,
+    OBJC_TAG_Photos_3          = 10,
+    OBJC_TAG_Photos_4          = 11,
+    OBJC_TAG_XPC_1             = 12,
+    OBJC_TAG_XPC_2             = 13,
+    OBJC_TAG_XPC_3             = 14,
+    OBJC_TAG_XPC_4             = 15,
 
     OBJC_TAG_First60BitPayload = 0, 
     OBJC_TAG_Last60BitPayload  = 6, 
@@ -287,7 +322,7 @@ _objc_getTaggedPointerSignedValue(const void * _Nullable ptr);
 
 // Don't use the values below. Use the declarations above.
 
-#if TARGET_OS_OSX && __x86_64__
+#if (TARGET_OS_OSX || TARGET_OS_IOSMAC) && __x86_64__
     // 64-bit Mac - tag bit is LSB
 #   define OBJC_MSB_TAGGED_POINTERS 0
 #else
@@ -329,6 +364,20 @@ _objc_getTaggedPointerSignedValue(const void * _Nullable ptr);
 #   define _OBJC_TAG_EXT_PAYLOAD_RSHIFT 12
 #endif
 
+extern uintptr_t objc_debug_taggedpointer_obfuscator;
+
+static inline void * _Nonnull
+_objc_encodeTaggedPointer(uintptr_t ptr)
+{
+    return (void *)(objc_debug_taggedpointer_obfuscator ^ ptr);
+}
+
+static inline uintptr_t
+_objc_decodeTaggedPointer(const void * _Nullable ptr)
+{
+    return (uintptr_t)ptr ^ objc_debug_taggedpointer_obfuscator;
+}
+
 static inline bool 
 _objc_taggedPointersEnabled(void)
 {
@@ -345,23 +394,25 @@ _objc_makeTaggedPointer(objc_tag_index_t tag, uintptr_t value)
     // assert(_objc_taggedPointersEnabled());
     if (tag <= OBJC_TAG_Last60BitPayload) {
         // assert(((value << _OBJC_TAG_PAYLOAD_RSHIFT) >> _OBJC_TAG_PAYLOAD_LSHIFT) == value);
-        return (void *)
+        uintptr_t result =
             (_OBJC_TAG_MASK | 
              ((uintptr_t)tag << _OBJC_TAG_INDEX_SHIFT) | 
              ((value << _OBJC_TAG_PAYLOAD_RSHIFT) >> _OBJC_TAG_PAYLOAD_LSHIFT));
+        return _objc_encodeTaggedPointer(result);
     } else {
         // assert(tag >= OBJC_TAG_First52BitPayload);
         // assert(tag <= OBJC_TAG_Last52BitPayload);
         // assert(((value << _OBJC_TAG_EXT_PAYLOAD_RSHIFT) >> _OBJC_TAG_EXT_PAYLOAD_LSHIFT) == value);
-        return (void *)
+        uintptr_t result =
             (_OBJC_TAG_EXT_MASK |
              ((uintptr_t)(tag - OBJC_TAG_First52BitPayload) << _OBJC_TAG_EXT_INDEX_SHIFT) |
              ((value << _OBJC_TAG_EXT_PAYLOAD_RSHIFT) >> _OBJC_TAG_EXT_PAYLOAD_LSHIFT));
+        return _objc_encodeTaggedPointer(result);
     }
 }
 
 static inline bool 
-_objc_isTaggedPointer(const void * _Nullable ptr) 
+_objc_isTaggedPointer(const void * _Nullable ptr)
 {
     return ((uintptr_t)ptr & _OBJC_TAG_MASK) == _OBJC_TAG_MASK;
 }
@@ -370,8 +421,9 @@ static inline objc_tag_index_t
 _objc_getTaggedPointerTag(const void * _Nullable ptr) 
 {
     // assert(_objc_isTaggedPointer(ptr));
-    uintptr_t basicTag = ((uintptr_t)ptr >> _OBJC_TAG_INDEX_SHIFT) & _OBJC_TAG_INDEX_MASK;
-    uintptr_t extTag =   ((uintptr_t)ptr >> _OBJC_TAG_EXT_INDEX_SHIFT) & _OBJC_TAG_EXT_INDEX_MASK;
+    uintptr_t value = _objc_decodeTaggedPointer(ptr);
+    uintptr_t basicTag = (value >> _OBJC_TAG_INDEX_SHIFT) & _OBJC_TAG_INDEX_MASK;
+    uintptr_t extTag =   (value >> _OBJC_TAG_EXT_INDEX_SHIFT) & _OBJC_TAG_EXT_INDEX_MASK;
     if (basicTag == _OBJC_TAG_INDEX_MASK) {
         return (objc_tag_index_t)(extTag + OBJC_TAG_First52BitPayload);
     } else {
@@ -383,11 +435,12 @@ static inline uintptr_t
 _objc_getTaggedPointerValue(const void * _Nullable ptr) 
 {
     // assert(_objc_isTaggedPointer(ptr));
-    uintptr_t basicTag = ((uintptr_t)ptr >> _OBJC_TAG_INDEX_SHIFT) & _OBJC_TAG_INDEX_MASK;
+    uintptr_t value = _objc_decodeTaggedPointer(ptr);
+    uintptr_t basicTag = (value >> _OBJC_TAG_INDEX_SHIFT) & _OBJC_TAG_INDEX_MASK;
     if (basicTag == _OBJC_TAG_INDEX_MASK) {
-        return ((uintptr_t)ptr << _OBJC_TAG_EXT_PAYLOAD_LSHIFT) >> _OBJC_TAG_EXT_PAYLOAD_RSHIFT;
+        return (value << _OBJC_TAG_EXT_PAYLOAD_LSHIFT) >> _OBJC_TAG_EXT_PAYLOAD_RSHIFT;
     } else {
-        return ((uintptr_t)ptr << _OBJC_TAG_PAYLOAD_LSHIFT) >> _OBJC_TAG_PAYLOAD_RSHIFT;
+        return (value << _OBJC_TAG_PAYLOAD_LSHIFT) >> _OBJC_TAG_PAYLOAD_RSHIFT;
     }
 }
 
@@ -395,11 +448,12 @@ static inline intptr_t
 _objc_getTaggedPointerSignedValue(const void * _Nullable ptr) 
 {
     // assert(_objc_isTaggedPointer(ptr));
-    uintptr_t basicTag = ((uintptr_t)ptr >> _OBJC_TAG_INDEX_SHIFT) & _OBJC_TAG_INDEX_MASK;
+    uintptr_t value = _objc_decodeTaggedPointer(ptr);
+    uintptr_t basicTag = (value >> _OBJC_TAG_INDEX_SHIFT) & _OBJC_TAG_INDEX_MASK;
     if (basicTag == _OBJC_TAG_INDEX_MASK) {
-        return ((intptr_t)ptr << _OBJC_TAG_EXT_PAYLOAD_LSHIFT) >> _OBJC_TAG_EXT_PAYLOAD_RSHIFT;
+        return ((intptr_t)value << _OBJC_TAG_EXT_PAYLOAD_LSHIFT) >> _OBJC_TAG_EXT_PAYLOAD_RSHIFT;
     } else {
-        return ((intptr_t)ptr << _OBJC_TAG_PAYLOAD_LSHIFT) >> _OBJC_TAG_PAYLOAD_RSHIFT;
+        return ((intptr_t)value << _OBJC_TAG_PAYLOAD_LSHIFT) >> _OBJC_TAG_PAYLOAD_RSHIFT;
     }
 }
 
@@ -430,21 +484,68 @@ object_getMethodImplementation_stret(id _Nullable obj, SEL _Nonnull name)
     OBJC_ARM64_UNAVAILABLE;
 
 
-// Instance-specific instance variable layout.
+/**
+ * Adds multiple methods to a class in bulk. This amortizes overhead that can be
+ * expensive when adding methods one by one with class_addMethod.
+ *
+ * @param cls The class to which to add the methods.
+ * @param names An array of selectors for the methods to add.
+ * @param imps An array of functions which implement the new methods.
+ * @param types An array of strings that describe the types of each method's
+ *              arguments.
+ * @param count The number of items in the names, imps, and types arrays.
+ * @param outFiledCount Upon return, contains the number of failed selectors in
+ *                      the returned array.
+ *
+ * @return A NULL-terminated C array of selectors which could not be added. A
+ * method cannot be added when a method of that name already exists on that
+ * class. When no failures occur, the return value is \c NULL. When a non-NULL
+ * value is returned, the caller must free the array with \c free().
+ *
+ */
+#if __OBJC2__
+OBJC_EXPORT _Nullable SEL * _Nullable
+class_addMethodsBulk(_Nullable Class cls, _Nonnull const SEL * _Nonnull names,
+                     _Nonnull const IMP * _Nonnull imps,
+                     const char * _Nonnull * _Nonnull types, uint32_t count,
+                     uint32_t * _Nullable outFailedCount)
+        OBJC_AVAILABLE(10.14, 12.0, 12.0, 5.0, 3.0);
+#endif
+
+/**
+ * Replaces multiple methods in a class in bulk. This amortizes overhead that
+ * can be expensive when adding methods one by one with class_replaceMethod.
+ *
+ * @param cls The class to modify.
+ * @param names An array of selectors for the methods to replace.
+ * @param imps An array of functions will be the new method implementantations.
+ * @param types An array of strings that describe the types of each method's
+ *              arguments.
+ * @param count The number of items in the names, imps, and types arrays.
+ */
+#if __OBJC2__
+OBJC_EXPORT void
+class_replaceMethodsBulk(_Nullable Class cls,
+                         _Nonnull const SEL * _Nonnull names,
+                         _Nonnull const IMP * _Nonnull imps,
+                         const char * _Nonnull * _Nonnull types,
+                         uint32_t count)
+        OBJC_AVAILABLE(10.14, 12.0, 12.0, 5.0, 3.0);
+#endif
+
+
+// Instance-specific instance variable layout. This is no longer implemented.
 
 OBJC_EXPORT void
 _class_setIvarLayoutAccessor(Class _Nullable cls,
                              const uint8_t* _Nullable (* _Nonnull accessor)
                                (id _Nullable object))
-    __OSX_AVAILABLE(10.7) 
-    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
-    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
+    UNAVAILABLE_ATTRIBUTE;
 
 OBJC_EXPORT const uint8_t * _Nullable
 _object_getIvarLayout(Class _Nullable cls, id _Nullable object)
-    __OSX_AVAILABLE(10.7) 
-    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
-    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
+    UNAVAILABLE_ATTRIBUTE;
+
 
 /*
   "Unknown" includes non-object ivars and non-ARC non-__weak ivars

@@ -34,7 +34,9 @@
 
 #ifdef __APPLE_API_PRIVATE
 
-#define _OBJC_PRIVATE_H_
+#ifndef _OBJC_PRIVATE_H_
+#   define _OBJC_PRIVATE_H_
+#endif
 #include <stdint.h>
 #include <objc/hashtable.h>
 #include <objc/maptable.h>
@@ -148,6 +150,12 @@ OBJC_EXPORT const uintptr_t objc_debug_class_rw_data_mask
 OBJC_EXPORT uintptr_t objc_debug_taggedpointer_mask
     OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0, 2.0);
 
+// tagged pointers are obfuscated by XORing with a random value
+// decoded_obj = (obj ^ obfuscator)
+OBJC_EXPORT uintptr_t objc_debug_taggedpointer_obfuscator
+    OBJC_AVAILABLE(10.14, 12.0, 12.0, 5.0, 3.0);
+
+
 // tag_slot = (obj >> slot_shift) & slot_mask
 OBJC_EXPORT unsigned int objc_debug_taggedpointer_slot_shift
     OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0, 2.0);
@@ -158,7 +166,7 @@ OBJC_EXPORT uintptr_t objc_debug_taggedpointer_slot_mask
 OBJC_EXPORT Class _Nullable objc_debug_taggedpointer_classes[]
     OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0, 2.0);
 
-// payload = (obj << payload_lshift) >> payload_rshift
+// payload = (decoded_obj << payload_lshift) >> payload_rshift
 // Payload signedness is determined by the signedness of the right-shift.
 OBJC_EXPORT unsigned int objc_debug_taggedpointer_payload_lshift
     OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0, 2.0);
@@ -172,7 +180,7 @@ OBJC_EXPORT unsigned int objc_debug_taggedpointer_payload_rshift
 // tagged pointer scheme alone, it will appear to have an isa 
 // that is either nil or class __NSUnrecognizedTaggedPointer.
 
-// if (ext_mask != 0  &&  (obj & ext_mask) == ext_mask) 
+// if (ext_mask != 0  &&  (decoded_obj & ext_mask) == ext_mask)
 //   obj is a ext tagged pointer object
 OBJC_EXPORT uintptr_t objc_debug_taggedpointer_ext_mask
     OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
@@ -187,7 +195,7 @@ OBJC_EXPORT uintptr_t objc_debug_taggedpointer_ext_slot_mask
 OBJC_EXPORT Class _Nullable objc_debug_taggedpointer_ext_classes[]
     OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
 
-// payload = (obj << ext_payload_lshift) >> ext_payload_rshift
+// payload = (decoded_obj << ext_payload_lshift) >> ext_payload_rshift
 // Payload signedness is determined by the signedness of the right-shift.
 OBJC_EXPORT unsigned int objc_debug_taggedpointer_ext_payload_lshift
     OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
@@ -196,44 +204,10 @@ OBJC_EXPORT unsigned int objc_debug_taggedpointer_ext_payload_rshift
 
 #endif
 
-
-/***********************************************************************
-* Breakpoints in objc_msgSend for debugger stepping.
-* The array is a {0,0} terminated list of addresses. 
-* Each address is one of the following:
-* OBJC_MESSENGER_START:    Address is the start of a messenger function.
-* OBJC_MESSENGER_END_FAST: Address is a jump insn that calls an IMP.
-* OBJC_MESSENGER_END_SLOW: Address is some insn in the slow lookup path.
-* OBJC_MESSENGER_END_NIL:  Address is a return insn for messages to nil.
-* 
-* Every path from OBJC_MESSENGER_START should reach some OBJC_MESSENGER_END.
-* At all ENDs, the stack and parameter register state is the same as START.
-*
-* In some cases, the END_FAST case jumps to something other than the
-* method's implementation. In those cases the jump's destination will 
-* be another function that is marked OBJC_MESSENGER_START.
-**********************************************************************/
-#if __OBJC2__
-
-#define OBJC_MESSENGER_START    1
-#define OBJC_MESSENGER_END_FAST 2
-#define OBJC_MESSENGER_END_SLOW 3
-#define OBJC_MESSENGER_END_NIL  4
-
-struct objc_messenger_breakpoint {
-    uintptr_t address;
-    uintptr_t kind;
-};
-
-OBJC_EXPORT struct objc_messenger_breakpoint 
-gdb_objc_messenger_breakpoints[]
-    OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0, 2.0);
-
-#endif
-
-
 __END_DECLS
 
+// APPLE_API_PRIVATE
 #endif
 
+// _OBJC_GDB_H
 #endif

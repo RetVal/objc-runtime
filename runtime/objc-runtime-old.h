@@ -65,8 +65,8 @@
 #define CLS_LEAF                0x800000
 // class instances may have associative references
 #define CLS_INSTANCES_HAVE_ASSOCIATED_OBJECTS 0x1000000
-// class has instance-specific GC layout
-#define CLS_HAS_INSTANCE_SPECIFIC_LAYOUT 0x2000000
+// available for use; was CLS_HAS_INSTANCE_SPECIFIC_LAYOUT
+#define CLS_2000000 0x2000000
 // class compiled with ARC
 #define CLS_IS_ARC              0x4000000
 // class is not ARC but has ARC-style weak ivar layout

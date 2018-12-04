@@ -238,6 +238,7 @@ void _destroyAltHandlerList(struct alt_handler_list *list)
 **********************************************************************/
 
 #include "objc-private.h"
+#include <objc/objc-abi.h>
 #include <objc/objc-exception.h>
 #include <objc/NSObject.h>
 #include <execinfo.h>
@@ -310,7 +311,7 @@ CXX_PERSONALITY(int version,
 
 struct objc_typeinfo {
     // Position of vtable and name fields must match C++ typeinfo object
-    const void **vtable;  // always objc_ehtype_vtable+2
+    const void ** __ptrauth_cxx_vtable_pointer vtable;  // objc_ehtype_vtable+2
     const char *name;     // c++ typeinfo string
 
     Class cls_unremapped;
@@ -322,53 +323,88 @@ struct objc_exception {
 };
 
 
-static void _objc_exception_noop(void) { } 
-static bool _objc_exception_false(void) { return 0; } 
-// static bool _objc_exception_true(void) { return 1; } 
-static void _objc_exception_abort1(void) { 
+extern "C" void _objc_exception_noop(void) { } 
+extern "C" bool _objc_exception_false(void) { return 0; } 
+// extern "C" bool _objc_exception_true(void) { return 1; } 
+extern "C" void _objc_exception_abort1(void) { 
     _objc_fatal("unexpected call into objc exception typeinfo vtable %d", 1); 
 } 
-static void _objc_exception_abort2(void) { 
+extern "C" void _objc_exception_abort2(void) { 
     _objc_fatal("unexpected call into objc exception typeinfo vtable %d", 2); 
 } 
-static void _objc_exception_abort3(void) { 
+extern "C" void _objc_exception_abort3(void) { 
     _objc_fatal("unexpected call into objc exception typeinfo vtable %d", 3); 
 } 
-static void _objc_exception_abort4(void) { 
+extern "C" void _objc_exception_abort4(void) { 
     _objc_fatal("unexpected call into objc exception typeinfo vtable %d", 4); 
 } 
 
-static bool _objc_exception_do_catch(struct objc_typeinfo *catch_tinfo, 
-                                     struct objc_typeinfo *throw_tinfo, 
-                                     void **throw_obj_p, 
-                                     unsigned outer);
+extern "C" bool _objc_exception_do_catch(struct objc_typeinfo *catch_tinfo, 
+                                         struct objc_typeinfo *throw_tinfo, 
+                                         void **throw_obj_p, 
+                                         unsigned outer);
 
-// forward declaration
-OBJC_EXPORT struct objc_typeinfo OBJC_EHTYPE_id;
+// C++ pointers to vtables are signed with no extra data.
+// C++ vtable entries are signed with a number derived from the function name.
+// For this fake vtable, we hardcode number as deciphered from the
+// assembly output during libc++abi's build.
+#if __has_feature(ptrauth_calls)
+#   define VTABLE_PTR_AUTH      "@AUTH(da, 0)"
+#   define VTABLE_ENTRY_AUTH(x) "@AUTH(ia," #x ",addr)"
+#else
+#   define VTABLE_PTR_AUTH      ""
+#   define VTABLE_ENTRY_AUTH(x) ""
+#endif
 
-OBJC_EXPORT
-const void *objc_ehtype_vtable[] = {
-    nil,  // typeinfo's vtable? - fixme 
-    (void*)&OBJC_EHTYPE_id,  // typeinfo's typeinfo - hack
-    (void*)_objc_exception_noop,      // in-place destructor?
-    (void*)_objc_exception_noop,      // destructor?
-    (void*)_objc_exception_false,     // OLD __is_pointer_p
-    (void*)_objc_exception_false,     // OLD __is_function_p
-    (void*)_objc_exception_do_catch,  // OLD __do_catch,  NEW can_catch
-    (void*)_objc_exception_false,     // OLD __do_upcast, NEW search_above_dst
-    (void*)_objc_exception_false,     //                  NEW search_below_dst
-    (void*)_objc_exception_abort1,    // paranoia: blow up if libc++abi
-    (void*)_objc_exception_abort2,    //           adds something new
-    (void*)_objc_exception_abort3,
-    (void*)_objc_exception_abort4,
-};
+#if __LP64__
+#   define PTR ".quad "
+#   define TWOPTRSIZE "16"
+#else
+#   define PTR ".long "
+#   define TWOPTRSIZE "8"
+#endif
 
-OBJC_EXPORT
-struct objc_typeinfo OBJC_EHTYPE_id = {
-    objc_ehtype_vtable+2, 
-    "id", 
-    nil
-};
+// Hand-built vtable for objc exception typeinfo.
+// "OLD" is GNU libcpp, "NEW" is libc++abi.
+
+asm(
+    "\n .cstring"
+    "\n l_.id_str: .asciz \"id\""
+
+    "\n .section __DATA,__const"
+    "\n .globl _OBJC_EHTYPE_id"
+    "\n .globl _objc_ehtype_vtable"
+    "\n .p2align 4"
+
+    "\n _OBJC_EHTYPE_id:"
+    "\n  " PTR "(_objc_ehtype_vtable+" TWOPTRSIZE ") "      VTABLE_PTR_AUTH
+    "\n  " PTR "l_.id_str"
+    "\n  " PTR "0"
+
+    "\n _objc_ehtype_vtable:"
+    "\n  " PTR "0"
+    // typeinfo's typeinfo - fixme hack
+    "\n  " PTR "_OBJC_EHTYPE_id"
+    // destructor and in-place destructor
+    "\n  " PTR "__objc_exception_noop"      VTABLE_ENTRY_AUTH(52634)
+    "\n  " PTR "__objc_exception_noop"      VTABLE_ENTRY_AUTH(10344)
+    // OLD __is_pointer_p
+    "\n  " PTR "__objc_exception_noop"      VTABLE_ENTRY_AUTH(6889)
+    // OLD __is_function_p
+    "\n  " PTR "__objc_exception_noop"      VTABLE_ENTRY_AUTH(23080)
+    // OLD __do_catch,  NEW can_catch
+    "\n  " PTR "__objc_exception_do_catch"  VTABLE_ENTRY_AUTH(27434)
+    // OLD __do_upcast, NEW search_above_dst
+    "\n  " PTR "__objc_exception_false"     VTABLE_ENTRY_AUTH(48481)
+    //                  NEW search_below_dst
+    "\n  " PTR "__objc_exception_false"     VTABLE_ENTRY_AUTH(41165)
+    // NEW has_unambiguous_public_base (fixme need this?)
+    "\n  " PTR "__objc_exception_abort1"    VTABLE_ENTRY_AUTH(14357)
+    // paranoia: die if libcxxabi adds anything else
+    "\n  " PTR "__objc_exception_abort2"
+    "\n  " PTR "__objc_exception_abort3"
+    "\n  " PTR "__objc_exception_abort4"
+    );
 
 
 
@@ -583,10 +619,10 @@ void objc_end_catch(void)
 
 
 // `outer` is not passed by the new libcxxabi
-static bool _objc_exception_do_catch(struct objc_typeinfo *catch_tinfo, 
-                                     struct objc_typeinfo *throw_tinfo, 
-                                     void **throw_obj_p, 
-                                     unsigned outer UNAVAILABLE_ATTRIBUTE)
+bool _objc_exception_do_catch(struct objc_typeinfo *catch_tinfo, 
+                              struct objc_typeinfo *throw_tinfo, 
+                              void **throw_obj_p, 
+                              unsigned outer UNAVAILABLE_ATTRIBUTE)
 {
     id exception;
 

@@ -88,7 +88,7 @@ GETSECT(_getObjcSelectorRefs,   SEL,         "__OBJC", "__message_refs");
 GETSECT(_getObjcClassRefs,      Class,       "__OBJC", "__cls_refs");
 GETSECT(_getObjcClassNames,     const char,  "__OBJC", "__class_names");
 // __OBJC,__class_names section only emitted by CodeWarrior  rdar://4951638
-GETSECT(getLibobjcInitializers, Initializer, "__DATA", "__objc_init_func");
+GETSECT(getLibobjcInitializers, UnsignedInitializer, "__DATA", "__objc_init_func");
 
 
 objc_image_info *

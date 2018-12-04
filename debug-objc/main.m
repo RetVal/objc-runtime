@@ -1,9 +1,8 @@
-
+//
 //  main.m
 //  debug-objc
 //
-//  Created by closure on 2/24/16.
-//
+//  Created by Closure on 2018/12/4.
 //
 
 #import <Foundation/Foundation.h>

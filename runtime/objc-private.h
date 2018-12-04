@@ -21,8 +21,8 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 /*
- *	objc-private.h
- *	Copyright 1988-1996, NeXT Software, Inc.
+ *    objc-private.h
+ *    Copyright 1988-1996, NeXT Software, Inc.
  */
 
 #ifndef _OBJC_PRIVATE_H_
@@ -39,6 +39,7 @@
 #endif
 
 #define OBJC_TYPES_DEFINED 1
+#undef OBJC_OLD_DISPATCH_PROTOTYPES
 #define OBJC_OLD_DISPATCH_PROTOTYPES 0
 
 #include <cstddef>  // for nullptr_t
@@ -55,113 +56,19 @@ namespace {
     struct SideTable;
 };
 
+#include "isa.h"
 
-#if (!SUPPORT_NONPOINTER_ISA && !SUPPORT_PACKED_ISA && !SUPPORT_INDEXED_ISA) ||\
-    ( SUPPORT_NONPOINTER_ISA &&  SUPPORT_PACKED_ISA && !SUPPORT_INDEXED_ISA) ||\
-    ( SUPPORT_NONPOINTER_ISA && !SUPPORT_PACKED_ISA &&  SUPPORT_INDEXED_ISA)
-    // good config
-#else
-#   error bad config
-#endif
-
-
-union isa_t 
-{
+union isa_t {
     isa_t() { }
     isa_t(uintptr_t value) : bits(value) { }
 
     Class cls;
     uintptr_t bits;
-
-#if SUPPORT_PACKED_ISA
-
-    // extra_rc must be the MSB-most field (so it matches carry/overflow flags)
-    // nonpointer must be the LSB (fixme or get rid of it)
-    // shiftcls must occupy the same bits that a real class pointer would
-    // bits + RC_ONE is equivalent to extra_rc + 1
-    // RC_HALF is the high bit of extra_rc (i.e. half of its range)
-
-    // future expansion:
-    // uintptr_t fast_rr : 1;     // no r/r overrides
-    // uintptr_t lock : 2;        // lock for atomic property, @synch
-    // uintptr_t extraBytes : 1;  // allocated with extra bytes
-
-# if __arm64__
-#   define ISA_MASK        0x0000000ffffffff8ULL
-#   define ISA_MAGIC_MASK  0x000003f000000001ULL
-#   define ISA_MAGIC_VALUE 0x000001a000000001ULL
+#if defined(ISA_BITFIELD)
     struct {
-        uintptr_t nonpointer        : 1;
-        uintptr_t has_assoc         : 1;
-        uintptr_t has_cxx_dtor      : 1;
-        uintptr_t shiftcls          : 33; // MACH_VM_MAX_ADDRESS 0x1000000000
-        uintptr_t magic             : 6;
-        uintptr_t weakly_referenced : 1;
-        uintptr_t deallocating      : 1;
-        uintptr_t has_sidetable_rc  : 1;
-        uintptr_t extra_rc          : 19;
-#       define RC_ONE   (1ULL<<45)
-#       define RC_HALF  (1ULL<<18)
+        ISA_BITFIELD;  // defined in isa.h
     };
-
-# elif __x86_64__
-#   define ISA_MASK        0x00007ffffffffff8ULL
-#   define ISA_MAGIC_MASK  0x001f800000000001ULL
-#   define ISA_MAGIC_VALUE 0x001d800000000001ULL
-    struct {
-        uintptr_t nonpointer        : 1;
-        uintptr_t has_assoc         : 1;
-        uintptr_t has_cxx_dtor      : 1;
-        uintptr_t shiftcls          : 44; // MACH_VM_MAX_ADDRESS 0x7fffffe00000
-        uintptr_t magic             : 6;
-        uintptr_t weakly_referenced : 1;
-        uintptr_t deallocating      : 1;
-        uintptr_t has_sidetable_rc  : 1;
-        uintptr_t extra_rc          : 8;
-#       define RC_ONE   (1ULL<<56)
-#       define RC_HALF  (1ULL<<7)
-    };
-
-# else
-#   error unknown architecture for packed isa
-# endif
-
-// SUPPORT_PACKED_ISA
 #endif
-
-
-#if SUPPORT_INDEXED_ISA
-
-# if  __ARM_ARCH_7K__ >= 2
-
-#   define ISA_INDEX_IS_NPI      1
-#   define ISA_INDEX_MASK        0x0001FFFC
-#   define ISA_INDEX_SHIFT       2
-#   define ISA_INDEX_BITS        15
-#   define ISA_INDEX_COUNT       (1 << ISA_INDEX_BITS)
-#   define ISA_INDEX_MAGIC_MASK  0x001E0001
-#   define ISA_INDEX_MAGIC_VALUE 0x001C0001
-    struct {
-        uintptr_t nonpointer        : 1;
-        uintptr_t has_assoc         : 1;
-        uintptr_t indexcls          : 15;
-        uintptr_t magic             : 4;
-        uintptr_t has_cxx_dtor      : 1;
-        uintptr_t weakly_referenced : 1;
-        uintptr_t deallocating      : 1;
-        uintptr_t has_sidetable_rc  : 1;
-        uintptr_t extra_rc          : 7;
-#       define RC_ONE   (1ULL<<25)
-#       define RC_HALF  (1ULL<<6)
-    };
-
-# else
-#   error unknown architecture for indexed isa
-# endif
-
-// SUPPORT_INDEXED_ISA
-#endif
-
 };
 
 
@@ -308,6 +215,8 @@ typedef struct old_property *objc_property_t;
 
 
 // Private headers
+
+#include "objc-ptrauth.h"
 
 #if __OBJC2__
 #include "objc-runtime-new.h"
@@ -506,8 +415,6 @@ static inline bool sectnameStartsWith(const char *sectname, const char *prefix){
 /* selectors */
 extern void sel_init(size_t selrefCount);
 extern SEL sel_registerNameNoLock(const char *str, bool copy);
-extern void sel_lock(void);
-extern void sel_unlock(void);
 
 extern SEL SEL_load;
 extern SEL SEL_initialize;
@@ -544,6 +451,8 @@ extern Protocol *getPreoptimizedProtocol(const char *name);
 extern unsigned getPreoptimizedClassUnreasonableCount();
 extern Class getPreoptimizedClass(const char *name);
 extern Class* copyPreoptimizedClasses(const char *name, int *outCount);
+
+extern bool sharedRegionContains(const void *ptr);
 
 extern Class _calloc_class(size_t size);
 
@@ -609,20 +518,6 @@ class recursive_mutex_locker_t : nocopy_t {
     recursive_mutex_locker_t(recursive_mutex_t& newLock) 
         : lock(newLock) { lock.lock(); }
     ~recursive_mutex_locker_t() { lock.unlock(); }
-};
-
-class rwlock_reader_t : nocopy_t {
-    rwlock_t& lock;
-  public:
-    rwlock_reader_t(rwlock_t& newLock) : lock(newLock) { lock.read(); }
-    ~rwlock_reader_t() { lock.unlockRead(); }
-};
-
-class rwlock_writer_t : nocopy_t {
-    rwlock_t& lock;
-  public:
-    rwlock_writer_t(rwlock_t& newLock) : lock(newLock) { lock.write(); }
-    ~rwlock_writer_t() { lock.unlockWrite(); }
 };
 
 
@@ -719,8 +614,6 @@ extern void unmap_image(const char *path, const struct mach_header *mh);
 extern void unmap_image_nolock(const struct mach_header *mh);
 extern void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int unoptimizedTotalClass);
 extern void _unload_image(header_info *hi);
-extern const char ** _objc_copyClassNamesForImage(header_info *hi, unsigned int *outCount);
-
 
 extern const header_info *_headerForClass(Class cls);
 
@@ -772,9 +665,9 @@ __END_DECLS
 static __inline uint32_t _objc_strhash(const char *s) {
     uint32_t hash = 0;
     for (;;) {
-	int a = *s++;
-	if (0 == a) break;
-	hash += (hash << 8) + a;
+    int a = *s++;
+    if (0 == a) break;
+    hash += (hash << 8) + a;
     }
     return hash;
 }
@@ -845,6 +738,7 @@ class TimeLogger {
     }
 };
 
+enum { CacheLineSize = 64 };
 
 // StripedMap<T> is a map of void* -> T, sized appropriately 
 // for cache-friendly lock striping. 
@@ -852,10 +746,7 @@ class TimeLogger {
 // or as StripedMap<SomeStruct> where SomeStruct stores a spin lock.
 template<typename T>
 class StripedMap {
-
-    enum { CacheLineSize = 64 };
-
-#if TARGET_OS_EMBEDDED
+#if TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR
     enum { StripeCount = 8 };
 #else
     enum { StripeCount = 64 };
@@ -928,6 +819,8 @@ class StripedMap {
         assert(delta % CacheLineSize == 0);
         assert(base % CacheLineSize == 0);
     }
+#else
+    constexpr StripedMap() {}
 #endif
 };
 
@@ -989,6 +882,40 @@ static inline bool operator == (DisguisedPtr<objc_object> lhs, id rhs) {
 static inline bool operator != (DisguisedPtr<objc_object> lhs, id rhs) {
     return lhs != (objc_object *)rhs;
 }
+
+
+// Storage for a thread-safe chained hook function.
+// get() returns the value for calling.
+// set() installs a new function and returns the old one for chaining.
+// More precisely, set() writes the old value to a variable supplied by
+// the caller. get() and set() use appropriate barriers so that the
+// old value is safely written to the variable before the new value is
+// called to use it.
+//
+// T1: store to old variable; store-release to hook variable
+// T2: load-acquire from hook variable; call it; called hook loads old variable
+
+template <typename Fn>
+class ChainedHookFunction {
+    std::atomic<Fn> hook{nil};
+
+public:
+    ChainedHookFunction(Fn f) : hook{f} { };
+
+    Fn get() {
+        return hook.load(std::memory_order_acquire);
+    }
+
+    void set(Fn newValue, Fn *oldVariable)
+    {
+        Fn oldValue = hook.load(std::memory_order_relaxed);
+        do {
+            *oldVariable = oldValue;
+        } while (!hook.compare_exchange_weak(oldValue, newValue,
+                                             std::memory_order_release,
+                                             std::memory_order_relaxed));
+    }
+};
 
 
 // Pointer hash function.

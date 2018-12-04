@@ -69,62 +69,6 @@ _objc_exitPoints:
 
 
 /********************************************************************
-* List every exit insn from every messenger for debugger use.
-* Format:
-* (
-*   1 word instruction's address
-*   1 word type (ENTER or FAST_EXIT or SLOW_EXIT or NIL_EXIT)
-* )
-* 1 word zero
-*
-* ENTER is the start of a dispatcher
-* FAST_EXIT is method dispatch
-* SLOW_EXIT is uncached method lookup
-* NIL_EXIT is returning zero from a message sent to nil
-* These must match objc-gdb.h.
-********************************************************************/
-	
-#define ENTER     1
-#define FAST_EXIT 2
-#define SLOW_EXIT 3
-#define NIL_EXIT  4
-
-.section __DATA,__objc_msg_break
-.globl _gdb_objc_messenger_breakpoints
-_gdb_objc_messenger_breakpoints:
-// contents populated by the macros below
-
-.macro MESSENGER_START
-4:
-	.section __DATA,__objc_msg_break
-	.long 4b
-	.long ENTER
-	.text
-.endmacro
-.macro MESSENGER_END_FAST
-4:
-	.section __DATA,__objc_msg_break
-	.long 4b
-	.long FAST_EXIT
-	.text
-.endmacro
-.macro MESSENGER_END_SLOW
-4:
-	.section __DATA,__objc_msg_break
-	.long 4b
-	.long SLOW_EXIT
-	.text
-.endmacro
-.macro MESSENGER_END_NIL
-4:
-	.section __DATA,__objc_msg_break
-	.long 4b
-	.long NIL_EXIT
-	.text
-.endmacro
-
-
-/********************************************************************
  * Names for relative labels
  * DO NOT USE THESE LABELS ELSEWHERE
  * Reserved labels: 5: 6: 7: 8: 9:
@@ -188,6 +132,12 @@ _gdb_objc_messenger_breakpoints:
 // Selected field offsets in class structure
 #define isa             0
 #define superclass	4
+#define cache_buckets	8
+#define cache_mask	12
+
+// Method cache
+#define cached_sel	0
+#define cached_imp	4
 
 // Method descriptor
 #define method_name     0
@@ -277,7 +227,7 @@ LExit$0:
 	// eax = found bucket
 	
 .if $1 == GETIMP
-	movl	4(%eax), %eax		// return imp
+	movl	cached_imp(%eax), %eax	// return imp
 	ret
 
 .else
@@ -289,11 +239,10 @@ LExit$0:
 .endif
 
 .if $1 == CALL
-	MESSENGER_END_FAST
-	jmp	*4(%eax)		// call imp
+	jmp	*cached_imp(%eax)	// call imp
 
 .elseif $1 == LOOKUP
-	movl	4(%eax), %eax		// return imp
+	movl	cached_imp(%eax), %eax	// return imp
 	ret
 
 .else
@@ -307,23 +256,23 @@ LExit$0:
 
 .macro	CacheLookup
 
-	movzwl	12(%edx), %eax		// eax = mask
+	movzwl	cache_mask(%edx), %eax		// eax = mask
 	andl	%ecx, %eax		// eax = SEL & mask
 	shll	$$3, %eax		// eax = offset = (SEL & mask) * 8
-	addl	8(%edx), %eax		// eax = bucket = cache->buckets+offset
-	cmpl	(%eax), %ecx		// if (bucket->sel != SEL)
+	addl	cache_buckets(%edx), %eax  // eax = bucket = buckets+offset
+	cmpl	cached_sel(%eax), %ecx	// if (bucket->sel != SEL)
 	jne	1f			//     scan more
 	// The `jne` above sets flags for CacheHit
 	CacheHit $0, $1			// call or return imp
 
 1:
 	// loop
-	cmpl	$$1, (%eax)
+	cmpl	$$1, cached_sel(%eax)
 	jbe	3f			// if (bucket->sel <= 1) wrap or miss
 	
 	addl	$$8, %eax		// bucket++
 2:
-	cmpl	(%eax), %ecx		// if (bucket->sel != sel)
+	cmpl	cached_sel(%eax), %ecx	// if (bucket->sel != sel)
 	jne	1b			//     scan more
 	// The `jne` above sets flags for CacheHit
 	CacheHit $0, $1			// call or return imp
@@ -332,7 +281,7 @@ LExit$0:
 	// wrap or miss
 	jb	LCacheMiss_f		// if (bucket->sel < 1) cache miss
 	// wrap
-	movl	4(%eax), %eax		// bucket->imp is really first bucket
+	movl	cached_imp(%eax), %eax	// bucket->imp is really first bucket
 	jmp	2f
 
 	// Clone scanning loop to miss instead of hang when cache is corrupt.
@@ -340,12 +289,12 @@ LExit$0:
 
 1:
 	// loop
-	cmpq	$$1, (%eax)
+	cmpl	$$1, cached_sel(%eax)
 	jbe	3f			// if (bucket->sel <= 1) wrap or miss
 	
 	addl	$$8, %eax		// bucket++
 2:
-	cmpl	(%eax), %ecx		// if (bucket->sel != sel)
+	cmpl	cached_sel(%eax), %ecx	// if (bucket->sel != sel)
 	jne	1b			//     scan more
 	// The `jne` above sets flags for CacheHit
 	CacheHit $0, $1			// call or return imp
@@ -482,15 +431,12 @@ LNilTestSlow:
 
 .if $0 == NORMAL
 	ZeroReturn
-	MESSENGER_END_NIL
 	ret
 .elseif $0 == FPRET
 	ZeroReturnFPRET
-	MESSENGER_END_NIL
 	ret
 .elseif $0 == STRET
 	ZeroReturnSTRET
-	MESSENGER_END_NIL
 	ret $$4
 .else
 .abort oops
@@ -553,7 +499,6 @@ LCacheMiss:
 
 	ENTRY _objc_msgSend
 	UNWIND _objc_msgSend, NoFrame
-	MESSENGER_START
 	
 	movl    selector(%esp), %ecx
 	movl	self(%esp), %eax
@@ -567,7 +512,6 @@ LCacheMiss:
 
 LCacheMiss:
 	// isa still in edx
-	MESSENGER_END_SLOW
 	jmp	__objc_msgSend_uncached
 
 	END_ENTRY _objc_msgSend
@@ -596,13 +540,11 @@ LCacheMiss:
 /********************************************************************
  *
  * id objc_msgSendSuper(struct objc_super *super, SEL _cmd, ...);
- * IMP objc_msgLookupSuper(struct objc_super *super, SEL _cmd, ...);
  *
  ********************************************************************/
 
 	ENTRY _objc_msgSendSuper
 	UNWIND _objc_msgSendSuper, NoFrame
-	MESSENGER_START
 
 	movl    selector(%esp), %ecx
 	movl	super(%esp), %eax	// struct objc_super
@@ -613,28 +555,9 @@ LCacheMiss:
 
 LCacheMiss:	
 	// class still in edx
-	MESSENGER_END_SLOW
 	jmp	__objc_msgSend_uncached
 
 	END_ENTRY _objc_msgSendSuper
-
-
-
-	ENTRY _objc_msgLookupSuper
-	UNWIND _objc_msgLookupSuper, NoFrame
-
-	movl    selector(%esp), %ecx
-	movl	super(%esp), %eax	// struct objc_super
-	movl	class(%eax), %edx	// struct objc_super->class
-	movl	receiver(%eax), %eax	// struct objc_super->receiver
-	movl	%eax, super(%esp)	// replace super arg with receiver
-	CacheLookup NORMAL, LOOKUP	// returns IMP on success
-
-LCacheMiss:	
-	// class still in edx
-	jmp	__objc_msgLookup_uncached
-
-	END_ENTRY _objc_msgLookupSuper
 
 
 /********************************************************************
@@ -646,7 +569,6 @@ LCacheMiss:
 
 	ENTRY _objc_msgSendSuper2
 	UNWIND _objc_msgSendSuper2, NoFrame
-	MESSENGER_START
 
 	movl    selector(%esp), %ecx
 	movl	super(%esp), %eax	// struct objc_super
@@ -658,7 +580,6 @@ LCacheMiss:
 
 LCacheMiss:
 	// class still in edx
-	MESSENGER_END_SLOW
 	jmp	__objc_msgSend_uncached
 
 	END_ENTRY _objc_msgSendSuper2
@@ -691,7 +612,6 @@ LCacheMiss:
 
 	ENTRY _objc_msgSend_fpret
 	UNWIND _objc_msgSend_fpret, NoFrame
-	MESSENGER_START
 
 	movl    selector(%esp), %ecx
 	movl	self(%esp), %eax
@@ -705,7 +625,6 @@ LCacheMiss:
 	
 LCacheMiss:	
 	// class still in edx
-	MESSENGER_END_SLOW
 	jmp	__objc_msgSend_uncached
 
 	END_ENTRY _objc_msgSend_fpret
@@ -740,7 +659,6 @@ LCacheMiss:
 
 	ENTRY _objc_msgSend_stret
 	UNWIND _objc_msgSend_stret, NoFrame
-	MESSENGER_START
 
 	movl	selector_stret(%esp), %ecx
 	movl	self_stret(%esp), %eax
@@ -754,7 +672,6 @@ LCacheMiss:
 	
 LCacheMiss:
 	// class still in edx
-	MESSENGER_END_SLOW
 	jmp	__objc_msgSend_stret_uncached
 
 	END_ENTRY _objc_msgSend_stret
@@ -783,13 +700,11 @@ LCacheMiss:
 /********************************************************************
  *
  * void objc_msgSendSuper_stret(void *st_addr, struct objc_super *super, SEL _cmd, ...);
- * IMP objc_msgLookupSuper_stret(void *st_addr, struct objc_super *super, SEL _cmd, ...);
  *
  ********************************************************************/
 
 	ENTRY _objc_msgSendSuper_stret
 	UNWIND _objc_msgSendSuper_stret, NoFrame
-	MESSENGER_START
 
 	movl	selector_stret(%esp), %ecx
 	movl	super_stret(%esp), %eax	// struct objc_super
@@ -800,27 +715,9 @@ LCacheMiss:
 
 LCacheMiss:
 	// class still in edx
-	MESSENGER_END_SLOW
 	jmp	__objc_msgSend_stret_uncached
 
 	END_ENTRY _objc_msgSendSuper_stret
-
-
-	ENTRY _objc_msgLookupSuper_stret
-	UNWIND _objc_msgLookupSuper_stret, NoFrame
-
-	movl	selector_stret(%esp), %ecx
-	movl	super_stret(%esp), %eax	// struct objc_super
-	movl	class(%eax), %edx	// struct objc_super->class
-	movl	receiver(%eax), %eax	// struct objc_super->receiver
-	movl	%eax, super_stret(%esp)	// replace super arg with receiver
-	CacheLookup STRET, LOOKUP	// returns IMP on success
-
-LCacheMiss:
-	// class still in edx
-	jmp	__objc_msgLookup_stret_uncached
-
-	END_ENTRY _objc_msgLookupSuper_stret
 
 
 /********************************************************************
@@ -832,7 +729,6 @@ LCacheMiss:
 
 	ENTRY _objc_msgSendSuper2_stret
 	UNWIND _objc_msgSendSuper2_stret, NoFrame
-	MESSENGER_START
 
 	movl	selector_stret(%esp), %ecx
 	movl	super_stret(%esp), %eax	// struct objc_super
@@ -845,7 +741,6 @@ LCacheMiss:
 // cache miss: go search the method lists
 LCacheMiss:
 	// class still in edx
-	MESSENGER_END_SLOW
 	jmp	__objc_msgSend_stret_uncached
 
 	END_ENTRY _objc_msgSendSuper2_stret
@@ -957,10 +852,6 @@ L_forward_stret_handler:
 	
 	// THIS IS NOT A CALLABLE C FUNCTION
 	// Out-of-band condition register is NE for stret, EQ otherwise.
-
-	MESSENGER_START
-	nop
-	MESSENGER_END_SLOW
 
 	jne	__objc_msgForward_stret
 	jmp	__objc_msgForward

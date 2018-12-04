@@ -160,18 +160,6 @@
 #include "objc-abi.h"
 #include <objc/message.h>
 
-
-/* overriding the default object allocation and error handling routines */
-
-OBJC_EXPORT id	(*_alloc)(Class, size_t);
-OBJC_EXPORT id	(*_copy)(id, size_t);
-OBJC_EXPORT id	(*_realloc)(id, size_t);
-OBJC_EXPORT id	(*_dealloc)(id);
-OBJC_EXPORT id	(*_zoneAlloc)(Class, size_t, void *);
-OBJC_EXPORT id	(*_zoneRealloc)(id, size_t, void *);
-OBJC_EXPORT id	(*_zoneCopy)(id, size_t, void *);
-
-
 /***********************************************************************
 * Information about multi-thread support:
 *
@@ -593,7 +581,7 @@ static void _class_resolveClassMethod(Class cls, SEL sel, id inst)
         return;
     }
 
-    BOOL (*msg)(Class, SEL, SEL) = (__typeof__(msg))objc_msgSend;
+    BOOL (*msg)(Class, SEL, SEL) = (typeof(msg))objc_msgSend;
     bool resolved = msg(_class_getNonMetaClass(cls, inst), 
                         SEL_resolveClassMethod, sel);
 
@@ -636,7 +624,7 @@ static void _class_resolveInstanceMethod(Class cls, SEL sel, id inst)
         return;
     }
 
-    BOOL (*msg)(Class, SEL, SEL) = (__typeof__(msg))objc_msgSend;
+    BOOL (*msg)(Class, SEL, SEL) = (typeof(msg))objc_msgSend;
     bool resolved = msg(cls, SEL_resolveInstanceMethod, sel);
 
     // Cache the result (good or bad) so the resolver doesn't fire next time.

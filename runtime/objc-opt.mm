@@ -75,6 +75,11 @@ Class* copyPreoptimizedClasses(const char *name, int *outCount)
     return nil;
 }
 
+bool sharedRegionContains(const void *ptr)
+{
+    return false;
+}
+
 header_info *preoptimizedHinfoForHeader(const headerType *mhdr)
 {
     return nil;
@@ -116,6 +121,8 @@ __BEGIN_DECLS
 // opt is initialized to ~0 to detect incorrect use before preopt_init()
 
 static const objc_opt_t *opt = (objc_opt_t *)~0;
+static uintptr_t shared_cache_start;
+static uintptr_t shared_cache_end;
 static bool preoptimized;
 
 extern const objc_opt_t _objc_opt_data;  // in __TEXT, __objc_opt_ro
@@ -251,6 +258,16 @@ Class* copyPreoptimizedClasses(const char *name, int *outCount)
     return nil;
 }
 
+/***********************************************************************
+* Return YES if the given pointer lies within the shared cache.
+* If the shared cache is not set up or is not valid,
+**********************************************************************/
+bool sharedRegionContains(const void *ptr)
+{
+    uintptr_t address = (uintptr_t)ptr;
+    return shared_cache_start <= address && address < shared_cache_end;
+}
+
 namespace objc_opt {
 struct objc_headeropt_ro_t {
     uint32_t count;
@@ -327,6 +344,16 @@ header_info_rw *getPreoptimizedHeaderRW(const struct header_info *const hdr)
 
 void preopt_init(void)
 {
+    // Get the memory region occupied by the shared cache.
+    size_t length;
+    const void *start = _dyld_get_shared_cache_range(&length);
+    if (start) {
+        shared_cache_start = (uintptr_t)start;
+        shared_cache_end = shared_cache_start + length;
+    } else {
+        shared_cache_start = shared_cache_end = 0;
+    }
+    
     // `opt` not set at compile time in order to detect too-early usage
     const char *failure = nil;
     opt = &_objc_opt_data;
@@ -347,7 +374,7 @@ void preopt_init(void)
         // One of the tables is missing. 
         failure = "(dyld shared cache is absent or out of date)";
     }
-
+    
     if (failure) {
         // All preoptimized selector references are invalid.
         preoptimized = NO;
