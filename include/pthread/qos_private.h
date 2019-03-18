@@ -25,53 +25,14 @@
 #define _QOS_PRIVATE_H
 
 #include <pthread/qos.h>
+#include <pthread/priority_private.h>
+#include <sys/qos.h> /* qos_class_t */
 #include <sys/qos_private.h>
 
 #if __DARWIN_C_LEVEL >= __DARWIN_C_FULL
 // allow __DARWIN_C_LEVEL to turn off the use of mach_port_t
 #include <mach/port.h>
 #endif
-
-// pthread_priority_t is an on opaque integer that is guaranteed to be ordered such that
-// combations of QoS classes and relative priorities are ordered numerically, according to
-// their combined priority.
-typedef unsigned long pthread_priority_t;
-
-// masks for splitting the handling the contents of a pthread_priority_t, the mapping from
-// qos_class_t to the class bits, however, is intentionally not exposed.
-#define _PTHREAD_PRIORITY_FLAGS_MASK			0xff000000
-#define _PTHREAD_PRIORITY_FLAGS_SHIFT			(24ull)
-#define _PTHREAD_PRIORITY_ENCODING_MASK			0x00a00000
-#define _PTHREAD_PRIORITY_ENCODING_SHIFT		(22ull)
-#define _PTHREAD_PRIORITY_ENCODING_V0			0x00000000
-#define _PTHREAD_PRIORITY_ENCODING_V1			0x00400000 /* unused */
-#define _PTHREAD_PRIORITY_ENCODING_V2			0x00800000 /* unused */
-#define _PTHREAD_PRIORITY_ENCODING_V3			0x00a00000 /* unused */
-#define _PTHREAD_PRIORITY_QOS_CLASS_MASK		0x003fff00
-#define _PTHREAD_PRIORITY_QOS_CLASS_SHIFT		(8ull)
-#define _PTHREAD_PRIORITY_PRIORITY_MASK			0x000000ff
-#define _PTHREAD_PRIORITY_PRIORITY_SHIFT		(0)
-
-#define _PTHREAD_PRIORITY_OVERCOMMIT_FLAG		0x80000000
-#define _PTHREAD_PRIORITY_INHERIT_FLAG			0x40000000
-#define _PTHREAD_PRIORITY_ROOTQUEUE_FLAG		0x20000000
-// Used to indicate to the pthread kext that the provided event manager thread
-// priority is actually a scheduling priority not a QoS.  We can have ROOTQUEUE_FLAG
-// perform double duty because it's never provided to the kernel.
-#define _PTHREAD_PRIORITY_SCHED_PRI_FLAG		0x20000000
-#define _PTHREAD_PRIORITY_ENFORCE_FLAG			0x10000000
-#define _PTHREAD_PRIORITY_OVERRIDE_FLAG			0x08000000
-
-// libdispatch defines the following, so it's not safe to use for anything we
-// expect to be passed in from userspace
-//#define _PTHREAD_PRIORITY_DEFAULTQUEUE_FLAG 0x04000000
-
-// The event manager flag indicates that this thread/request is for a event
-// manager thread.  There can only ever be one event manager thread at a time and
-// it is brought up at the highest of all event manager priorities passed to the
-// kext.
-#define _PTHREAD_PRIORITY_EVENT_MANAGER_FLAG	0x02000000
-#define _PTHREAD_PRIORITY_NEEDS_UNBIND_FLAG		0x01000000
 
 // redeffed here to avoid leaving __QOS_ENUM defined in the public header
 #define __QOS_ENUM(name, type, ...) enum { __VA_ARGS__ }; typedef type name##_t
@@ -86,11 +47,11 @@ typedef unsigned long pthread_priority_t;
 #endif
 #if __has_feature(enumerator_attributes)
 #undef __QOS_AVAILABLE_10_10
-#define __QOS_AVAILABLE_10_10 __OSX_AVAILABLE(10.10) __IOS_AVAILABLE(8.0)
+#define __QOS_AVAILABLE_10_10 __API_AVAILABLE(macos(10.10), ios(8.0))
 #undef __QOS_AVAILABLE_10_11
-#define __QOS_AVAILABLE_10_11 __OSX_AVAILABLE(10.11) __IOS_AVAILABLE(9.0)  __WATCHOS_AVAILABLE(2.0) __TVOS_AVAILABLE(9.0)
+#define __QOS_AVAILABLE_10_11 __API_AVAILABLE(macos(10.11), ios(9.0), tvos(9.0), watchos(2.0))
 #undef __QOS_AVAILABLE_10_12
-#define __QOS_AVAILABLE_10_12 __OSX_AVAILABLE(10.12) __IOS_AVAILABLE(10.0) __WATCHOS_AVAILABLE(3.0) __TVOS_AVAILABLE(10.0)
+#define __QOS_AVAILABLE_10_12 __API_AVAILABLE(macos(10.12), ios(10.0), tvos(10.0), watchos(3.0))
 #endif
 #endif
 
@@ -151,8 +112,7 @@ __BEGIN_DECLS
  * @return
  * Zero if successful, othwerise an errno value.
  */
-__OSX_AVAILABLE_BUT_DEPRECATED_MSG(__MAC_10_10, __MAC_10_10, __IPHONE_8_0, __IPHONE_8_0, \
-		"Use pthread_set_qos_class_self_np() instead")
+__API_DEPRECATED_WITH_REPLACEMENT("pthread_set_qos_class_self_np", macos(10.10, 10.10), ios(8.0, 8.0))
 int
 pthread_set_qos_class_np(pthread_t __pthread,
 						 qos_class_t __qos_class,
@@ -161,37 +121,86 @@ pthread_set_qos_class_np(pthread_t __pthread,
 /* Private interfaces for libdispatch to encode/decode specific values of pthread_priority_t. */
 
 // Encode a class+priority pair into a pthread_priority_t,
-__OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_8_0)
+__API_AVAILABLE(macos(10.10), ios(8.0))
 pthread_priority_t
 _pthread_qos_class_encode(qos_class_t qos_class, int relative_priority, unsigned long flags);
 
 // Decode a pthread_priority_t into a class+priority pair.
-__OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_8_0)
+__API_AVAILABLE(macos(10.10), ios(8.0))
 qos_class_t
 _pthread_qos_class_decode(pthread_priority_t priority, int *relative_priority, unsigned long *flags);
 
-// Encode a legacy workqueue API priority into a pthread_priority_t
-__OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_8_0)
+// Encode a legacy workqueue API priority into a pthread_priority_t. This API
+// is deprecated and can be removed when the simulator no longer uses it.
+__API_DEPRECATED("no longer used", macos(10.10, 10.13), ios(8.0, 11.0))
 pthread_priority_t
 _pthread_qos_class_encode_workqueue(int queue_priority, unsigned long flags);
 
 #if __DARWIN_C_LEVEL >= __DARWIN_C_FULL
+
 // Set QoS or voucher, or both, on pthread_self()
-__OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_8_0)
+__API_AVAILABLE(macos(10.10), ios(8.0))
 int
 _pthread_set_properties_self(_pthread_set_flags_t flags, pthread_priority_t priority, mach_port_t voucher);
 
 // Set self to fixed priority without disturbing QoS or priority
-__OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_8_0)
+__API_AVAILABLE(macos(10.10), ios(8.0))
 int
 pthread_set_fixedpriority_self(void);
 
 // Inverse of pthread_set_fixedpriority_self()
-__OSX_AVAILABLE_STARTING(__MAC_10_11, __IPHONE_9_0)
+__API_AVAILABLE(macos(10.10), ios(8.0))
 int
 pthread_set_timeshare_self(void);
 
-#endif
+/*!
+ * @const PTHREAD_MAX_PARALLELISM_PHYSICAL
+ * Flag that can be used with pthread_qos_max_parallelism() and
+ * pthread_time_constraint_max_parallelism() to ask for a count of physical
+ * compute units available for parallelism (default is logical).
+ */
+#define PTHREAD_MAX_PARALLELISM_PHYSICAL 0x1
+
+/*!
+ * @function pthread_qos_max_parallelism
+ *
+ * @abstract
+ * Returns the number of compute units available for parallel computation at
+ * a specified QoS class.
+ *
+ * @param qos
+ * The specified QoS class.
+ *
+ * @param flags
+ * 0 or PTHREAD_MAX_PARALLELISM_PHYSICAL.
+ *
+ * @return
+ * The number of compute units available for parallel computation for the
+ * specified QoS, or -1 on failure (with errno set accordingly).
+ */
+__API_AVAILABLE(macos(10.13), ios(11.0), tvos(11.0), watchos(4.0))
+int
+pthread_qos_max_parallelism(qos_class_t qos, unsigned long flags);
+
+/*!
+ * @function pthread_time_constraint_max_parallelism()
+ *
+ * @abstract
+ * Returns the number of compute units available for parallel computation on
+ * realtime threads.
+ *
+ * @param flags
+ * 0 or PTHREAD_MAX_PARALLELISM_PHYSICAL.
+ *
+ * @return
+ * The number of compute units available for parallel computation on realtime
+ * threads, or -1 on failure (with errno set accordingly).
+ */
+__API_AVAILABLE(macos(10.13), ios(11.0), tvos(11.0), watchos(4.0))
+int
+pthread_time_constraint_max_parallelism(unsigned long flags);
+
+#endif // __DARWIN_C_LEVEL >= __DARWIN_C_FULL
 
 __END_DECLS
 

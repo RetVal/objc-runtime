@@ -29,6 +29,8 @@
 #ifdef __arm__
 	
 #include <arm/arch.h>
+#include "objc-config.h"
+#include "isa.h"
 
 #ifndef _ARM_ARCH_7
 #   error requires armv7
@@ -66,25 +68,6 @@
 #   define FP_RESTORE
 
 #endif
-
-// Define SUPPORT_INDEXED_ISA for targets which store the class in the ISA as
-// an index in to a class table.
-// Note, keep this in sync with objc-config.h.
-// FIXME: Remove this duplication.  We should get this from objc-config.h.
-#if __ARM_ARCH_7K__ >= 2
-#   define SUPPORT_INDEXED_ISA 1
-#else
-#   define SUPPORT_INDEXED_ISA 0
-#endif
-
-// Note, keep these in sync with objc-private.h
-#define ISA_INDEX_IS_NPI      1
-#define ISA_INDEX_MASK        0x0001FFFC
-#define ISA_INDEX_SHIFT       2
-#define ISA_INDEX_BITS        15
-#define ISA_INDEX_COUNT       (1 << ISA_INDEX_BITS)
-#define ISA_INDEX_MAGIC_MASK  0x001E0001
-#define ISA_INDEX_MAGIC_VALUE 0x001C0001
 
 .syntax unified	
 	
@@ -155,62 +138,6 @@ _objc_exitPoints:
 	.long   LExit_objc_msgLookupSuper2_stret
 	.long   0
 
-
-/********************************************************************
-* List every exit insn from every messenger for debugger use.
-* Format:
-* (
-*   1 word instruction's address
-*   1 word type (ENTER or FAST_EXIT or SLOW_EXIT or NIL_EXIT)
-* )
-* 1 word zero
-*
-* ENTER is the start of a dispatcher
-* FAST_EXIT is method dispatch
-* SLOW_EXIT is uncached method lookup
-* NIL_EXIT is returning zero from a message sent to nil
-* These must match objc-gdb.h.
-********************************************************************/
-	
-#define ENTER     1
-#define FAST_EXIT 2
-#define SLOW_EXIT 3
-#define NIL_EXIT  4
-
-.section __DATA,__objc_msg_break
-.globl _gdb_objc_messenger_breakpoints
-_gdb_objc_messenger_breakpoints:
-// contents populated by the macros below
-
-.macro MESSENGER_START
-7:
-	.section __DATA,__objc_msg_break
-	.long 7b
-	.long ENTER
-	.text
-.endmacro
-.macro MESSENGER_END_FAST
-7:
-	.section __DATA,__objc_msg_break
-	.long 7b
-	.long FAST_EXIT
-	.text
-.endmacro
-.macro MESSENGER_END_SLOW
-7:
-	.section __DATA,__objc_msg_break
-	.long 7b
-	.long SLOW_EXIT
-	.text
-.endmacro
-.macro MESSENGER_END_NIL
-7:
-	.section __DATA,__objc_msg_break
-	.long 7b
-	.long NIL_EXIT
-	.text
-.endmacro
-
 	
 /********************************************************************
  * Names for relative labels
@@ -218,7 +145,7 @@ _gdb_objc_messenger_breakpoints:
  * Reserved labels: 6: 7: 8: 9:
  ********************************************************************/
 // 6: used by CacheLookup
-// 7: used by MI_GET_ADDRESS etc and MESSENGER_START etc
+// 7: used by MI_GET_ADDRESS etc
 // 8: used by CacheLookup
 #define LNilReceiver 	9
 #define LNilReceiver_f 	9f
@@ -248,6 +175,10 @@ _gdb_objc_messenger_breakpoints:
 #define SUPERCLASS       4
 #define CACHE            8
 #define CACHE_MASK      12
+
+/* Field offsets in method cache bucket */
+#define CACHED_SEL       0
+#define CACHED_IMP       4
 
 /* Selected field offsets in method structure */
 #define METHOD_NAME      0
@@ -327,7 +258,7 @@ LExit$0:
 	and	r12, r12, r1		// r12 = index = SEL & mask
 .endif
 	add	r9, r9, r12, LSL #3	// r9 = bucket = buckets+index*8
-	ldr	r12, [r9]		// r12 = bucket->sel
+	ldr	r12, [r9, #CACHED_SEL]	// r12 = bucket->sel
 6:
 .if $0 == STRET
 	teq	r12, r2
@@ -335,7 +266,7 @@ LExit$0:
 	teq	r12, r1
 .endif
 	bne	8f
-	ldr	r12, [r9, #4]		// r12 = bucket->imp
+	ldr	r12, [r9, #CACHED_IMP]	// r12 = bucket->imp
 
 .if $0 == STRET
 	tst	r12, r12		// set ne for stret forwarding
@@ -346,12 +277,14 @@ LExit$0:
 .endmacro
 
 .macro CacheLookup2
-	
+#if CACHED_SEL != 0
+#   error this code requires that SEL be at offset 0
+#endif
 8:	
 	cmp	r12, #1
 	blo	8f			// if (bucket->sel == 0) cache miss
 	it	eq			// if (bucket->sel == 1) cache wrap
-	ldreq	r9, [r9, #4]		// bucket->imp is before first bucket
+	ldreq	r9, [r9, #CACHED_IMP]	// bucket->imp is before first bucket
 	ldr	r12, [r9, #8]!		// r12 = (++bucket)->sel
 	b	6b
 8:
@@ -377,7 +310,7 @@ LExit$0:
 	// Note: We are doing a little wasted work here to load values we might not
 	// need.  Branching turns out to be even worse when performance was measured.
 	MI_GET_ADDRESS(r12, _objc_indexed_classes)
-	tst.w	r9, #ISA_INDEX_IS_NPI
+	tst.w	r9, #ISA_INDEX_IS_NPI_MASK
 	itt	ne
 	ubfxne	r9, r9, #ISA_INDEX_SHIFT, #ISA_INDEX_BITS
 	ldrne.w	r9, [r12, r9, lsl #2]
@@ -425,7 +358,6 @@ LExit$0:
  ********************************************************************/
 
 	ENTRY _objc_msgSend
-	MESSENGER_START
 	
 	cbz	r0, LNilReceiver_f
 
@@ -433,14 +365,12 @@ LExit$0:
 	GetClassFromIsa			// r9 = class
 	CacheLookup NORMAL
 	// cache hit, IMP in r12, eq already set for nonstret forwarding
-	MESSENGER_END_FAST
 	bx	r12			// call imp
 
 	CacheLookup2 NORMAL
 	// cache miss
 	ldr	r9, [r0]		// r9 = self->isa
 	GetClassFromIsa			// r9 = class
-	MESSENGER_END_SLOW
 	b	__objc_msgSend_uncached
 
 LNilReceiver:
@@ -449,7 +379,6 @@ LNilReceiver:
 	mov	r2, #0
 	mov	r3, #0
 	FP_RETURN_ZERO
-	MESSENGER_END_NIL
 	bx	lr	
 
 	END_ENTRY _objc_msgSend
@@ -504,7 +433,6 @@ LNilReceiver:
  ********************************************************************/
 
 	ENTRY _objc_msgSend_stret
-	MESSENGER_START
 	
 	cbz	r1, LNilReceiver_f
 
@@ -512,18 +440,15 @@ LNilReceiver:
 	GetClassFromIsa			// r9 = class
 	CacheLookup STRET
 	// cache hit, IMP in r12, ne already set for stret forwarding
-	MESSENGER_END_FAST
 	bx	r12
 
 	CacheLookup2 STRET
 	// cache miss
 	ldr	r9, [r1]		// r9 = self->isa
 	GetClassFromIsa			// r9 = class
-	MESSENGER_END_SLOW
 	b	__objc_msgSend_stret_uncached
 
 LNilReceiver:
-	MESSENGER_END_NIL
 	bx	lr
 	
 	END_ENTRY _objc_msgSend_stret
@@ -569,20 +494,17 @@ LNilReceiver:
  ********************************************************************/
 
 	ENTRY _objc_msgSendSuper
-	MESSENGER_START
 	
 	ldr	r9, [r0, #CLASS]	// r9 = struct super->class
 	CacheLookup NORMAL
 	// cache hit, IMP in r12, eq already set for nonstret forwarding
 	ldr	r0, [r0, #RECEIVER]	// load real receiver
-	MESSENGER_END_FAST
 	bx	r12			// call imp
 
 	CacheLookup2 NORMAL
 	// cache miss
 	ldr	r9, [r0, #CLASS]	// r9 = struct super->class
 	ldr	r0, [r0, #RECEIVER]	// load real receiver
-	MESSENGER_END_SLOW
 	b	__objc_msgSend_uncached
 	
 	END_ENTRY _objc_msgSendSuper
@@ -598,14 +520,12 @@ LNilReceiver:
  ********************************************************************/
 	
 	ENTRY _objc_msgSendSuper2
-	MESSENGER_START
 	
 	ldr	r9, [r0, #CLASS]	// class = struct super->class
 	ldr	r9, [r9, #SUPERCLASS]   // class = class->superclass
 	CacheLookup NORMAL
 	// cache hit, IMP in r12, eq already set for nonstret forwarding
 	ldr	r0, [r0, #RECEIVER]	// load real receiver
-	MESSENGER_END_FAST
 	bx	r12			// call imp
 
 	CacheLookup2 NORMAL
@@ -613,7 +533,6 @@ LNilReceiver:
 	ldr	r9, [r0, #CLASS]	// class = struct super->class
 	ldr	r9, [r9, #SUPERCLASS]   // class = class->superclass
 	ldr	r0, [r0, #RECEIVER]	// load real receiver
-	MESSENGER_END_SLOW
 	b	__objc_msgSend_uncached
 	
 	END_ENTRY _objc_msgSendSuper2
@@ -651,20 +570,17 @@ LNilReceiver:
  ********************************************************************/
 
 	ENTRY _objc_msgSendSuper_stret
-	MESSENGER_START
 	
 	ldr	r9, [r1, #CLASS]	// r9 = struct super->class
 	CacheLookup STRET
 	// cache hit, IMP in r12, ne already set for stret forwarding
 	ldr	r1, [r1, #RECEIVER]	// load real receiver
-	MESSENGER_END_FAST
 	bx	r12			// call imp
 
 	CacheLookup2 STRET
 	// cache miss
 	ldr	r9, [r1, #CLASS]	// r9 = struct super->class
 	ldr	r1, [r1, #RECEIVER]	// load real receiver
-	MESSENGER_END_SLOW
 	b	__objc_msgSend_stret_uncached
 
 	END_ENTRY _objc_msgSendSuper_stret
@@ -675,14 +591,12 @@ LNilReceiver:
  ********************************************************************/
 
 	ENTRY _objc_msgSendSuper2_stret
-	MESSENGER_START
 	
 	ldr	r9, [r1, #CLASS]	// class = struct super->class
 	ldr	r9, [r9, #SUPERCLASS]	// class = class->superclass
 	CacheLookup STRET
 	// cache hit, IMP in r12, ne already set for stret forwarding
 	ldr	r1, [r1, #RECEIVER]	// load real receiver
-	MESSENGER_END_FAST
 	bx	r12			// call imp
 
 	CacheLookup2 STRET
@@ -690,7 +604,6 @@ LNilReceiver:
 	ldr	r9, [r1, #CLASS]	// class = struct super->class
 	ldr	r9, [r9, #SUPERCLASS]	// class = class->superclass
 	ldr	r1, [r1, #RECEIVER]	// load real receiver
-	MESSENGER_END_SLOW
 	b	__objc_msgSend_stret_uncached
 	
 	END_ENTRY _objc_msgSendSuper2_stret
@@ -836,10 +749,6 @@ LNilReceiver:
 
 	// THIS IS NOT A CALLABLE C FUNCTION
 	// Out-of-band Z is 0 (EQ) for normal, 1 (NE) for stret
-
-	MESSENGER_START
-	nop
-	MESSENGER_END_SLOW
 
 	beq	__objc_msgForward
 	b	__objc_msgForward_stret

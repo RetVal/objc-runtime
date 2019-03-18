@@ -1248,7 +1248,7 @@ protocol_isEqual(Protocol * _Nullable proto, Protocol * _Nullable other)
 /** 
  * Returns the name of a protocol.
  * 
- * @param p A protocol.
+ * @param proto A protocol.
  * 
  * @return The name of the protocol \e p as a C string.
  */
@@ -1259,7 +1259,7 @@ protocol_getName(Protocol * _Nonnull proto)
 /** 
  * Returns a method description structure for a specified method of a given protocol.
  * 
- * @param p A protocol.
+ * @param proto A protocol.
  * @param aSel A selector.
  * @param isRequiredMethod A Boolean value that indicates whether aSel is a required method.
  * @param isInstanceMethod A Boolean value that indicates whether aSel is an instance method.
@@ -1279,7 +1279,7 @@ protocol_getMethodDescription(Protocol * _Nonnull proto, SEL _Nonnull aSel,
 /** 
  * Returns an array of method descriptions of methods meeting a given specification for a given protocol.
  * 
- * @param p A protocol.
+ * @param proto A protocol.
  * @param isRequiredMethod A Boolean value that indicates whether returned methods should
  *  be required methods (pass YES to specify required methods).
  * @param isInstanceMethod A Boolean value that indicates whether returned methods should
@@ -1692,6 +1692,43 @@ objc_removeAssociatedObjects(id _Nonnull object)
     OBJC_AVAILABLE(10.6, 3.1, 9.0, 1.0, 2.0);
 
 
+/* Hooks for Swift */
+
+/**
+ * Function type for a hook that intercepts class_getImageName().
+ *
+ * @param cls The class whose image name is being looked up.
+ * @param outImageName On return, the result of the image name lookup.
+ * @return YES if an image name for this class was found, NO otherwise.
+ *
+ * @see class_getImageName
+ * @see objc_setHook_getImageName
+ */
+typedef BOOL (*objc_hook_getImageName)(Class _Nonnull cls, const char * _Nullable * _Nonnull outImageName);
+
+/**
+ * Install a hook for class_getImageName().
+ *
+ * @param newValue The hook function to install.
+ * @param outOldValue The address of a function pointer variable. On return,
+ *  the old hook function is stored in the variable.
+ *
+ * @note The store to *outOldValue is thread-safe: the variable will be
+ *  updated before class_getImageName() calls your new hook to read it,
+ *  even if your new hook is called from another thread before this
+ *  setter completes.
+ * @note The first hook in the chain is the native implementation of
+ *  class_getImageName(). Your hook should call the previous hook for
+ *  classes that you do not recognize.
+ *
+ * @see class_getImageName
+ * @see objc_hook_getImageName
+ */
+OBJC_EXPORT void objc_setHook_getImageName(objc_hook_getImageName _Nonnull newValue,
+                                           objc_hook_getImageName _Nullable * _Nonnull outOldValue)
+    OBJC_AVAILABLE(10.14, 12.0, 12.0, 5.0, 3.0);
+
+
 #define _C_ID       '@'
 #define _C_CLASS    '#'
 #define _C_SEL      ':'
@@ -1960,6 +1997,7 @@ OBJC_EXPORT unsigned
 method_getArgumentInfo(struct objc_method * _Nonnull m, int arg,
                        const char * _Nullable * _Nonnull type,
                        int * _Nonnull offset)
+    UNAVAILABLE_ATTRIBUTE  // This function was accidentally deleted in 10.9.
     OBJC2_UNAVAILABLE;
 
 OBJC_EXPORT Class _Nullable

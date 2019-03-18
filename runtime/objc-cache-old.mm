@@ -693,8 +693,8 @@ static uintptr_t _get_pc_for_thread(thread_t thread)
 * reading function is in progress because it might still be using 
 * the garbage memory.
 **********************************************************************/
-OBJC_EXPORT uintptr_t objc_entryPoints[];
-OBJC_EXPORT uintptr_t objc_exitPoints[];
+extern "C" uintptr_t objc_entryPoints[];
+extern "C" uintptr_t objc_exitPoints[];
 
 static int _collecting_in_critical(void)
 {

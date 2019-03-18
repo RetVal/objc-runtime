@@ -56,7 +56,7 @@
 #include <mach/mach.h>
 #include <libkern/OSAtomic.h>
 
-//typedef volatile OSSpinLock pthread_lock_t __deprecated_msg("Use <os/lock.h> instead");
+typedef volatile OSSpinLock pthread_lock_t __deprecated_msg("Use <os/lock.h> instead");
 
 #define LOCK_INIT(l) ((l) = OS_SPINLOCK_INIT)
 #define LOCK_INITIALIZER OS_SPINLOCK_INIT

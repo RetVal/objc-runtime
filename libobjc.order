@@ -17,12 +17,10 @@ _rtp_init
 _gc_fixup_barrier_stubs
 __objc_update_stubs_in_mach_header
 _sel_init
-_sel_lock
 ___sel_registerName
 __objc_search_builtins
 __ZNK8objc_opt13objc_selopt_t3getEPKc
 __ZNK8objc_opt13objc_selopt_t4hashEPKc
-_sel_unlock
 _sel_registerName
 _arr_init
 __ZN4objc8DenseMapIP11objc_objectmLb1ENS_12DenseMapInfoIS2_EENS3_ImEEE4initEj

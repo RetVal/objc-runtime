@@ -32,7 +32,7 @@
 // fork() safety requires careful tracking of all locks used in the runtime.
 // Thou shalt not declare any locks outside this file.
 
-extern rwlock_t runtimeLock;
+extern mutex_t runtimeLock;
 extern mutex_t DemangleCacheLock;
 
 #endif

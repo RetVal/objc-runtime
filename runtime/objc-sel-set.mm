@@ -120,7 +120,7 @@ struct __objc_sel_set *__objc_sel_set_create(size_t selrefs) {
     sset->_count = 0;
 
     // heuristic to convert executable's selrefs count to table size
-#if TARGET_OS_IPHONE
+#if TARGET_OS_IPHONE && !TARGET_OS_IOSMAC
     for (idx = 0; __objc_sel_set_capacities[idx] < selrefs; idx++);
     if (idx > 0 && selrefs < 1536) idx--;
 #else

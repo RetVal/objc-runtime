@@ -37,12 +37,36 @@
 #include "objc-loadmethod.h"
 #include "message.h"
 
-OBJC_EXPORT Class getOriginalClassForPosingClass(Class);
-
-
 /***********************************************************************
 * Exports.
 **********************************************************************/
+
+/* Linker metadata symbols */
+
+// NSObject was in Foundation/CF on macOS < 10.8.
+#if TARGET_OS_OSX
+#if __OBJC2__
+
+const char __objc_nsobject_class_10_5 = 0;
+const char __objc_nsobject_class_10_6 = 0;
+const char __objc_nsobject_class_10_7 = 0;
+
+const char __objc_nsobject_metaclass_10_5 = 0;
+const char __objc_nsobject_metaclass_10_6 = 0;
+const char __objc_nsobject_metaclass_10_7 = 0;
+
+const char __objc_nsobject_isa_10_5 = 0;
+const char __objc_nsobject_isa_10_6 = 0;
+const char __objc_nsobject_isa_10_7 = 0;
+
+#else
+
+const char __objc_nsobject_class_10_5 = 0;
+const char __objc_nsobject_class_10_6 = 0;
+const char __objc_nsobject_class_10_7 = 0;
+
+#endif
+#endif
 
 // Settings from environment variables
 #define OPTION(var, env, help) bool var = false;
@@ -357,18 +381,6 @@ logReplacedMethod(const char *className, SEL s,
 }
 
 
-
-/***********************************************************************
-* objc_setMultithreaded.
-**********************************************************************/
-void objc_setMultithreaded (BOOL flag)
-{
-    OBJC_WARN_DEPRECATED;
-
-    // Nothing here. Thread synchronization in the runtime is always active.
-}
-
-
 /***********************************************************************
 * _objc_fetch_pthread_data
 * Fetch objc's pthread data for this thread.
@@ -487,109 +499,36 @@ void objc_setForwardHandler(void *fwd, void *fwd_stret)
 // GrP fixme
 extern "C" Class _objc_getOrigClass(const char *name);
 #endif
-const char *class_getImageName(Class cls)
-{
-#if TARGET_OS_WIN32
-    TCHAR *szFileName;
-    DWORD charactersCopied;
-    Class origCls;
-    HMODULE classModule;
-    bool res;
-#endif
-    if (!cls) return NULL;
 
+static BOOL internal_class_getImageName(Class cls, const char **outName)
+{
 #if !__OBJC2__
     cls = _objc_getOrigClass(cls->demangledName());
 #endif
-#if TARGET_OS_WIN32
-    charactersCopied = 0;
-    szFileName = malloc(MAX_PATH * sizeof(TCHAR));
-    
-    origCls = objc_getOrigClass(cls->demangledName());
-    classModule = NULL;
-    res = GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, (LPCTSTR)origCls, &classModule);
-    if (res && classModule) {
-        charactersCopied = GetModuleFileName(classModule, szFileName, MAX_PATH * sizeof(TCHAR));
-    }
-    if (classModule) FreeLibrary(classModule);
-    if (charactersCopied) {
-        return (const char *)szFileName;
-    } else {
-        free(szFileName);
-    }
-    return NULL;
-#else
-    return dyld_image_path_containing_address(cls);
-#endif
+    auto result = dyld_image_path_containing_address(cls);
+    *outName = result;
+    return (result != nil);
 }
 
 
-const char **objc_copyImageNames(unsigned int *outCount)
+static ChainedHookFunction<objc_hook_getImageName>
+GetImageNameHook{internal_class_getImageName};
+
+void objc_setHook_getImageName(objc_hook_getImageName newValue,
+                               objc_hook_getImageName *outOldValue)
 {
-    header_info *hi;
-    int count = 0;
-    int max = HeaderCount;
-#if TARGET_OS_WIN32
-    const TCHAR **names = (const TCHAR **)calloc(max+1, sizeof(TCHAR *));
-#else
-    const char **names = (const char **)calloc(max+1, sizeof(char *));
-#endif
-    
-    for (hi = FirstHeader; hi != NULL && count < max; hi = hi->getNext()) {
-#if TARGET_OS_WIN32
-        if (hi->moduleName) {
-            names[count++] = hi->moduleName;
-        }
-#else
-        const char *fname = hi->fname();
-        if (fname) {
-            names[count++] = fname;
-        }
-#endif
-    }
-    names[count] = NULL;
-    
-    if (count == 0) {
-        // Return NULL instead of empty list if there are no images
-        free((void *)names);
-        names = NULL;
-    }
-
-    if (outCount) *outCount = count;
-    return names;
+    GetImageNameHook.set(newValue, outOldValue);
 }
 
-
-/**********************************************************************
-*
-**********************************************************************/
-const char ** 
-objc_copyClassNamesForImage(const char *image, unsigned int *outCount)
+const char *class_getImageName(Class cls)
 {
-    header_info *hi;
+    if (!cls) return nil;
 
-    if (!image) {
-        if (outCount) *outCount = 0;
-        return NULL;
-    }
-
-    // Find the image.
-    for (hi = FirstHeader; hi != NULL; hi = hi->getNext()) {
-#if TARGET_OS_WIN32
-        if (0 == wcscmp((TCHAR *)image, hi->moduleName)) break;
-#else
-        if (0 == strcmp(image, hi->fname())) break;
-#endif
-    }
-    
-    if (!hi) {
-        if (outCount) *outCount = 0;
-        return NULL;
-    }
-
-    return _objc_copyClassNamesForImage(hi, outCount);
+    const char *name;
+    if (GetImageNameHook.get()(cls, &name)) return name;
+    else return nil;
 }
-	
+
 
 /**********************************************************************
 * Fast Enumeration Support

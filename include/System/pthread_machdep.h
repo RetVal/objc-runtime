@@ -211,7 +211,7 @@ extern "C" {
 }
 #endif
 
-typedef int pthread_lock_t;
+//typedef int pthread_lock_t;
 
 //__inline__ static int
 //_pthread_has_direct_tsd(void)

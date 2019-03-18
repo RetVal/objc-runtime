@@ -26,6 +26,15 @@
 
 #include <TargetConditionals.h>
 
+// Define __OBJC2__ for the benefit of our asm files.
+#ifndef __OBJC2__
+#   if TARGET_OS_OSX  &&  !TARGET_OS_IOSMAC  &&  __i386__
+        // old ABI
+#   else
+#       define __OBJC2__ 1
+#   endif
+#endif
+
 // Avoid the !NDEBUG double negative.
 #if !NDEBUG
 #   define DEBUG 1
@@ -42,7 +51,7 @@
 #endif
 
 // Define SUPPORT_ZONES=1 to enable malloc zone support in NXHashTable.
-#if !TARGET_OS_OSX
+#if !(TARGET_OS_OSX || TARGET_OS_IOSMAC)
 #   define SUPPORT_ZONES 0
 #else
 #   define SUPPORT_ZONES 1
@@ -73,7 +82,7 @@
 // Define SUPPORT_MSB_TAGGED_POINTERS to use the MSB 
 // as the tagged pointer marker instead of the LSB.
 // Be sure to edit tagged pointer SPI in objc-internal.h as well.
-#if !SUPPORT_TAGGED_POINTERS  ||  !TARGET_OS_IPHONE
+#if !SUPPORT_TAGGED_POINTERS  ||  (TARGET_OS_OSX || TARGET_OS_IOSMAC)
 #   define SUPPORT_MSB_TAGGED_POINTERS 0
 #else
 #   define SUPPORT_MSB_TAGGED_POINTERS 1
@@ -83,7 +92,7 @@
 // field as an index into a class table.
 // Note, keep this in sync with any .s files which also define it.
 // Be sure to edit objc-abi.h as well.
-#if __ARM_ARCH_7K__ >= 2
+#if __ARM_ARCH_7K__ >= 2  ||  (__arm64__ && !__LP64__)
 #   define SUPPORT_INDEXED_ISA 1
 #else
 #   define SUPPORT_INDEXED_ISA 0
@@ -91,7 +100,8 @@
 
 // Define SUPPORT_PACKED_ISA=1 on platforms that store the class in the isa 
 // field as a maskable pointer with other data around it.
-#if (!__LP64__  ||  TARGET_OS_WIN32  ||  TARGET_OS_SIMULATOR)
+#if (!__LP64__  ||  TARGET_OS_WIN32  ||  \
+     (TARGET_OS_SIMULATOR && !TARGET_OS_IOSMAC))
 #   define SUPPORT_PACKED_ISA 0
 #else
 #   define SUPPORT_PACKED_ISA 1
@@ -125,7 +135,7 @@
 // Define SUPPORT_ALT_HANDLERS if you're using zero-cost exceptions 
 // but also need to support AppKit's alt-handler scheme
 // Be sure to edit objc-exception.h as well (objc_add/removeExceptionHandler)
-#if !SUPPORT_ZEROCOST_EXCEPTIONS  ||  TARGET_OS_IPHONE  ||  TARGET_OS_EMBEDDED
+#if !SUPPORT_ZEROCOST_EXCEPTIONS  ||  !TARGET_OS_OSX
 #   define SUPPORT_ALT_HANDLERS 0
 #else
 #   define SUPPORT_ALT_HANDLERS 1
@@ -146,17 +156,10 @@
 #endif
 
 // Define SUPPORT_MESSAGE_LOGGING to enable NSObjCMessageLoggingEnabled
-#if TARGET_OS_WIN32  ||  TARGET_OS_EMBEDDED
+#if !TARGET_OS_OSX
 #   define SUPPORT_MESSAGE_LOGGING 0
 #else
 #   define SUPPORT_MESSAGE_LOGGING 1
-#endif
-
-// Define SUPPORT_QOS_HACK to work around deadlocks due to QoS bugs.
-#if !__OBJC2__  ||  TARGET_OS_WIN32
-#   define SUPPORT_QOS_HACK 0
-#else
-#   define SUPPORT_QOS_HACK 1
 #endif
 
 // OBJC_INSTRUMENTED controls whether message dispatching is dynamically

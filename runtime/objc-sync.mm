@@ -30,7 +30,7 @@
 //
 
 
-typedef struct SyncData {
+typedef struct alignas(CacheLineSize) SyncData {
     struct SyncData* nextData;
     DisguisedPtr<objc_object> object;
     int32_t threadCount;  // number of THREADS using this block
@@ -60,7 +60,7 @@ struct SyncList {
     SyncData *data;
     spinlock_t lock;
 
-    SyncList() : data(nil), lock(fork_unsafe_lock) { }
+    constexpr SyncList() : data(nil), lock(fork_unsafe_lock) { }
 };
 
 // Use multiple parallel lists to decrease contention among unrelated objects.
@@ -228,11 +228,11 @@ static SyncData* id2data(id object, enum usage why)
         }
     }
 
-    // malloc a new SyncData and add to list.
-    // XXX calling malloc with a global lock held is bad practice,
-    // might be worth releasing the lock, mallocing, and searching again.
-    // But since we never free these guys we won't be stuck in malloc very often.
-    result = (SyncData*)calloc(sizeof(SyncData), 1);
+    // Allocate a new SyncData and add to list.
+    // XXX allocating memory with a global lock held is bad practice,
+    // might be worth releasing the lock, allocating, and searching again.
+    // But since we never free these guys we won't be stuck in allocation very often.
+    posix_memalign((void **)&result, alignof(SyncData), sizeof(SyncData));
     result->object = (objc_object *)object;
     result->threadCount = 1;
     new (&result->mutex) recursive_mutex_t(fork_unsafe_lock);

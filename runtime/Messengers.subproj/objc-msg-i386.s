@@ -69,62 +69,6 @@ _objc_exitPoints:
 
 
 /********************************************************************
-* List every exit insn from every messenger for debugger use.
-* Format:
-* (
-*   1 word instruction's address
-*   1 word type (ENTER or FAST_EXIT or SLOW_EXIT or NIL_EXIT)
-* )
-* 1 word zero
-*
-* ENTER is the start of a dispatcher
-* FAST_EXIT is method dispatch
-* SLOW_EXIT is uncached method lookup
-* NIL_EXIT is returning zero from a message sent to nil
-* These must match objc-gdb.h.
-********************************************************************/
-	
-#define ENTER     1
-#define FAST_EXIT 2
-#define SLOW_EXIT 3
-#define NIL_EXIT  4
-
-.section __DATA,__objc_msg_break
-.globl _gdb_objc_messenger_breakpoints
-_gdb_objc_messenger_breakpoints:
-// contents populated by the macros below
-
-.macro MESSENGER_START
-4:
-	.section __DATA,__objc_msg_break
-	.long 4b
-	.long ENTER
-	.text
-.endmacro
-.macro MESSENGER_END_FAST
-4:
-	.section __DATA,__objc_msg_break
-	.long 4b
-	.long FAST_EXIT
-	.text
-.endmacro
-.macro MESSENGER_END_SLOW
-4:
-	.section __DATA,__objc_msg_break
-	.long 4b
-	.long SLOW_EXIT
-	.text
-.endmacro
-.macro MESSENGER_END_NIL
-4:
-	.section __DATA,__objc_msg_break
-	.long 4b
-	.long NIL_EXIT
-	.text
-.endmacro
-
-
-/********************************************************************
  *
  * Common offsets.
  *
@@ -492,8 +436,6 @@ LMsgSendHitInstrumentDone_$0_$1_$2:
 /////////////////////////////////////////////////////////////////////
 
 .macro MethodTableLookup
-	MESSENGER_END_SLOW
-
 	// stack has return address and nothing else
 	subl	$$(12+5*16), %esp
 
@@ -593,7 +535,6 @@ LGetImpExit:
  ********************************************************************/
 
 	ENTRY	_objc_msgSend
-	MESSENGER_START
 	CALL_MCOUNTER
 
 // load receiver and selector
@@ -609,7 +550,6 @@ LMsgSendReceiverOk:
 	movl	isa(%eax), %edx		// class = self->isa
 	CacheLookup WORD_RETURN, MSG_SEND, LMsgSendCacheMiss
 	xor	%edx, %edx		// set nonstret for msgForward_internal
-	MESSENGER_END_FAST
 	jmp	*%eax
 
 // cache miss: go search the method lists
@@ -624,7 +564,6 @@ LMsgSendNilSelf:
 	movl	$0,%edx
 	xorps	%xmm0, %xmm0
 LMsgSendDone:
-	MESSENGER_END_NIL
 	ret
 
 // guaranteed non-nil entry point (disabled for now)
@@ -647,7 +586,6 @@ LMsgSendExit:
  ********************************************************************/
 
 	ENTRY	_objc_msgSendSuper
-	MESSENGER_START
 	CALL_MCOUNTER
 
 // load selector and class to search
@@ -658,7 +596,6 @@ LMsgSendExit:
 // search the cache (class in %edx)
 	CacheLookup WORD_RETURN, MSG_SENDSUPER, LMsgSendSuperCacheMiss
 	xor	%edx, %edx		// set nonstret for msgForward_internal
-	MESSENGER_END_FAST
 	jmp	*%eax			// goto *imp
 
 // cache miss: go search the method lists
@@ -671,7 +608,6 @@ LMsgSendSuperCacheMiss:
 LMsgSendSuperIgnored:
 	movl	super(%esp), %eax
 	movl    receiver(%eax), %eax
-	MESSENGER_END_NIL
 	ret
 	
 LMsgSendSuperExit:
@@ -736,7 +672,6 @@ LMsgSendvArgsOK:
  ********************************************************************/
 
 	ENTRY	_objc_msgSend_fpret
-	MESSENGER_START
 	CALL_MCOUNTER
 
 // load receiver and selector
@@ -752,7 +687,6 @@ LMsgSendFpretReceiverOk:
 	movl	isa(%eax), %edx		// class = self->isa
 	CacheLookup WORD_RETURN, MSG_SEND, LMsgSendFpretCacheMiss
 	xor	%edx, %edx		// set nonstret for msgForward_internal
-	MESSENGER_END_FAST
 	jmp	*%eax			// goto *imp
 
 // cache miss: go search the method lists
@@ -766,7 +700,6 @@ LMsgSendFpretNilSelf:
 	// %eax is already zero
 	fldz
 LMsgSendFpretDone:
-	MESSENGER_END_NIL
 	ret
 
 LMsgSendFpretExit:
@@ -839,7 +772,6 @@ LMsgSendvFpretArgsOK:
  ********************************************************************/
 
 	ENTRY	_objc_msgSend_stret
-	MESSENGER_START
 	CALL_MCOUNTER
 
 // load receiver and selector
@@ -855,7 +787,6 @@ LMsgSendStretReceiverOk:
 	movl	isa(%eax), %edx		//   class = self->isa
 	CacheLookup STRUCT_RETURN, MSG_SEND, LMsgSendStretCacheMiss
 	movl	$1, %edx		// set stret for objc_msgForward
-	MESSENGER_END_FAST
 	jmp	*%eax			// goto *imp
 
 // cache miss: go search the method lists
@@ -866,7 +797,6 @@ LMsgSendStretCacheMiss:
 
 // message sent to nil: redirect to nil receiver, if any
 LMsgSendStretNilSelf:
-	MESSENGER_END_NIL
 	ret	$4			// pop struct return address (#2995932)
 
 // guaranteed non-nil entry point (disabled for now)
@@ -899,7 +829,6 @@ LMsgSendStretExit:
  ********************************************************************/
 
 	ENTRY	_objc_msgSendSuper_stret
-	MESSENGER_START
 	CALL_MCOUNTER
 
 // load selector and class to search
@@ -910,7 +839,6 @@ LMsgSendStretExit:
 // search the cache (class in %edx)
 	CacheLookup STRUCT_RETURN, MSG_SENDSUPER, LMsgSendSuperStretCacheMiss
 	movl	$1, %edx		// set stret for objc_msgForward
-	MESSENGER_END_FAST
 	jmp	*%eax			// goto *imp
 
 // cache miss: go search the method lists
@@ -1012,10 +940,6 @@ L_forward_stret_handler:
 	
 	// THIS IS NOT A CALLABLE C FUNCTION
 	// Out-of-band register %edx is nonzero for stret, zero otherwise
-
-	MESSENGER_START
-	nop
-	MESSENGER_END_SLOW
 	
 	// Check return type (stret or not)
 	testl	%edx, %edx

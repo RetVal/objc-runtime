@@ -40,8 +40,8 @@ extern struct old_protocol **_getObjcProtocols(const header_info *hi, size_t *np
 extern Class *_getObjcClassRefs(const header_info *hi, size_t *nclasses);
 extern const char *_getObjcClassNames(const header_info *hi, size_t *size);
 
-using Initializer = void(*)(void);
-extern Initializer* getLibobjcInitializers(const headerType *mhdr, size_t *count);
+using UnsignedInitializer = void(*)(void);
+extern UnsignedInitializer* getLibobjcInitializers(const headerType *mhdr, size_t *count);
 
 __END_DECLS
 

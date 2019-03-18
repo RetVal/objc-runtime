@@ -35,25 +35,153 @@
 #include <Block.h>
 #include <Block_private.h>
 #include <mach/mach.h>
+#include <objc/objc-block-trampolines.h>
 
-// symbols defined in assembly files
-// Don't use the symbols directly; they're thumb-biased on some ARM archs.
-#define TRAMP(tramp)                                \
-    static inline __unused uintptr_t tramp(void) {  \
-        extern void *_##tramp;                      \
-        return ((uintptr_t)&_##tramp) & ~1UL;       \
-    }
-// Scalar return
-TRAMP(a1a2_tramphead);   // trampoline header code
-TRAMP(a1a2_firsttramp);  // first trampoline
-TRAMP(a1a2_trampend);    // after the last trampoline
+// fixme C++ compilers don't implemement memory_order_consume efficiently.
+// Use memory_order_relaxed and cross our fingers.
+#define MEMORY_ORDER_CONSUME std::memory_order_relaxed
 
-#if SUPPORT_STRET
-// Struct return
-TRAMP(a2a3_tramphead);
-TRAMP(a2a3_firsttramp);
-TRAMP(a2a3_trampend);
+// 8 bytes of text and data per trampoline on all architectures.
+#define SLOT_SIZE 8
+
+// The trampolines are defined in assembly files in libobjc-trampolines.dylib.
+// We can't link to libobjc-trampolines.dylib directly because
+// for security reasons it isn't in the dyld shared cache.
+
+// Trampoline addresses are lazily looked up.
+// All of them are hidden behind a single atomic pointer for lock-free init.
+
+#ifdef __PTRAUTH_INTRINSICS__
+#   define TrampolinePtrauth __ptrauth(ptrauth_key_function_pointer, 1, 0x3af1)
+#else
+#   define TrampolinePtrauth
 #endif
+
+class TrampolinePointerWrapper {
+    struct TrampolinePointers {
+        class TrampolineAddress {
+            const void * TrampolinePtrauth storage;
+
+        public:
+            TrampolineAddress(void *dylib, const char *name) {
+#define PREFIX "_objc_blockTrampoline"
+                char symbol[strlen(PREFIX) + strlen(name) + 1];
+                strcpy(symbol, PREFIX);
+                strcat(symbol, name);
+                // dlsym() from a text segment returns a signed pointer
+                // Authenticate it manually and let the compiler re-sign it.
+                storage = ptrauth_auth_data(dlsym(dylib, symbol),
+                                            ptrauth_key_function_pointer, 0);
+                if (!storage) {
+                    _objc_fatal("couldn't dlsym %s", symbol);
+                }
+            }
+
+            uintptr_t address() {
+                return (uintptr_t)(void*)storage;
+            }
+        };
+
+        TrampolineAddress impl;   // trampoline header code
+        TrampolineAddress start;  // first trampoline
+#if DEBUG
+        // These symbols are only used in assertions.
+        // fixme might be able to move the assertions to libobjc-trampolines itself
+        TrampolineAddress last;    // start of the last trampoline
+        // We don't use the address after the last trampoline because that
+        // address might be in a different section, and then dlsym() would not
+        // sign it as a function pointer.
+# if SUPPORT_STRET
+        TrampolineAddress impl_stret;
+        TrampolineAddress start_stret;
+        TrampolineAddress last_stret;
+# endif
+#endif
+
+        uintptr_t textSegment;
+        uintptr_t textSegmentSize;
+
+        void check() {
+#if DEBUG
+            assert(impl.address() == textSegment + PAGE_MAX_SIZE);
+            assert(impl.address() % PAGE_SIZE == 0);  // not PAGE_MAX_SIZE
+            assert(impl.address() + PAGE_MAX_SIZE ==
+                   last.address() + SLOT_SIZE);
+            assert(last.address()+8 < textSegment + textSegmentSize);
+            assert((last.address() - start.address()) % SLOT_SIZE == 0);
+# if SUPPORT_STRET
+            assert(impl_stret.address() == textSegment + 2*PAGE_MAX_SIZE);
+            assert(impl_stret.address() % PAGE_SIZE == 0);  // not PAGE_MAX_SIZE
+            assert(impl_stret.address() + PAGE_MAX_SIZE ==
+                   last_stret.address() + SLOT_SIZE);
+            assert(start.address() - impl.address() ==
+                   start_stret.address() - impl_stret.address());
+            assert(last_stret.address() + SLOT_SIZE <
+                   textSegment + textSegmentSize);
+            assert((last_stret.address() - start_stret.address())
+                   % SLOT_SIZE == 0);
+# endif
+#endif
+        }
+
+
+        TrampolinePointers(void *dylib)
+            : impl(dylib, "Impl")
+            , start(dylib, "Start")
+#if DEBUG
+            , last(dylib, "Last")
+# if SUPPORT_STRET
+            , impl_stret(dylib, "Impl_stret")
+            , start_stret(dylib, "Start_stret")
+            , last_stret(dylib, "Last_stret")
+# endif
+#endif
+        {
+            const auto *mh =
+                dyld_image_header_containing_address((void *)impl.address());
+            unsigned long size = 0;
+            textSegment = (uintptr_t)
+                getsegmentdata((headerType *)mh, "__TEXT", &size);
+            textSegmentSize = size;
+
+            check();
+        }
+    };
+
+    std::atomic<TrampolinePointers *> trampolines{nil};
+
+    TrampolinePointers *get() {
+        return trampolines.load(MEMORY_ORDER_CONSUME);
+    }
+
+public:
+    void Initialize() {
+        if (get()) return;
+
+        // This code may be called concurrently.
+        // In the worst case we perform extra dyld operations.
+        void *dylib = dlopen("/usr/lib/libobjc-trampolines.dylib",
+                             RTLD_NOW | RTLD_LOCAL | RTLD_FIRST);
+        if (!dylib) {
+            _objc_fatal("couldn't dlopen libobjc-trampolines.dylib");
+        }
+
+        auto t = new TrampolinePointers(dylib);
+        TrampolinePointers *old = nil;
+        if (! trampolines.compare_exchange_strong(old, t, memory_order_release))
+        {
+            delete t;  // Lost an initialization race.
+        }
+    }
+
+    uintptr_t textSegment() { return get()->textSegment; }
+    uintptr_t textSegmentSize() { return get()->textSegmentSize; }
+
+    uintptr_t impl() { return get()->impl.address(); }
+    uintptr_t start() { return get()->start.address(); }
+};
+
+static TrampolinePointerWrapper Trampolines;
 
 // argument mode identifier
 typedef enum {
@@ -65,34 +193,37 @@ typedef enum {
     ArgumentModeCount
 } ArgumentMode;
 
-
 // We must take care with our data layout on architectures that support 
 // multiple page sizes.
 // 
 // The trampoline template in __TEXT is sized and aligned with PAGE_MAX_SIZE.
 // On some platforms this requires additional linker flags.
 // 
-// When we allocate a page pair, we use PAGE_MAX_SIZE size. 
+// When we allocate a page group, we use PAGE_MAX_SIZE size. 
 // This allows trampoline code to find its data by subtracting PAGE_MAX_SIZE.
 // 
-// When we allocate a page pair, we use the process's page alignment. 
+// When we allocate a page group, we use the process's page alignment. 
 // This simplifies allocation because we don't need to force greater than 
 // default alignment when running with small pages, but it also means 
 // the trampoline code MUST NOT look for its data by masking with PAGE_MAX_MASK.
 
-struct TrampolineBlockPagePair 
+struct TrampolineBlockPageGroup
 {
-    TrampolineBlockPagePair *nextPagePair; // linked list of all pages
-    TrampolineBlockPagePair *nextAvailablePage; // linked list of pages with available slots
+    TrampolineBlockPageGroup *nextPageGroup; // linked list of all pages
+    TrampolineBlockPageGroup *nextAvailablePage; // linked list of pages with available slots
     
     uintptr_t nextAvailable; // index of next available slot, endIndex() if no more available
     
     // Payload data: block pointers and free list.
     // Bytes parallel with trampoline header code are the fields above or unused
-    // uint8_t blocks[ PAGE_MAX_SIZE - sizeof(TrampolineBlockPagePair) ] 
-    
-    // Code: trampoline header followed by trampolines.
-    // uint8_t trampolines[PAGE_MAX_SIZE];
+    // uint8_t payloads[PAGE_MAX_SIZE - sizeof(TrampolineBlockPageGroup)] 
+
+    // Code: Mach-O header, then trampoline header followed by trampolines.
+    // On platforms with struct return we have non-stret trampolines and
+    //     stret trampolines. The stret and non-stret trampolines at a given
+    //     index share the same data page.
+    // uint8_t macho[PAGE_MAX_SIZE];
+    // uint8_t trampolines[ArgumentModeCount][PAGE_MAX_SIZE];
     
     // Per-trampoline block data format:
     // initial value is 0 while page data is filled sequentially 
@@ -105,11 +236,11 @@ struct TrampolineBlockPagePair
     };
     
     static uintptr_t headerSize() {
-        return (uintptr_t) (a1a2_firsttramp() - a1a2_tramphead());
+        return (uintptr_t) (Trampolines.start() - Trampolines.impl());
     }
     
     static uintptr_t slotSize() {
-        return 8;
+        return SLOT_SIZE;
     }
 
     static uintptr_t startIndex() {
@@ -130,185 +261,158 @@ struct TrampolineBlockPagePair
         return (Payload *)((char *)this + index*slotSize());
     }
 
-    IMP trampoline(uintptr_t index) {
+    uintptr_t trampolinesForMode(int aMode) {
+        // Skip over data page and Mach-O page.
+        return (uintptr_t)this + PAGE_MAX_SIZE * (2 + aMode);
+    }
+    
+    IMP trampoline(int aMode, uintptr_t index) {
         assert(validIndex(index));
-        char *imp = (char *)this + index*slotSize() + PAGE_MAX_SIZE;
+        char *base = (char *)trampolinesForMode(aMode);
+        char *imp = base + index*slotSize();
 #if __arm__
         imp++;  // trampoline is Thumb instructions
+#endif
+#if __has_feature(ptrauth_calls)
+        imp = ptrauth_sign_unauthenticated(imp,
+                                           ptrauth_key_function_pointer, 0);
 #endif
         return (IMP)imp;
     }
 
-    uintptr_t indexForTrampoline(IMP tramp) {
-        uintptr_t tramp0 = (uintptr_t)this + PAGE_MAX_SIZE;
-        uintptr_t start = tramp0 + headerSize();
-        uintptr_t end = tramp0 + PAGE_MAX_SIZE;
-        uintptr_t address = (uintptr_t)tramp;
-        if (address >= start  &&  address < end) {
-            return (uintptr_t)(address - tramp0) / slotSize();
+    uintptr_t indexForTrampoline(uintptr_t tramp) {
+        for (int aMode = 0; aMode < ArgumentModeCount; aMode++) {
+            uintptr_t base  = trampolinesForMode(aMode);
+            uintptr_t start = base + startIndex() * slotSize();
+            uintptr_t end   = base + endIndex() * slotSize();
+            if (tramp >= start  &&  tramp < end) {
+                return (uintptr_t)(tramp - base) / slotSize();
+            }
         }
         return 0;
     }
 
     static void check() {
-        assert(TrampolineBlockPagePair::slotSize() == 8);
-        assert(TrampolineBlockPagePair::headerSize() >= sizeof(TrampolineBlockPagePair));
-        assert(TrampolineBlockPagePair::headerSize() % TrampolineBlockPagePair::slotSize() == 0);
-        
-        // _objc_inform("%p %p %p", a1a2_tramphead(), a1a2_firsttramp(), 
-        // a1a2_trampend());
-        assert(a1a2_tramphead() % PAGE_SIZE == 0);  // not PAGE_MAX_SIZE
-        assert(a1a2_tramphead() + PAGE_MAX_SIZE == a1a2_trampend());
-#if SUPPORT_STRET
-        // _objc_inform("%p %p %p", a2a3_tramphead(), a2a3_firsttramp(), 
-        // a2a3_trampend());
-        assert(a2a3_tramphead() % PAGE_SIZE == 0);  // not PAGE_MAX_SIZE
-        assert(a2a3_tramphead() + PAGE_MAX_SIZE == a2a3_trampend());
-#endif
-        
-#if __arm__
-        // make sure trampolines are Thumb
-        extern void *_a1a2_firsttramp;
-        extern void *_a2a3_firsttramp;
-        assert(((uintptr_t)&_a1a2_firsttramp) % 2 == 1);
-        assert(((uintptr_t)&_a2a3_firsttramp) % 2 == 1);
-#endif
+        assert(TrampolineBlockPageGroup::headerSize() >= sizeof(TrampolineBlockPageGroup));
+        assert(TrampolineBlockPageGroup::headerSize() % TrampolineBlockPageGroup::slotSize() == 0);
     }
 
 };
 
-// two sets of trampoline pages; one for stack returns and one for register returns
-static TrampolineBlockPagePair *headPagePairs[ArgumentModeCount];
+static TrampolineBlockPageGroup *HeadPageGroup;
 
 #pragma mark Utility Functions
 
-static inline void _lock() {
-#if __OBJC2__
-    runtimeLock.write();
-#else
-    classLock.lock();
+#if !__OBJC2__
+#define runtimeLock classLock
 #endif
-}
-
-static inline void _unlock() {
-#if __OBJC2__
-    runtimeLock.unlockWrite();
-#else
-    classLock.unlock();
-#endif
-}
-
-static inline void _assert_locked() {
-#if __OBJC2__
-    runtimeLock.assertWriting();
-#else
-    classLock.assertLocked();
-#endif
-}
 
 #pragma mark Trampoline Management Functions
-static TrampolineBlockPagePair *_allocateTrampolinesAndData(ArgumentMode aMode) 
+static TrampolineBlockPageGroup *_allocateTrampolinesAndData()
 {
-    _assert_locked();
+    runtimeLock.assertLocked();
 
     vm_address_t dataAddress;
     
-    TrampolineBlockPagePair::check();
+    TrampolineBlockPageGroup::check();
 
-    TrampolineBlockPagePair *headPagePair = headPagePairs[aMode];
-    
-    assert(headPagePair == nil  ||  headPagePair->nextAvailablePage == nil);
-    
+    // Our final mapping will look roughly like this:
+    //   r/w data
+    //   r/o text mapped from libobjc-trampolines.dylib
+    // with fixed offsets from the text to the data embedded in the text.
+    //
+    // More precisely it will look like this:
+    //   1 page r/w data
+    //   1 page libobjc-trampolines.dylib Mach-O header
+    //   N pages trampoline code, one for each ArgumentMode
+    //   M pages for the rest of libobjc-trampolines' TEXT segment.
+    // The kernel requires that we remap the entire TEXT segment every time.
+    // We assume that our code begins on the second TEXT page, but are robust
+    // against other additions to the end of the TEXT segment.
+
+    assert(HeadPageGroup == nil  ||  HeadPageGroup->nextAvailablePage == nil);
+
+    auto textSource = Trampolines.textSegment();
+    auto textSourceSize = Trampolines.textSegmentSize();
+    auto dataSize = PAGE_MAX_SIZE;
+
+    // Allocate a single contiguous region big enough to hold data+text.
     kern_return_t result;
-    result = vm_allocate(mach_task_self(), &dataAddress, PAGE_MAX_SIZE * 2,
+    result = vm_allocate(mach_task_self(), &dataAddress,
+                         dataSize + textSourceSize,
                          VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_MEMORY_FOUNDATION));
     if (result != KERN_SUCCESS) {
         _objc_fatal("vm_allocate trampolines failed (%d)", result);
     }
 
-    vm_address_t codeAddress = dataAddress + PAGE_MAX_SIZE;
-        
-    uintptr_t codePage;
-    switch(aMode) {
-    case ReturnValueInRegisterArgumentMode:
-        codePage = a1a2_tramphead();
-        break;
-#if SUPPORT_STRET
-    case ReturnValueOnStackArgumentMode:
-        codePage = a2a3_tramphead();
-        break;
-#endif
-    default:
-        _objc_fatal("unknown return mode %d", (int)aMode);
-        break;
-    }
-    
+    // Remap libobjc-trampolines' TEXT segment atop all
+    // but the first of the pages we just allocated:
+    vm_address_t textDest = dataAddress + dataSize;
     vm_prot_t currentProtection, maxProtection;
-    result = vm_remap(mach_task_self(), &codeAddress, PAGE_MAX_SIZE, 
+    result = vm_remap(mach_task_self(), &textDest,
+                      textSourceSize,
                       0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE,
-                      mach_task_self(), codePage, TRUE, 
+                      mach_task_self(), textSource, TRUE, 
                       &currentProtection, &maxProtection, VM_INHERIT_SHARE);
     if (result != KERN_SUCCESS) {
-        // vm_deallocate(mach_task_self(), dataAddress, PAGE_MAX_SIZE * 2);
         _objc_fatal("vm_remap trampolines failed (%d)", result);
     }
+
+    TrampolineBlockPageGroup *pageGroup = (TrampolineBlockPageGroup *) dataAddress;
+    pageGroup->nextAvailable = pageGroup->startIndex();
+    pageGroup->nextPageGroup = nil;
+    pageGroup->nextAvailablePage = nil;
     
-    TrampolineBlockPagePair *pagePair = (TrampolineBlockPagePair *) dataAddress;
-    pagePair->nextAvailable = pagePair->startIndex();
-    pagePair->nextPagePair = nil;
-    pagePair->nextAvailablePage = nil;
-    
-    if (headPagePair) {
-        TrampolineBlockPagePair *lastPagePair = headPagePair;
-        while(lastPagePair->nextPagePair) {
-            lastPagePair = lastPagePair->nextPagePair;
+    if (HeadPageGroup) {
+        TrampolineBlockPageGroup *lastPageGroup = HeadPageGroup;
+        while(lastPageGroup->nextPageGroup) {
+            lastPageGroup = lastPageGroup->nextPageGroup;
         }
-        lastPagePair->nextPagePair = pagePair;
-        headPagePairs[aMode]->nextAvailablePage = pagePair;
+        lastPageGroup->nextPageGroup = pageGroup;
+        HeadPageGroup->nextAvailablePage = pageGroup;
     } else {
-        headPagePairs[aMode] = pagePair;
+        HeadPageGroup = pageGroup;
     }
     
-    return pagePair;
+    return pageGroup;
 }
 
-static TrampolineBlockPagePair *
-_getOrAllocatePagePairWithNextAvailable(ArgumentMode aMode) 
+static TrampolineBlockPageGroup *
+getOrAllocatePageGroupWithNextAvailable() 
 {
-    _assert_locked();
+    runtimeLock.assertLocked();
     
-    TrampolineBlockPagePair *headPagePair = headPagePairs[aMode];
-
-    if (!headPagePair)
-        return _allocateTrampolinesAndData(aMode);
+    if (!HeadPageGroup)
+        return _allocateTrampolinesAndData();
     
     // make sure head page is filled first
-    if (headPagePair->nextAvailable != headPagePair->endIndex())
-        return headPagePair;
+    if (HeadPageGroup->nextAvailable != HeadPageGroup->endIndex())
+        return HeadPageGroup;
     
-    if (headPagePair->nextAvailablePage) // check if there is a page w/a hole
-        return headPagePair->nextAvailablePage;
+    if (HeadPageGroup->nextAvailablePage) // check if there is a page w/a hole
+        return HeadPageGroup->nextAvailablePage;
     
-    return _allocateTrampolinesAndData(aMode); // tack on a new one
+    return _allocateTrampolinesAndData(); // tack on a new one
 }
 
-static TrampolineBlockPagePair *
-_pageAndIndexContainingIMP(IMP anImp, uintptr_t *outIndex, 
-                           TrampolineBlockPagePair **outHeadPagePair) 
+static TrampolineBlockPageGroup *
+pageAndIndexContainingIMP(IMP anImp, uintptr_t *outIndex) 
 {
-    _assert_locked();
+    runtimeLock.assertLocked();
 
-    for (int arg = 0; arg < ArgumentModeCount; arg++) {
-        for (TrampolineBlockPagePair *pagePair = headPagePairs[arg]; 
-             pagePair;
-             pagePair = pagePair->nextPagePair)
-        {
-            uintptr_t index = pagePair->indexForTrampoline(anImp);
-            if (index) {
-                if (outIndex) *outIndex = index;
-                if (outHeadPagePair) *outHeadPagePair = headPagePairs[arg];
-                return pagePair;
-            }
+    // Authenticate as a function pointer, returning an un-signed address.
+    uintptr_t trampAddress =
+            (uintptr_t)ptrauth_auth_data((const char *)anImp,
+                                         ptrauth_key_function_pointer, 0);
+
+    for (TrampolineBlockPageGroup *pageGroup = HeadPageGroup; 
+         pageGroup;
+         pageGroup = pageGroup->nextPageGroup)
+    {
+        uintptr_t index = pageGroup->indexForTrampoline(trampAddress);
+        if (index) {
+            if (outIndex) *outIndex = index;
+            return pageGroup;
         }
     }
     
@@ -317,7 +421,7 @@ _pageAndIndexContainingIMP(IMP anImp, uintptr_t *outIndex,
 
 
 static ArgumentMode 
-_argumentModeForBlock(id block) 
+argumentModeForBlock(id block) 
 {
     ArgumentMode aMode = ReturnValueInRegisterArgumentMode;
 
@@ -336,18 +440,14 @@ _argumentModeForBlock(id block)
 IMP 
 _imp_implementationWithBlockNoCopy(id block)
 {
-    _assert_locked();
+    runtimeLock.assertLocked();
 
-    ArgumentMode aMode = _argumentModeForBlock(block);
+    TrampolineBlockPageGroup *pageGroup = 
+        getOrAllocatePageGroupWithNextAvailable();
 
-    TrampolineBlockPagePair *pagePair = 
-        _getOrAllocatePagePairWithNextAvailable(aMode);
-    if (!headPagePairs[aMode])
-        headPagePairs[aMode] = pagePair;
-
-    uintptr_t index = pagePair->nextAvailable;
-    assert(index >= pagePair->startIndex()  &&  index < pagePair->endIndex());
-    TrampolineBlockPagePair::Payload *payload = pagePair->payload(index);
+    uintptr_t index = pageGroup->nextAvailable;
+    assert(index >= pageGroup->startIndex()  &&  index < pageGroup->endIndex());
+    TrampolineBlockPageGroup::Payload *payload = pageGroup->payload(index);
     
     uintptr_t nextAvailableIndex = payload->nextAvailable;
     if (nextAvailableIndex == 0) {
@@ -355,104 +455,109 @@ _imp_implementationWithBlockNoCopy(id block)
         // If the page is now full this will now be endIndex(), handled below.
         nextAvailableIndex = index + 1;
     }
-    pagePair->nextAvailable = nextAvailableIndex;
-    if (nextAvailableIndex == pagePair->endIndex()) {
-        // PagePair is now full (free list or wilderness exhausted)
+    pageGroup->nextAvailable = nextAvailableIndex;
+    if (nextAvailableIndex == pageGroup->endIndex()) {
+        // PageGroup is now full (free list or wilderness exhausted)
         // Remove from available page linked list
-        TrampolineBlockPagePair *iterator = headPagePairs[aMode];
-        while(iterator && (iterator->nextAvailablePage != pagePair)) {
+        TrampolineBlockPageGroup *iterator = HeadPageGroup;
+        while(iterator && (iterator->nextAvailablePage != pageGroup)) {
             iterator = iterator->nextAvailablePage;
         }
         if (iterator) {
-            iterator->nextAvailablePage = pagePair->nextAvailablePage;
-            pagePair->nextAvailablePage = nil;
+            iterator->nextAvailablePage = pageGroup->nextAvailablePage;
+            pageGroup->nextAvailablePage = nil;
         }
     }
     
     payload->block = block;
-    return pagePair->trampoline(index);
+    return pageGroup->trampoline(argumentModeForBlock(block), index);
 }
 
 
 #pragma mark Public API
 IMP imp_implementationWithBlock(id block) 
 {
+    // Block object must be copied outside runtimeLock
+    // because it performs arbitrary work.
     block = Block_copy(block);
-    _lock();
-    IMP returnIMP = _imp_implementationWithBlockNoCopy(block);
-    _unlock();
-    return returnIMP;
+
+    // Trampolines must be initialized outside runtimeLock
+    // because it calls dlopen().
+    Trampolines.Initialize();
+    
+    mutex_locker_t lock(runtimeLock);
+
+    return _imp_implementationWithBlockNoCopy(block);
 }
 
 
 id imp_getBlock(IMP anImp) {
     uintptr_t index;
-    TrampolineBlockPagePair *pagePair;
+    TrampolineBlockPageGroup *pageGroup;
     
     if (!anImp) return nil;
     
-    _lock();
+    mutex_locker_t lock(runtimeLock);
     
-    pagePair = _pageAndIndexContainingIMP(anImp, &index, nil);
+    pageGroup = pageAndIndexContainingIMP(anImp, &index);
     
-    if (!pagePair) {
-        _unlock();
+    if (!pageGroup) {
         return nil;
     }
 
-    TrampolineBlockPagePair::Payload *payload = pagePair->payload(index);
+    TrampolineBlockPageGroup::Payload *payload = pageGroup->payload(index);
     
-    if (payload->nextAvailable <= TrampolineBlockPagePair::endIndex()) {
+    if (payload->nextAvailable <= TrampolineBlockPageGroup::endIndex()) {
         // unallocated
-        _unlock();
         return nil;
     }
-    
-    _unlock();
     
     return payload->block;
 }
 
 BOOL imp_removeBlock(IMP anImp) {
-    TrampolineBlockPagePair *pagePair;
-    TrampolineBlockPagePair *headPagePair;
-    uintptr_t index;
     
     if (!anImp) return NO;
+
+    id block;
     
-    _lock();
-    pagePair = _pageAndIndexContainingIMP(anImp, &index, &headPagePair);
+    {
+        mutex_locker_t lock(runtimeLock);
     
-    if (!pagePair) {
-        _unlock();
-        return NO;
+        uintptr_t index;
+        TrampolineBlockPageGroup *pageGroup =
+            pageAndIndexContainingIMP(anImp, &index);
+        
+        if (!pageGroup) {
+            return NO;
+        }
+        
+        TrampolineBlockPageGroup::Payload *payload = pageGroup->payload(index);
+        block = payload->block;
+        // block is released below, outside the lock
+        
+        payload->nextAvailable = pageGroup->nextAvailable;
+        pageGroup->nextAvailable = index;
+        
+        // make sure this page is on available linked list
+        TrampolineBlockPageGroup *pageGroupIterator = HeadPageGroup;
+        
+        // see if page is the next available page for any existing pages
+        while (pageGroupIterator->nextAvailablePage && 
+               pageGroupIterator->nextAvailablePage != pageGroup)
+        {
+            pageGroupIterator = pageGroupIterator->nextAvailablePage;
+        }
+        
+        if (! pageGroupIterator->nextAvailablePage) {
+            // if iteration stopped because nextAvail was nil
+            // add to end of list.
+            pageGroupIterator->nextAvailablePage = pageGroup;
+            pageGroup->nextAvailablePage = nil;
+        }
     }
 
-    TrampolineBlockPagePair::Payload *payload = pagePair->payload(index);
-    id block = payload->block;
-    // block is released below
-    
-    payload->nextAvailable = pagePair->nextAvailable;
-    pagePair->nextAvailable = index;
-    
-    // make sure this page is on available linked list
-    TrampolineBlockPagePair *pagePairIterator = headPagePair;
-    
-    // see if page is the next available page for any existing pages
-    while (pagePairIterator->nextAvailablePage && 
-           pagePairIterator->nextAvailablePage != pagePair)
-    {
-        pagePairIterator = pagePairIterator->nextAvailablePage;
-    }
-    
-    if (! pagePairIterator->nextAvailablePage) {
-        // if iteration stopped because nextAvail was nil
-        // add to end of list.
-        pagePairIterator->nextAvailablePage = pagePair;
-        pagePair->nextAvailablePage = nil;
-    }
-    
-    _unlock();
+    // do this AFTER dropping the lock
     Block_release(block);
     return YES;
 }

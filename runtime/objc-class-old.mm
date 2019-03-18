@@ -163,13 +163,12 @@ static old_method_list *fixupSelectorsInMethodList(Class cls, old_method_list *m
             // Mach-O bundles are fixed up in place. 
             // This prevents leaks when a bundle is unloaded.
         }
-        sel_lock();
+        mutex_locker_t lock(selLock);
         for ( i = 0; i < mlist->method_count; i += 1 ) {
             method = &mlist->method_list[i];
             method->method_name =
                 sel_registerNameNoLock((const char *)method->method_name, isBundle);  // Always copy selector data from bundles.
         }
-        sel_unlock();
         mlist->obsolete = fixed_up_method_list;
     }
     return mlist;
@@ -683,33 +682,6 @@ void class_setIvarLayout(Class cls, const uint8_t *layout)
     cls->ivar_layout = ustrdupMaybeNil(layout);
 }
 
-// SPI:  Instance-specific object layout.
-
-void _class_setIvarLayoutAccessor(Class cls, const uint8_t* (*accessor) (id object)) {
-    if (!cls) return;
-
-    if (! (cls->info & CLS_EXT)) {
-        _objc_inform("class '%s' needs to be recompiled", cls->name);
-        return;
-    } 
-
-    // fixme leak
-    cls->ivar_layout = (const uint8_t *)accessor;
-    cls->setInfo(CLS_HAS_INSTANCE_SPECIFIC_LAYOUT);
-}
-
-const uint8_t *_object_getIvarLayout(Class cls, id object) {
-    if (cls && (cls->info & CLS_EXT)) {
-        const uint8_t* layout = cls->ivar_layout;
-        if (cls->info & CLS_HAS_INSTANCE_SPECIFIC_LAYOUT) {
-            const uint8_t* (*accessor) (id object) = (const uint8_t* (*)(id))layout;
-            layout = accessor(object);
-        }
-        return layout;
-    } else {
-        return nil;
-    }
-}
 
 /***********************************************************************
 * class_setWeakIvarLayout
@@ -837,7 +809,7 @@ IMP _category_getLoadMethod(Category cat)
 * If methods are removed between calls to class_nextMethodList(), it may 
 * omit surviving method lists or simply crash.
 **********************************************************************/
-OBJC_EXPORT struct objc_method_list *class_nextMethodList(Class cls, void **it)
+struct objc_method_list *class_nextMethodList(Class cls, void **it)
 {
     OBJC_WARN_DEPRECATED;
 
@@ -851,7 +823,7 @@ OBJC_EXPORT struct objc_method_list *class_nextMethodList(Class cls, void **it)
 *
 * Formerly class_addInstanceMethods ()
 **********************************************************************/
-OBJC_EXPORT void class_addMethods(Class cls, struct objc_method_list *meths)
+void class_addMethods(Class cls, struct objc_method_list *meths)
 {
     OBJC_WARN_DEPRECATED;
 
@@ -871,7 +843,7 @@ OBJC_EXPORT void class_addMethods(Class cls, struct objc_method_list *meths)
 /***********************************************************************
 * class_removeMethods.
 **********************************************************************/
-OBJC_EXPORT void class_removeMethods(Class cls, struct objc_method_list *meths)
+void class_removeMethods(Class cls, struct objc_method_list *meths)
 {
     OBJC_WARN_DEPRECATED;
 
@@ -1494,6 +1466,9 @@ unsigned int method_getSizeOfArguments(Method m)
     return encoding_getSizeOfArguments(method_getTypeEncoding(m));
 }
 
+// This function was accidentally un-exported beginning in macOS 10.9.
+// As of macOS 10.13 nobody had complained.
+/*
 unsigned int method_getArgumentInfo(Method m, int arg,
                                     const char **type, int *offset)
 {
@@ -1502,6 +1477,7 @@ unsigned int method_getArgumentInfo(Method m, int arg,
     return encoding_getArgumentInfo(method_getTypeEncoding(m), 
                                     arg, type, offset);
 }
+*/
 
 
 spinlock_t impLock;

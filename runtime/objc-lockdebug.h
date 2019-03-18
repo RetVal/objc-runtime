@@ -27,10 +27,10 @@ extern void lockdebug_assert_no_locks_locked();
 extern void lockdebug_setInForkPrepare(bool);
 extern void lockdebug_lock_precedes_lock(const void *oldlock, const void *newlock);
 #else
-static inline void lockdebug_assert_all_locks_locked() { }
-static inline void lockdebug_assert_no_locks_locked() { }
-static inline void lockdebug_setInForkPrepare(bool) { }
-static inline void lockdebug_lock_precedes_lock(const void *, const void *) { }
+static constexpr inline void lockdebug_assert_all_locks_locked() { }
+static constexpr inline void lockdebug_assert_no_locks_locked() { }
+static constexpr inline void lockdebug_setInForkPrepare(bool) { }
+static constexpr inline void lockdebug_lock_precedes_lock(const void *, const void *) { }
 #endif
 
 extern void lockdebug_remember_mutex(mutex_tt<true> *lock);
@@ -40,12 +40,12 @@ extern void lockdebug_mutex_unlock(mutex_tt<true> *lock);
 extern void lockdebug_mutex_assert_locked(mutex_tt<true> *lock);
 extern void lockdebug_mutex_assert_unlocked(mutex_tt<true> *lock);
 
-static inline void lockdebug_remember_mutex(mutex_tt<false> *lock) { }
-static inline void lockdebug_mutex_lock(mutex_tt<false> *lock) { }
-static inline void lockdebug_mutex_try_lock(mutex_tt<false> *lock) { }
-static inline void lockdebug_mutex_unlock(mutex_tt<false> *lock) { }
-static inline void lockdebug_mutex_assert_locked(mutex_tt<false> *lock) { }
-static inline void lockdebug_mutex_assert_unlocked(mutex_tt<false> *lock) { }
+static constexpr inline void lockdebug_remember_mutex(mutex_tt<false> *lock) { }
+static constexpr inline void lockdebug_mutex_lock(mutex_tt<false> *lock) { }
+static constexpr inline void lockdebug_mutex_try_lock(mutex_tt<false> *lock) { }
+static constexpr inline void lockdebug_mutex_unlock(mutex_tt<false> *lock) { }
+static constexpr inline void lockdebug_mutex_assert_locked(mutex_tt<false> *lock) { }
+static constexpr inline void lockdebug_mutex_assert_unlocked(mutex_tt<false> *lock) { }
 
 
 extern void lockdebug_remember_monitor(monitor_tt<true> *lock);
@@ -55,12 +55,12 @@ extern void lockdebug_monitor_wait(monitor_tt<true> *lock);
 extern void lockdebug_monitor_assert_locked(monitor_tt<true> *lock);
 extern void lockdebug_monitor_assert_unlocked(monitor_tt<true> *lock);
 
-static inline void lockdebug_remember_monitor(monitor_tt<false> *lock) { }
-static inline void lockdebug_monitor_enter(monitor_tt<false> *lock) { }
-static inline void lockdebug_monitor_leave(monitor_tt<false> *lock) { }
-static inline void lockdebug_monitor_wait(monitor_tt<false> *lock) { }
-static inline void lockdebug_monitor_assert_locked(monitor_tt<false> *lock) { }
-static inline void lockdebug_monitor_assert_unlocked(monitor_tt<false> *lock) {}
+static constexpr inline void lockdebug_remember_monitor(monitor_tt<false> *lock) { }
+static constexpr inline void lockdebug_monitor_enter(monitor_tt<false> *lock) { }
+static constexpr inline void lockdebug_monitor_leave(monitor_tt<false> *lock) { }
+static constexpr inline void lockdebug_monitor_wait(monitor_tt<false> *lock) { }
+static constexpr inline void lockdebug_monitor_assert_locked(monitor_tt<false> *lock) { }
+static constexpr inline void lockdebug_monitor_assert_unlocked(monitor_tt<false> *lock) {}
 
 
 extern void 
@@ -74,38 +74,13 @@ lockdebug_recursive_mutex_assert_locked(recursive_mutex_tt<true> *lock);
 extern void 
 lockdebug_recursive_mutex_assert_unlocked(recursive_mutex_tt<true> *lock);
 
-static inline void 
+static constexpr inline void
 lockdebug_remember_recursive_mutex(recursive_mutex_tt<false> *lock) { }
-static inline void 
+static constexpr inline void
 lockdebug_recursive_mutex_lock(recursive_mutex_tt<false> *lock) { }
-static inline void 
+static constexpr inline void
 lockdebug_recursive_mutex_unlock(recursive_mutex_tt<false> *lock) { }
-static inline void 
+static constexpr inline void
 lockdebug_recursive_mutex_assert_locked(recursive_mutex_tt<false> *lock) { }
-static inline void 
+static constexpr inline void
 lockdebug_recursive_mutex_assert_unlocked(recursive_mutex_tt<false> *lock) { }
-
-
-extern void lockdebug_remember_rwlock(rwlock_tt<true> *lock);
-extern void lockdebug_rwlock_read(rwlock_tt<true> *lock);
-extern void lockdebug_rwlock_try_read_success(rwlock_tt<true> *lock);
-extern void lockdebug_rwlock_unlock_read(rwlock_tt<true> *lock);
-extern void lockdebug_rwlock_write(rwlock_tt<true> *lock);
-extern void lockdebug_rwlock_try_write_success(rwlock_tt<true> *lock);
-extern void lockdebug_rwlock_unlock_write(rwlock_tt<true> *lock);
-extern void lockdebug_rwlock_assert_reading(rwlock_tt<true> *lock);
-extern void lockdebug_rwlock_assert_writing(rwlock_tt<true> *lock);
-extern void lockdebug_rwlock_assert_locked(rwlock_tt<true> *lock);
-extern void lockdebug_rwlock_assert_unlocked(rwlock_tt<true> *lock);
-
-static inline void lockdebug_remember_rwlock(rwlock_tt<false> *) { }
-static inline void lockdebug_rwlock_read(rwlock_tt<false> *) { }
-static inline void lockdebug_rwlock_try_read_success(rwlock_tt<false> *) { }
-static inline void lockdebug_rwlock_unlock_read(rwlock_tt<false> *) { }
-static inline void lockdebug_rwlock_write(rwlock_tt<false> *) { }
-static inline void lockdebug_rwlock_try_write_success(rwlock_tt<false> *) { }
-static inline void lockdebug_rwlock_unlock_write(rwlock_tt<false> *) { }
-static inline void lockdebug_rwlock_assert_reading(rwlock_tt<false> *) { }
-static inline void lockdebug_rwlock_assert_writing(rwlock_tt<false> *) { }
-static inline void lockdebug_rwlock_assert_locked(rwlock_tt<false> *) { }
-static inline void lockdebug_rwlock_assert_unlocked(rwlock_tt<false> *) { }

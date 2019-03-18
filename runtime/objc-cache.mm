@@ -201,27 +201,42 @@ static inline mask_t cache_next(mask_t i, mask_t mask) {
 
 #if __arm64__
 
+// Pointer-size register prefix for inline asm
+# if __LP64__
+#   define p "x"  // true arm64
+# else
+#   define p "w"  // arm64_32
+# endif
+
 // Use atomic double-word instructions to update cache entries.
 // This requires cache buckets not cross cache line boundaries.
-#define stp(onep, twop, destp)                  \
-    __asm__ ("stp %[one], %[two], [%[dest]]"    \
-             : "=m" (((uint64_t *)(destp))[0]), \
-               "=m" (((uint64_t *)(destp))[1])  \
-             : [one] "r" (onep),                \
-               [two] "r" (twop),                \
-               [dest] "r" (destp)               \
-             : /* no clobbers */                \
-             )
-#define ldp(onep, twop, srcp)                   \
-    __asm__ ("ldp %[one], %[two], [%[src]]"     \
-             : [one] "=r" (onep),               \
-               [two] "=r" (twop)                \
-             : "m" (((uint64_t *)(srcp))[0]),   \
-               "m" (((uint64_t *)(srcp))[1]),   \
-               [src] "r" (srcp)                 \
-             : /* no clobbers */                \
-             )
+static ALWAYS_INLINE void
+stp(uintptr_t onep, uintptr_t twop, void *destp)
+{
+    __asm__ ("stp %" p "[one], %" p "[two], [%x[dest]]"
+             : "=m" (((uintptr_t *)(destp))[0]),
+               "=m" (((uintptr_t *)(destp))[1])
+             : [one] "r" (onep),
+               [two] "r" (twop),
+               [dest] "r" (destp)
+             : /* no clobbers */
+             );
+}
 
+static ALWAYS_INLINE void __unused
+ldp(uintptr_t& onep, uintptr_t& twop, const void *srcp)
+{
+    __asm__ ("ldp %" p "[one], %" p "[two], [%x[src]]"
+             : [one] "=r" (onep),
+               [two] "=r" (twop)
+             : "m" (((const uintptr_t *)(srcp))[0]),
+               "m" (((const uintptr_t *)(srcp))[1]),
+               [src] "r" (srcp)
+             : /* no clobbers */
+             );
+}
+
+#undef p
 #endif
 
 
@@ -251,9 +266,21 @@ void bucket_t::set(cache_key_t newKey, IMP newImp)
 {
     assert(_key == 0  ||  _key == newKey);
 
-    // LDP/STP guarantees that all observers get 
-    // either key/imp or newKey/newImp
-    stp(newKey, newImp, this);
+    static_assert(offsetof(bucket_t,_imp) == 0 && offsetof(bucket_t,_key) == sizeof(void *),
+                  "bucket_t doesn't match arm64 bucket_t::set()");
+
+#if __has_feature(ptrauth_calls)
+    // Authenticate as a C function pointer and re-sign for the cache bucket.
+    uintptr_t signedImp = _imp.prepareWrite(newImp);
+#else
+    // No function pointer signing.
+    uintptr_t signedImp = (uintptr_t)newImp;
+#endif
+
+    // Write to the bucket.
+    // LDP/STP guarantees that all observers get
+    // either imp/key or newImp/newKey
+    stp(signedImp, newKey, this);
 }
 
 #else
@@ -648,7 +675,7 @@ static uintptr_t _get_pc_for_thread(thread_t thread)
     arm_thread_state64_t state;
     unsigned int count = ARM_THREAD_STATE64_COUNT;
     kern_return_t okay = thread_get_state (thread, ARM_THREAD_STATE64, (thread_state_t)&state, &count);
-    return (okay == KERN_SUCCESS) ? state.__pc : PC_SENTINEL;
+    return (okay == KERN_SUCCESS) ? arm_thread_state64_get_pc(state) : PC_SENTINEL;
 }
 #else
 {
@@ -665,8 +692,8 @@ static uintptr_t _get_pc_for_thread(thread_t thread)
 * reading function is in progress because it might still be using 
 * the garbage memory.
 **********************************************************************/
-OBJC_EXPORT uintptr_t objc_entryPoints[];
-OBJC_EXPORT uintptr_t objc_exitPoints[];
+extern "C" uintptr_t objc_entryPoints[];
+extern "C"  uintptr_t objc_exitPoints[];
 
 static int _collecting_in_critical(void)
 {

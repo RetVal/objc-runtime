@@ -56,8 +56,8 @@ class nocopy_t {
     nocopy_t(const nocopy_t&) = delete;
     const nocopy_t& operator=(const nocopy_t&) = delete;
   protected:
-    nocopy_t() { }
-    ~nocopy_t() { }
+    constexpr nocopy_t() = default;
+    ~nocopy_t() = default;
 };
 
 
@@ -101,8 +101,8 @@ class nocopy_t {
 #   include <mach-o/getsect.h>
 #   include <mach-o/dyld_priv.h>
 #   include <malloc/malloc.h>
-//#   include <os/lock_private.h>
-#   include <os/lock.h>
+#   include <os/lock_private.h>
+//#   include <os/lock.h>
 #   include <libkern/OSAtomic.h>
 #   include <libkern/OSCacheControl.h>
 #   include <System/pthread_machdep.h>
@@ -120,20 +120,20 @@ void vsyslog(int, const char *, va_list) UNAVAILABLE_ATTRIBUTE;
 #define fastpath(x) (__builtin_expect(bool(x), 1))
 #define slowpath(x) (__builtin_expect(bool(x), 0))
 
-typedef OSSpinLock os_lock_handoff_s;
-#define OS_LOCK_HANDOFF_INIT OS_SPINLOCK_INIT
-
-ALWAYS_INLINE void os_lock_lock(volatile os_lock_handoff_s *lock) {
-    return OSSpinLockLock(lock);
-}
-
-ALWAYS_INLINE void os_lock_unlock(volatile os_lock_handoff_s *lock) {
-    return OSSpinLockUnlock(lock);
-}
-
-ALWAYS_INLINE bool os_lock_trylock(volatile os_lock_handoff_s *lock) {
-    return OSSpinLockTry(lock);
-}
+//typedef OSSpinLock os_lock_handoff_s;
+//#define OS_LOCK_HANDOFF_INIT OS_SPINLOCK_INIT
+//
+//ALWAYS_INLINE void os_lock_lock(volatile os_lock_handoff_s *lock) {
+//    return OSSpinLockLock(lock);
+//}
+//
+//ALWAYS_INLINE void os_lock_unlock(volatile os_lock_handoff_s *lock) {
+//    return OSSpinLockUnlock(lock);
+//}
+//
+//ALWAYS_INLINE bool os_lock_trylock(volatile os_lock_handoff_s *lock) {
+//    return OSSpinLockTry(lock);
+//}
 
 static ALWAYS_INLINE uintptr_t 
 addc(uintptr_t lhs, uintptr_t rhs, uintptr_t carryin, uintptr_t *carryout)
@@ -150,12 +150,19 @@ subc(uintptr_t lhs, uintptr_t rhs, uintptr_t carryin, uintptr_t *carryout)
 
 #if __arm64__
 
+// Pointer-size register prefix for inline asm
+# if __LP64__
+#   define p "x"  // true arm64
+# else
+#   define p "w"  // arm64_32
+# endif
+
 static ALWAYS_INLINE
 uintptr_t 
 LoadExclusive(uintptr_t *src)
 {
     uintptr_t result;
-    asm("ldxr %x0, [%x1]" 
+    asm("ldxr %" p "0, [%x1]" 
         : "=r" (result) 
         : "r" (src), "m" (*src));
     return result;
@@ -166,8 +173,8 @@ bool
 StoreExclusive(uintptr_t *dst, uintptr_t oldvalue __unused, uintptr_t value)
 {
     uint32_t result;
-    asm("stxr %w0, %x2, [%x3]" 
-        : "=r" (result), "=m" (*dst) 
+    asm("stxr %w0, %" p "2, [%x3]" 
+        : "=&r" (result), "=m" (*dst)
         : "r" (value), "r" (dst));
     return !result;
 }
@@ -178,8 +185,8 @@ bool
 StoreReleaseExclusive(uintptr_t *dst, uintptr_t oldvalue __unused, uintptr_t value)
 {
     uint32_t result;
-    asm("stlxr %w0, %x2, [%x3]" 
-        : "=r" (result), "=m" (*dst) 
+    asm("stlxr %w0, %" p "2, [%x3]" 
+        : "=&r" (result), "=m" (*dst)
         : "r" (value), "r" (dst));
     return !result;
 }
@@ -192,6 +199,7 @@ ClearExclusive(uintptr_t *dst)
     asm("clrex" : "=m" (*dst));
 }
 
+#undef p
 
 #elif __arm__  
 
@@ -268,7 +276,6 @@ ClearExclusive(uintptr_t *dst __unused)
     __BEGIN_DECLS
     extern const char *CRSetCrashLogMessage(const char *msg);
     extern const char *CRGetCrashLogMessage(void);
-    extern const char *CRGetCrashLogMessage2(const char *msg);
     __END_DECLS
 #endif
 
@@ -354,7 +361,7 @@ extern void _objc_fatal_with_reason(uint64_t reason, uint64_t flags,
 #define INIT_ONCE_PTR(var, create, delete)                              \
     do {                                                                \
         if (var) break;                                                 \
-        __typeof__(var) v = create;                                         \
+        typeof(var) v = create;                                         \
         while (!var) {                                                  \
             if (OSAtomicCompareAndSwapPtrBarrier(0, (void*)v, (void**)&var)){ \
                 goto done;                                              \
@@ -367,7 +374,7 @@ extern void _objc_fatal_with_reason(uint64_t reason, uint64_t flags,
 #define INIT_ONCE_32(var, create, delete)                               \
     do {                                                                \
         if (var) break;                                                 \
-        __typeof__(var) v = create;                                         \
+        typeof(var) v = create;                                         \
         while (!var) {                                                  \
             if (OSAtomicCompareAndSwap32Barrier(0, v, (volatile int32_t *)&var)) { \
                 goto done;                                              \
@@ -387,9 +394,6 @@ extern void _objc_fatal_with_reason(uint64_t reason, uint64_t flags,
 #   define AUTORELEASE_POOL_KEY  ((tls_key_t)__PTK_FRAMEWORK_OBJC_KEY3)
 # if SUPPORT_RETURN_AUTORELEASE
 #   define RETURN_DISPOSITION_KEY ((tls_key_t)__PTK_FRAMEWORK_OBJC_KEY4)
-# endif
-# if SUPPORT_QOS_HACK
-#   define QOS_KEY               ((tls_key_t)__PTK_FRAMEWORK_OBJC_KEY5)
 # endif
 #else
 #   define SUPPORT_DIRECT_THREAD_KEYS 0
@@ -627,9 +631,6 @@ static inline int monitor_notifyAll(monitor_t *c) {
 }
 
 
-// fixme no rwlock yet
-
-
 typedef IMAGE_DOS_HEADER headerType;
 // fixme YES bundle? NO bundle? sometimes?
 #define headerIsBundle(hi) YES
@@ -699,9 +700,6 @@ static bool is_valid_direct_key(tls_key_t k) {
 #   if SUPPORT_RETURN_AUTORELEASE
             || k == RETURN_DISPOSITION_KEY
 #   endif
-#   if SUPPORT_QOS_HACK
-            || k == QOS_KEY
-#   endif
                );
 }
 #endif
@@ -743,24 +741,9 @@ static inline mach_port_t mach_thread_self_direct()
         _pthread_getspecific_direct(_PTHREAD_TSD_SLOT_MACH_THREAD_SELF);
 }
 
-#include <pthread/tsd_private.h>
-
-#if SUPPORT_QOS_HACK
-
-#include <pthread/qos_private.h>
-
-static inline pthread_priority_t pthread_self_priority_direct() 
-{
-    pthread_priority_t pri = (pthread_priority_t)
-        _pthread_getspecific_direct(_PTHREAD_TSD_SLOT_PTHREAD_QOS_CLASS);
-    return pri & ~_PTHREAD_PRIORITY_FLAGS_MASK;
-}
-#endif
-
 
 template <bool Debug> class mutex_tt;
 template <bool Debug> class monitor_tt;
-template <bool Debug> class rwlock_tt;
 template <bool Debug> class recursive_mutex_tt;
 
 #if DEBUG
@@ -772,31 +755,18 @@ template <bool Debug> class recursive_mutex_tt;
 using spinlock_t = mutex_tt<LOCKDEBUG>;
 using mutex_t = mutex_tt<LOCKDEBUG>;
 using monitor_t = monitor_tt<LOCKDEBUG>;
-using rwlock_t = rwlock_tt<LOCKDEBUG>;
 using recursive_mutex_t = recursive_mutex_tt<LOCKDEBUG>;
 
 //extern "C" void os_unfair_lock_assert_owner(os_unfair_lock *);
 //extern "C" void os_unfair_lock_assert_not_owner(os_unfair_lock *);
-extern "C" void os_unfair_lock_unlock(os_unfair_lock *);
-extern "C" void os_unfair_lock_lock_with_options(os_unfair_lock *, uint32_t options);
 
 // Use fork_unsafe_lock to get a lock that isn't 
 // acquired and released around fork().
 // All fork-safe locks are checked in debug builds.
-struct fork_unsafe_lock_t { };
+struct fork_unsafe_lock_t {
+    constexpr fork_unsafe_lock_t() = default;
+};
 extern const fork_unsafe_lock_t fork_unsafe_lock;
-
-inline void os_unfair_lock_lock_with_options_inline(os_unfair_lock *unfair_lock, uint32_t options) {
-    os_unfair_lock_lock_with_options(unfair_lock, options);
-}
-
-inline void os_unfair_lock_unlock_inline(os_unfair_lock *unfair_lock) {
-    os_unfair_lock_unlock(unfair_lock);
-}
-
-#ifndef OS_UNFAIR_LOCK_DATA_SYNCHRONIZATION
-#define OS_UNFAIR_LOCK_DATA_SYNCHRONIZATION 0x10000
-#endif
 
 #include "objc-lockdebug.h"
 
@@ -804,11 +774,11 @@ template <bool Debug>
 class mutex_tt : nocopy_t {
     os_unfair_lock mLock;
  public:
-    mutex_tt() : mLock(OS_UNFAIR_LOCK_INIT) {
+    constexpr mutex_tt() : mLock(OS_UNFAIR_LOCK_INIT) {
         lockdebug_remember_mutex(this);
     }
 
-    mutex_tt(const fork_unsafe_lock_t unsafe) : mLock(OS_UNFAIR_LOCK_INIT) { }
+    constexpr mutex_tt(const fork_unsafe_lock_t unsafe) : mLock(OS_UNFAIR_LOCK_INIT) { }
 
     void lock() {
         lockdebug_mutex_lock(this);
@@ -864,38 +834,49 @@ class mutex_tt : nocopy_t {
             : lock(newLock) { lock.lock(); }
         ~locker() { lock.unlock(); }
     };
+
+    // Either scoped lock and unlock, or NOP.
+    class conditional_locker : nocopy_t {
+        mutex_tt& lock;
+        bool didLock;
+    public:
+        conditional_locker(mutex_tt& newLock, bool shouldLock)
+            : lock(newLock), didLock(shouldLock)
+        {
+            if (shouldLock) lock.lock();
+        }
+        ~conditional_locker() { if (didLock) lock.unlock(); }
+    };
 };
 
 using mutex_locker_t = mutex_tt<LOCKDEBUG>::locker;
+using conditional_mutex_locker_t = mutex_tt<LOCKDEBUG>::conditional_locker;
 
 
 template <bool Debug>
 class recursive_mutex_tt : nocopy_t {
-    pthread_mutex_t mLock;
+    os_unfair_recursive_lock mLock;
 
   public:
-    recursive_mutex_tt() : mLock((pthread_mutex_t)PTHREAD_RECURSIVE_MUTEX_INITIALIZER) {
+    constexpr recursive_mutex_tt() : mLock(OS_UNFAIR_RECURSIVE_LOCK_INIT) {
         lockdebug_remember_recursive_mutex(this);
     }
 
-    recursive_mutex_tt(const fork_unsafe_lock_t unsafe)
-        : mLock((pthread_mutex_t)PTHREAD_RECURSIVE_MUTEX_INITIALIZER)
+    constexpr recursive_mutex_tt(const fork_unsafe_lock_t unsafe)
+        : mLock(OS_UNFAIR_RECURSIVE_LOCK_INIT)
     { }
 
     void lock()
     {
         lockdebug_recursive_mutex_lock(this);
-
-        int err = pthread_mutex_lock(&mLock);
-        if (err) _objc_fatal("pthread_mutex_lock failed (%d)", err);
+        os_unfair_recursive_lock_lock(&mLock);
     }
 
     void unlock()
     {
         lockdebug_recursive_mutex_unlock(this);
 
-        int err = pthread_mutex_unlock(&mLock);
-        if (err) _objc_fatal("pthread_mutex_unlock failed (%d)", err);
+        os_unfair_recursive_lock_unlock(&mLock);
     }
 
     void forceReset()
@@ -903,22 +884,17 @@ class recursive_mutex_tt : nocopy_t {
         lockdebug_recursive_mutex_unlock(this);
 
         bzero(&mLock, sizeof(mLock));
-        mLock = (pthread_mutex_t)PTHREAD_RECURSIVE_MUTEX_INITIALIZER;
+        mLock = os_unfair_recursive_lock OS_UNFAIR_RECURSIVE_LOCK_INIT;
     }
 
     bool tryUnlock()
     {
-        int err = pthread_mutex_unlock(&mLock);
-        if (err == 0) {
+        if (os_unfair_recursive_lock_tryunlock4objc(&mLock)) {
             lockdebug_recursive_mutex_unlock(this);
             return true;
-        } else if (err == EPERM) {
-            return false;
-        } else {
-            _objc_fatal("pthread_mutex_unlock failed (%d)", err);
         }
+        return false;
     }
-
 
     void assertLocked() {
         lockdebug_recursive_mutex_assert_locked(this);
@@ -936,14 +912,14 @@ class monitor_tt {
     pthread_cond_t cond;
 
   public:
-    monitor_tt() 
-        : mutex((pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER), cond((pthread_cond_t)PTHREAD_COND_INITIALIZER)
+    constexpr monitor_tt()
+        : mutex(PTHREAD_MUTEX_INITIALIZER), cond(PTHREAD_COND_INITIALIZER)
     {
         lockdebug_remember_monitor(this);
     }
 
     monitor_tt(const fork_unsafe_lock_t unsafe) 
-        : mutex((pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER), cond((pthread_cond_t)PTHREAD_COND_INITIALIZER)
+        : mutex(PTHREAD_MUTEX_INITIALIZER), cond(PTHREAD_COND_INITIALIZER)
     { }
 
     void enter() 
@@ -988,8 +964,8 @@ class monitor_tt {
         
         bzero(&mutex, sizeof(mutex));
         bzero(&cond, sizeof(cond));
-        mutex = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
-        cond = (pthread_cond_t)PTHREAD_COND_INITIALIZER;
+        mutex = pthread_mutex_t PTHREAD_MUTEX_INITIALIZER;
+        cond = pthread_cond_t PTHREAD_COND_INITIALIZER;
     }
 
     void assertLocked()
@@ -1013,166 +989,6 @@ static inline semaphore_t create_semaphore(void)
     if (k) _objc_fatal("semaphore_create failed (0x%x)", k);
     return sem;
 }
-
-
-#if SUPPORT_QOS_HACK
-// Override QOS class to avoid priority inversion in rwlocks
-// <rdar://17697862> do a qos override before taking rw lock in objc
-
-#include <pthread/workqueue_private.h>
-extern pthread_priority_t BackgroundPriority;
-extern pthread_priority_t MainPriority;
-
-static inline void qosStartOverride()
-{
-    uintptr_t overrideRefCount = (uintptr_t)tls_get_direct(QOS_KEY);
-    if (overrideRefCount > 0) {
-        // If there is a qos override, increment the refcount and continue
-        tls_set_direct(QOS_KEY, (void *)(overrideRefCount + 1));
-    }
-    else {
-        pthread_priority_t currentPriority = pthread_self_priority_direct();
-        // Check if override is needed. Only override if we are background qos
-        if (currentPriority != 0  &&  currentPriority <= BackgroundPriority) {
-            int res __unused = _pthread_override_qos_class_start_direct(mach_thread_self_direct(), MainPriority);
-            assert(res == 0);
-            // Once we override, we set the reference count in the tsd 
-            // to know when to end the override
-            tls_set_direct(QOS_KEY, (void *)1);
-        }
-    }
-}
-
-static inline void qosEndOverride()
-{
-    uintptr_t overrideRefCount = (uintptr_t)tls_get_direct(QOS_KEY);
-    if (overrideRefCount == 0) return;
-
-    if (overrideRefCount == 1) {
-        // end the override
-        int res __unused = _pthread_override_qos_class_end_direct(mach_thread_self_direct());
-        assert(res == 0);
-    }
-
-    // decrement refcount
-    tls_set_direct(QOS_KEY, (void *)(overrideRefCount - 1));
-}
-
-// SUPPORT_QOS_HACK
-#else
-// not SUPPORT_QOS_HACK
-
-static inline void qosStartOverride() { }
-static inline void qosEndOverride() { }
-
-// not SUPPORT_QOS_HACK
-#endif
-
-
-template <bool Debug>
-class rwlock_tt : nocopy_t {
-    pthread_rwlock_t mLock;
-
-  public:
-    rwlock_tt() : mLock((pthread_rwlock_t)PTHREAD_RWLOCK_INITIALIZER) {
-        lockdebug_remember_rwlock(this);
-    }
-
-    rwlock_tt(const fork_unsafe_lock_t unsafe)
-        : mLock((pthread_rwlock_t)PTHREAD_RWLOCK_INITIALIZER)
-    { }
-    
-    void read() 
-    {
-        lockdebug_rwlock_read(this);
-
-        qosStartOverride();
-        int err = pthread_rwlock_rdlock(&mLock);
-        if (err) _objc_fatal("pthread_rwlock_rdlock failed (%d)", err);
-    }
-
-    void unlockRead()
-    {
-        lockdebug_rwlock_unlock_read(this);
-
-        int err = pthread_rwlock_unlock(&mLock);
-        if (err) _objc_fatal("pthread_rwlock_unlock failed (%d)", err);
-        qosEndOverride();
-    }
-
-    bool tryRead()
-    {
-        qosStartOverride();
-        int err = pthread_rwlock_tryrdlock(&mLock);
-        if (err == 0) {
-            lockdebug_rwlock_try_read_success(this);
-            return true;
-        } else if (err == EBUSY) {
-            qosEndOverride();
-            return false;
-        } else {
-            _objc_fatal("pthread_rwlock_tryrdlock failed (%d)", err);
-        }
-    }
-
-    void write()
-    {
-        lockdebug_rwlock_write(this);
-
-        qosStartOverride();
-        int err = pthread_rwlock_wrlock(&mLock);
-        if (err) _objc_fatal("pthread_rwlock_wrlock failed (%d)", err);
-    }
-
-    void unlockWrite()
-    {
-        lockdebug_rwlock_unlock_write(this);
-
-        int err = pthread_rwlock_unlock(&mLock);
-        if (err) _objc_fatal("pthread_rwlock_unlock failed (%d)", err);
-        qosEndOverride();
-    }
-
-    bool tryWrite()
-    {
-        qosStartOverride();
-        int err = pthread_rwlock_trywrlock(&mLock);
-        if (err == 0) {
-            lockdebug_rwlock_try_write_success(this);
-            return true;
-        } else if (err == EBUSY) {
-            qosEndOverride();
-            return false;
-        } else {
-            _objc_fatal("pthread_rwlock_trywrlock failed (%d)", err);
-        }
-    }
-
-    void forceReset()
-    {
-        lockdebug_rwlock_unlock_write(this);
-
-        bzero(&mLock, sizeof(mLock));
-        mLock = (pthread_rwlock_t)PTHREAD_RWLOCK_INITIALIZER;
-    }
-
-
-    void assertReading() {
-        lockdebug_rwlock_assert_reading(this);
-    }
-
-    void assertWriting() {
-        lockdebug_rwlock_assert_writing(this);
-    }
-
-    void assertLocked() {
-        lockdebug_rwlock_assert_locked(this);
-    }
-
-    void assertUnlocked() {
-        lockdebug_rwlock_assert_unlocked(this);
-    }
-};
 
 
 #ifndef __LP64__

@@ -161,11 +161,107 @@ BOOL NXCompareMapTables(NXMapTable *table1, NXMapTable *table2) {
 
 unsigned NXCountMapTable(NXMapTable *table) { return table->count; }
 
+#if __x86_64__
+extern "C" void __NXMAPTABLE_CORRUPTED__
+(const void *table, const void *buckets, uint64_t count,
+ uint64_t nbBucketsMinusOne, uint64_t badkeys, uint64_t index,
+ uint64_t index2, uint64_t pairIndexes, const void *key1,
+ const void *value1, const void *key2, const void *value2,
+ const void *key3, const void *value3);
+
+static int _mapStrIsEqual(NXMapTable *table, const void *key1, const void *key2);
+
+asm("\n .text"
+    "\n .private_extern ___NXMAPTABLE_CORRUPTED__"
+    "\n ___NXMAPTABLE_CORRUPTED__:"
+    // push a frame for the unwinder to see
+    "\n pushq %rbp"
+    "\n mov %rsp, %rbp"
+    // push register parameters to the stack in reverse order
+    "\n pushq %r9"
+    "\n pushq %r8"
+    "\n pushq %rcx"
+    "\n pushq %rdx"
+    "\n pushq %rsi"
+    "\n pushq %rdi"
+    // pop the pushed register parameters into their destinations
+    "\n popq %rax"  // table
+    "\n popq %rbx"  // buckets
+    "\n popq %rcx"  // count
+    "\n popq %rdx"  // nbBucketsMinusOne
+    "\n popq %rdi"  // badkeys
+    "\n popq %rsi"  // index
+    // read stack parameters into their destinations
+    "\n mov 0*8+16(%rbp), %r8"   // index2
+    "\n mov 1*8+16(%rbp), %r9"   // pairIndexes
+    "\n mov 2*8+16(%rbp), %r10"  // key1
+    "\n mov 3*8+16(%rbp), %r11"  // value1
+    "\n mov 4*8+16(%rbp), %r12"  // key2
+    "\n mov 5*8+16(%rbp), %r13"  // value2
+    "\n mov 6*8+16(%rbp), %r14"  // key3
+    "\n mov 7*8+16(%rbp), %r15"  // value3
+    "\n ud2");
+#endif
+
+// Look for a particular case of data corruption (rdar://36373000)
+// and investigate it further before crashing.
+static void validateKey(NXMapTable *table, MapPair *pair,
+                        unsigned index, unsigned index2)
+{
+#if __x86_64__
+#   define BADKEY ((void * _Nonnull)(0xfffffffffffffffeULL))
+    if (pair->key != BADKEY  ||
+        table->prototype->isEqual != _mapStrIsEqual)
+    {
+        return;
+    }
+
+    _objc_inform_now_and_on_crash
+        ("NXMapTable %p (%p) has invalid key/value pair %p->%p (%p)",
+         table, table->buckets, pair->key, pair->value, pair);
+    _objc_inform_now_and_on_crash
+        ("table %p, buckets %p, count %u, nbNucketsMinusOne %u, "
+         "prototype %p (hash %p, isEqual %p, free %p)",
+         table, table->buckets, table->count, table->nbBucketsMinusOne,
+         table->prototype, table->prototype->hash, table->prototype->isEqual,
+         table->prototype->free);
+
+    // Count the number of bad keys in the table.
+    MapPair *pairs = (MapPair *)table->buckets;
+    unsigned badKeys = 0;
+    for (unsigned i = 0; i < table->nbBucketsMinusOne+1; i++) {
+        if (pairs[i].key == BADKEY) badKeys++;
+    }
+
+    _objc_inform_now_and_on_crash("%u invalid keys in table", badKeys);
+
+    // Record some additional key pairs for posterity.
+    unsigned pair2Index = nextIndex(table, index);
+    unsigned pair3Index = nextIndex(table, pair2Index);
+    MapPair *pair2 = pairs + pair2Index;
+    MapPair *pair3 = pairs + pair3Index;
+    uint64_t pairIndexes = ((uint64_t)pair2Index << 32) | pair3Index;
+
+    // Save a bunch of values to registers so we can see them in the crash log.
+    __NXMAPTABLE_CORRUPTED__
+        (// rax, rbx, rcx, rdx
+         table, table->buckets, table->count, table->nbBucketsMinusOne,
+         // rdi, rsi, skip rbp, skip rsp
+         badKeys, index,
+         // r8, r9, r10, r11
+         index2, pairIndexes, pair->key, pair->value,
+         // r12, r13, r14, r15
+         pair2->key, pair2->value, pair3->key, pair3->value);
+#endif
+}
+
 static INLINE void *_NXMapMember(NXMapTable *table, const void *key, void **value) {
     MapPair	*pairs = (MapPair *)table->buckets;
     unsigned	index = bucketOf(table, key);
     MapPair	*pair = pairs + index;
     if (pair->key == NX_MAPNOTAKEY) return NX_MAPNOTAKEY;
+    validateKey(table, pair, index, index);
+
     if (isEqual(table, pair->key, key)) {
 	*value = (void *)pair->value;
 	return (void *)pair->key;
@@ -174,6 +270,7 @@ static INLINE void *_NXMapMember(NXMapTable *table, const void *key, void **valu
 	while ((index2 = nextIndex(table, index2)) != index) {
 	    pair = pairs + index2;
 	    if (pair->key == NX_MAPNOTAKEY) return NX_MAPNOTAKEY;
+	    validateKey(table, pair, index, index2);
 	    if (isEqual(table, pair->key, key)) {
 	    	*value = (void *)pair->value;
 		return (void *)pair->key;
@@ -244,7 +341,7 @@ void *NXMapInsert(NXMapTable *table, const void *key, const void *value) {
 	while ((index2 = nextIndex(table, index2)) != index) {
 	    pair = pairs + index2;
 	    if (pair->key == NX_MAPNOTAKEY) {
-              pair->key = key; pair->value = value;
+		pair->key = key; pair->value = value;
 		table->count++;
 		if (table->count * 4 > numBuckets * 3) _NXMapRehash(table);
 		return NULL;
