@@ -1,14 +1,10 @@
-// TEST_CFLAGS -Wno-deprecated-declarations
+// TEST_CONFIG
 
 #include "test.h"
 
 #include "testroot.i"
 #include <objc/runtime.h>
 #include <string.h>
-#ifndef OBJC_NO_GC
-#include <objc/objc-auto.h>
-#include <auto_zone.h>
-#endif
 
 @protocol Proto
 -(void) instanceMethod;
@@ -49,9 +45,6 @@ static int super_initialize;
 -(void) instanceMethod2 { fail("-[Super instanceMethod2] called"); }
 @end
 
-@interface WeakSuper : Super { __weak id weakIvar; } @end
-@implementation WeakSuper @end
-
 static int state;
 
 static void instance_fn(id self, SEL _cmd __attribute__((unused)))
@@ -86,12 +79,6 @@ static void cycle(void)
     
     cls = objc_allocateClassPair([Super class], "Sub", 0);
     testassert(cls);
-#ifndef OBJC_NO_GC
-    if (objc_collectingEnabled()) {
-        testassert(auto_zone_size(objc_collectableZone(), objc_unretainedPointer(cls)));
-        testassert(auto_zone_size(objc_collectableZone(), objc_unretainedPointer(object_getClass(cls))));
-    }
-#endif
     
     class_addMethod(cls, @selector(instanceMethod), 
                     (IMP)&instance_fn, "v@:");
@@ -186,11 +173,6 @@ static void cycle(void)
     testassert(class_getInstanceSize(cls) >= sizeof(Class) + 4 + 3*size);
     testassert(class_conformsToProtocol(cls, @protocol(Proto)));
 
-    if (objc_collectingEnabled()) {
-        testassert(0 == strcmp((char *)class_getIvarLayout(cls), "\x01\x13"));
-        testassert(NULL == class_getWeakIvarLayout(cls));
-    }
-
     class_addMethod(cls, @selector(instanceMethod2), 
                     (IMP)&instance_fn, "v@:");
     class_addMethod(object_getClass(cls), @selector(classMethod2), 
@@ -243,7 +225,7 @@ static void cycle(void)
     testassert(state == 2);
 
     // put instance tests on a separate thread so they 
-    // are reliably GC'd before class destruction
+    // are reliably deallocated before class destruction
     testonthread(^{
         id obj = [cls new];
         state = 0;
@@ -282,94 +264,35 @@ static void cycle(void)
 
     objc_registerClassPair(cls2);
 
-    if (objc_collectingEnabled()) {
-        testassert(0 == strcmp((char *)class_getIvarLayout(cls2), "\x01\x1f\x05\xf0\x10"));
-        testassert(NULL == class_getWeakIvarLayout(cls2));
-    }
-
     // 1-byte ivars should be well packed
     testassert(ivar_getOffset(class_getInstanceVariable(cls2, "b")) == 
                ivar_getOffset(class_getInstanceVariable(cls2, "a")) + 1);
     testassert(ivar_getOffset(class_getInstanceVariable(cls2, "c")) == 
                ivar_getOffset(class_getInstanceVariable(cls2, "b")) + 1);
 
-    testcollect();  // GC: finalize "obj" above before disposing its class
     objc_disposeClassPair(cls2);
     objc_disposeClassPair(cls);
     
     testassert(!objc_getClass("Sub"));
 
-
-    // Test unmodified ivar layouts
-
-    cls = objc_allocateClassPair([Super class], "Sub2", 0);
-    testassert(cls);
-    objc_registerClassPair(cls);
-    if (objc_collectingEnabled()) {
-        const char *l1, *l2;
-        l1 = (char *)class_getIvarLayout([Super class]);
-        l2 = (char *)class_getIvarLayout(cls);
-        testassert(l1 == l2  ||  0 == strcmp(l1, l2));
-        l1 = (char *)class_getWeakIvarLayout([Super class]);
-        l2 = (char *)class_getWeakIvarLayout(cls);
-        testassert(l1 == l2  ||  0 == strcmp(l1, l2));
-    }
-    objc_disposeClassPair(cls);
-
-    cls = objc_allocateClassPair([WeakSuper class], "Sub3", 0);
-    testassert(cls);
-    objc_registerClassPair(cls);
-    if (objc_collectingEnabled()) {
-        const char *l1, *l2;
-        l1 = (char *)class_getIvarLayout([WeakSuper class]);
-        l2 = (char *)class_getIvarLayout(cls);
-        testassert(l1 == l2  ||  0 == strcmp(l1, l2));
-        l1 = (char *)class_getWeakIvarLayout([WeakSuper class]);
-        l2 = (char *)class_getWeakIvarLayout(cls);
-        testassert(l1 == l2  ||  0 == strcmp(l1, l2));
-    }
-    objc_disposeClassPair(cls);
-
-    // Test layout setters
-    if (objc_collectingEnabled()) {
-        cls = objc_allocateClassPair([Super class], "Sub4", 0);
-        testassert(cls);
-        class_setIvarLayout(cls, (uint8_t *)"foo");
-        class_setWeakIvarLayout(cls, NULL);
-        objc_registerClassPair(cls);
-        testassert(0 == strcmp("foo", (char *)class_getIvarLayout(cls)));
-        testassert(NULL == class_getWeakIvarLayout(cls));
-        objc_disposeClassPair(cls);
-
-        cls = objc_allocateClassPair([Super class], "Sub5", 0);
-        testassert(cls);
-        class_setIvarLayout(cls, NULL);
-        class_setWeakIvarLayout(cls, (uint8_t *)"bar");
-        objc_registerClassPair(cls);
-        testassert(NULL == class_getIvarLayout(cls));
-        testassert(0 == strcmp("bar", (char *)class_getWeakIvarLayout(cls)));
-        objc_disposeClassPair(cls);
-    }
+    // fixme test layout setters
 }
 
 int main()
 {
-    int count = 1000;
+    int count = 5000;
 
-    testonthread(^{ cycle(); });
-    testonthread(^{ cycle(); });
-    testonthread(^{ cycle(); });
+    // fixme even with this long warmup we still
+    // suffer false 4096-byte leaks occasionally.
+    for (int i = 0; i < 500; i++) {
+        testonthread(^{ cycle(); });
+    }
 
     leak_mark();
     while (count--) {
         testonthread(^{ cycle(); });
     }
-#if __OBJC_GC__
-    testwarn("rdar://19042235 possible leaks suppressed under GC");
-    leak_check(16000);
-#else
-    leak_check(0);
-#endif
+    leak_check(4096);
 
     succeed(__FILE__);
 }

@@ -276,11 +276,6 @@ void test_batch(void)
 
 int main()
 {
-    if (objc_collectingEnabled()) {
-        testwarn("rdar://19042235 test disabled in GC because it is slow");
-        succeed(FILENAME);
-    }
-
     for (int i = 0; i < 1000; i++) {
         testonthread(^{ test_single(); });
         testonthread(^{ test_inplace(); });

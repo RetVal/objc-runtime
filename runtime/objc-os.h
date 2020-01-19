@@ -102,7 +102,6 @@ class nocopy_t {
 #   include <mach-o/dyld_priv.h>
 #   include <malloc/malloc.h>
 #   include <os/lock_private.h>
-//#   include <os/lock.h>
 #   include <libkern/OSAtomic.h>
 #   include <libkern/OSCacheControl.h>
 #   include <System/pthread_machdep.h>
@@ -120,20 +119,6 @@ void vsyslog(int, const char *, va_list) UNAVAILABLE_ATTRIBUTE;
 #define fastpath(x) (__builtin_expect(bool(x), 1))
 #define slowpath(x) (__builtin_expect(bool(x), 0))
 
-//typedef OSSpinLock os_lock_handoff_s;
-//#define OS_LOCK_HANDOFF_INIT OS_SPINLOCK_INIT
-//
-//ALWAYS_INLINE void os_lock_lock(volatile os_lock_handoff_s *lock) {
-//    return OSSpinLockLock(lock);
-//}
-//
-//ALWAYS_INLINE void os_lock_unlock(volatile os_lock_handoff_s *lock) {
-//    return OSSpinLockUnlock(lock);
-//}
-//
-//ALWAYS_INLINE bool os_lock_trylock(volatile os_lock_handoff_s *lock) {
-//    return OSSpinLockTry(lock);
-//}
 
 static ALWAYS_INLINE uintptr_t 
 addc(uintptr_t lhs, uintptr_t rhs, uintptr_t carryin, uintptr_t *carryout)
@@ -147,125 +132,67 @@ subc(uintptr_t lhs, uintptr_t rhs, uintptr_t carryin, uintptr_t *carryout)
     return __builtin_subcl(lhs, rhs, carryin, carryout);
 }
 
-
-#if __arm64__
-
-// Pointer-size register prefix for inline asm
-# if __LP64__
-#   define p "x"  // true arm64
-# else
-#   define p "w"  // arm64_32
-# endif
+#if __arm64__ && !__arm64e__
 
 static ALWAYS_INLINE
-uintptr_t 
+uintptr_t
 LoadExclusive(uintptr_t *src)
 {
-    uintptr_t result;
-    asm("ldxr %" p "0, [%x1]" 
-        : "=r" (result) 
-        : "r" (src), "m" (*src));
-    return result;
+    return __builtin_arm_ldrex(src);
 }
 
 static ALWAYS_INLINE
-bool 
+bool
 StoreExclusive(uintptr_t *dst, uintptr_t oldvalue __unused, uintptr_t value)
 {
-    uint32_t result;
-    asm("stxr %w0, %" p "2, [%x3]" 
-        : "=&r" (result), "=m" (*dst)
-        : "r" (value), "r" (dst));
-    return !result;
+    return !__builtin_arm_strex(value, dst);
 }
 
 
 static ALWAYS_INLINE
-bool 
+bool
 StoreReleaseExclusive(uintptr_t *dst, uintptr_t oldvalue __unused, uintptr_t value)
 {
-    uint32_t result;
-    asm("stlxr %w0, %" p "2, [%x3]" 
-        : "=&r" (result), "=m" (*dst)
-        : "r" (value), "r" (dst));
-    return !result;
+    return !__builtin_arm_stlex(value, dst);
 }
 
 static ALWAYS_INLINE
-void 
-ClearExclusive(uintptr_t *dst)
+void
+ClearExclusive(uintptr_t *dst __unused)
 {
-    // pretend it writes to *dst for instruction ordering purposes
-    asm("clrex" : "=m" (*dst));
+    __builtin_arm_clrex();
 }
 
-#undef p
-
-#elif __arm__  
+#else
 
 static ALWAYS_INLINE
-uintptr_t 
+uintptr_t
 LoadExclusive(uintptr_t *src)
 {
-    return *src;
+    return __c11_atomic_load((_Atomic(uintptr_t) *)src, __ATOMIC_RELAXED);
 }
 
 static ALWAYS_INLINE
-bool 
+bool
 StoreExclusive(uintptr_t *dst, uintptr_t oldvalue, uintptr_t value)
 {
-    return OSAtomicCompareAndSwapPtr((void *)oldvalue, (void *)value, 
-                                     (void **)dst);
+    return __c11_atomic_compare_exchange_weak((_Atomic(uintptr_t) *)dst, &oldvalue, value, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
 }
 
+
 static ALWAYS_INLINE
-bool 
+bool
 StoreReleaseExclusive(uintptr_t *dst, uintptr_t oldvalue, uintptr_t value)
 {
-    return OSAtomicCompareAndSwapPtrBarrier((void *)oldvalue, (void *)value, 
-                                            (void **)dst);
+    return __c11_atomic_compare_exchange_weak((_Atomic(uintptr_t) *)dst, &oldvalue, value, __ATOMIC_RELEASE, __ATOMIC_RELAXED);
 }
 
 static ALWAYS_INLINE
-void 
+void
 ClearExclusive(uintptr_t *dst __unused)
 {
 }
 
-
-#elif __x86_64__  ||  __i386__
-
-static ALWAYS_INLINE
-uintptr_t 
-LoadExclusive(uintptr_t *src)
-{
-    return *src;
-}
-
-static ALWAYS_INLINE
-bool 
-StoreExclusive(uintptr_t *dst, uintptr_t oldvalue, uintptr_t value)
-{
-    
-    return __sync_bool_compare_and_swap((void **)dst, (void *)oldvalue, (void *)value);
-}
-
-static ALWAYS_INLINE
-bool 
-StoreReleaseExclusive(uintptr_t *dst, uintptr_t oldvalue, uintptr_t value)
-{
-    return StoreExclusive(dst, oldvalue, value);
-}
-
-static ALWAYS_INLINE
-void 
-ClearExclusive(uintptr_t *dst __unused)
-{
-}
-
-
-#else 
-#   error unknown architecture
 #endif
 
 
@@ -661,7 +588,7 @@ OBJC_EXTERN IMAGE_DOS_HEADER __ImageBase;
 // OS compatibility
 
 static inline uint64_t nanoseconds() {
-    return mach_absolute_time();
+    return clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
 }
 
 // Internal data types
@@ -756,9 +683,6 @@ using spinlock_t = mutex_tt<LOCKDEBUG>;
 using mutex_t = mutex_tt<LOCKDEBUG>;
 using monitor_t = monitor_tt<LOCKDEBUG>;
 using recursive_mutex_t = recursive_mutex_tt<LOCKDEBUG>;
-
-//extern "C" void os_unfair_lock_assert_owner(os_unfair_lock *);
-//extern "C" void os_unfair_lock_assert_not_owner(os_unfair_lock *);
 
 // Use fork_unsafe_lock to get a lock that isn't 
 // acquired and released around fork().

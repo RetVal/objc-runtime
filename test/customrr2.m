@@ -2,8 +2,8 @@
 // TEST_CONFIG MEM=mrc
 /*
 TEST_BUILD
-    $C{COMPILE} $DIR/customrr.m -fvisibility=default -o customrr2.out -DTEST_EXCHANGEIMPLEMENTATIONS=1
-    $C{COMPILE} -undefined dynamic_lookup -dynamiclib $DIR/customrr-cat1.m -o customrr-cat1.dylib
-    $C{COMPILE} -undefined dynamic_lookup -dynamiclib $DIR/customrr-cat2.m -o customrr-cat2.dylib
+    $C{COMPILE} $DIR/customrr.m -fvisibility=default -o customrr2.exe -DTEST_EXCHANGEIMPLEMENTATIONS=1
+    $C{COMPILE} -bundle -bundle_loader customrr2.exe $DIR/customrr-cat1.m -o customrr-cat1.bundle
+    $C{COMPILE} -bundle -bundle_loader customrr2.exe $DIR/customrr-cat2.m -o customrr-cat2.bundle
 END
 */

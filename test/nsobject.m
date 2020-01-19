@@ -1,4 +1,4 @@
-// TEST_CONFIG MEM=mrc,gc
+// TEST_CONFIG MEM=mrc
 
 #include "test.h"
 

@@ -204,6 +204,15 @@ OBJC_EXPORT unsigned int objc_debug_taggedpointer_ext_payload_rshift
 
 #endif
 
+
+/***********************************************************************
+* Swift marker bits
+**********************************************************************/
+#if __OBJC2__
+OBJC_EXPORT const uintptr_t objc_debug_swift_stable_abi_bit
+OBJC_AVAILABLE(10.14, 12.0, 12.0, 5.0, 3.0);
+#endif
+
 __END_DECLS
 
 // APPLE_API_PRIVATE

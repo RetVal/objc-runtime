@@ -169,15 +169,37 @@ void cycle(void)
     }
 
     // Top-level thread pool popped normally.
+    // Check twice - once for empty placeholder, once without.
+#   if DEBUG_POOL_ALLOCATION || FOUNDATION
+    // DebugPoolAllocation disables the empty placeholder pool.
+    // Guard Malloc disables the empty placeholder pool (checked at runtime)
+    // Foundation makes RR_PUSH return an NSAutoreleasePool not the raw token.
+#       define CHECK_PLACEHOLDER 0
+#   else
+#       define CHECK_PLACEHOLDER 1
+#   endif
     testprintf("-- Thread-level pool popped normally.\n");
     {
         state = 0;
         testonthread(^{ 
             void *pool = RR_PUSH();
+#if CHECK_PLACEHOLDER
+            if (!is_guardmalloc()) {
+                testassert(pool == (void*)1);
+            }
+#endif
+            RR_AUTORELEASE([[Deallocator alloc] init]);
+            RR_POP(pool);
+            pool = RR_PUSH();
+#if CHECK_PLACEHOLDER
+            if (!is_guardmalloc()) {
+                testassert(pool != (void*)1);
+            }
+#endif
             RR_AUTORELEASE([[Deallocator alloc] init]);
             RR_POP(pool);
         });
-        testassert(state == 1);
+        testassert(state == 2);
     }
 
 
@@ -276,7 +298,7 @@ slow_cycle(void)
 int main()
 {
     pthread_attr_init(&smallstack);
-    pthread_attr_setstacksize(&smallstack, 16384);
+    pthread_attr_setstacksize(&smallstack, 32768);
 
     // inflate the refcount side table so it doesn't show up in leak checks
     {
@@ -333,21 +355,19 @@ int main()
     }
     
     // check for leaks using pools not at top level
+    // fixme for FOUNDATION this leak mark/check needs 
+    // to be outside the autorelease pool for some reason
+    leak_mark();
     void *pool = RR_PUSH();
     {
-        leak_mark();
-        
         for (int i = 0; i < 1000; i++) {
             cycle();
         }
         
-        leak_check(0);
-        
         slow_cycle();
-        
-        leak_check(0);
     }
     RR_POP(pool);
+    leak_check(0);
 
     // NSThread.
     // Can't leak check this because it's too noisy.

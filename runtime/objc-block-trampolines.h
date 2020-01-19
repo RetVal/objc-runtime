@@ -37,6 +37,13 @@
  * objc-block-trampolines.h: Symbols for IMP block trampolines
  */
 
+// WARNING: remapped code and dtrace do not play well together. Dtrace
+// will place trap instructions to instrument the code, which then get
+// remapped along with everything else. The remapped traps are not
+// recognized by dtrace and the process crashes. To avoid this, dtrace
+// blacklists this library by name. Do not change the name of this
+// library. rdar://problem/42627391
+
 #include <objc/objc-api.h>
 
 OBJC_EXPORT const char _objc_blockTrampolineImpl

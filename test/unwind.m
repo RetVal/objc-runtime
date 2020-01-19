@@ -4,15 +4,6 @@
 #include <objc/objc-exception.h>
 #include <Foundation/NSObject.h>
 
-#if !defined(__OBJC2__)
-
-int main()
-{
-    succeed(__FILE__);
-}
-
-#else
-
 static int state;
 
 @interface Foo : NSObject @end
@@ -40,7 +31,7 @@ static void handler(id unused __unused, void *ctx __unused)
 +(BOOL) resolveClassMethod:(SEL)__unused name
 {
     testassert(state == 1); state++;
-#if !TARGET_OS_EMBEDDED  &&  !TARGET_OS_IPHONE  &&  !TARGET_IPHONE_SIMULATOR
+#if TARGET_OS_OSX
     objc_addExceptionHandler(&handler, 0);
     testassert(state == 2); 
 #else
@@ -56,14 +47,13 @@ static void handler(id unused __unused, void *ctx __unused)
 
 int main()
 {
-    int i;
-
     // unwind exception and alt handler through objc_msgSend()
 
     PUSH_POOL {
 
+        const int count = is_guardmalloc() ? 1000 : 100000;
         state = 0;
-        for (i = 0; i < 100000; i++) {
+        for (int i = 0; i < count; i++) {
             @try {
                 testassert(state == 0); state++;
                 [Foo method];
@@ -89,5 +79,3 @@ int main()
 
     succeed(__FILE__);
 }
-
-#endif

@@ -189,16 +189,19 @@ LExit$0:
 #define GETIMP 1
 #define LOOKUP 2
 
-// CacheHit: x17 = cached IMP, x12 = address of cached IMP
+// CacheHit: x17 = cached IMP, x12 = address of cached IMP, x1 = SEL
 .macro CacheHit
 .if $0 == NORMAL
-	TailCallCachedImp x17, x12	// authenticate and call imp
+	TailCallCachedImp x17, x12, x1	// authenticate and call imp
 .elseif $0 == GETIMP
 	mov	p0, p17
-	AuthAndResignAsIMP x0, x12	// authenticate imp and re-sign as IMP
-	ret				// return IMP
+	cbz	p0, 9f			// don't ptrauth a nil imp
+	AuthAndResignAsIMP x0, x12, x1	// authenticate imp and re-sign as IMP
+9:	ret				// return IMP
 .elseif $0 == LOOKUP
-	AuthAndResignAsIMP x17, x12	// authenticate imp and re-sign as IMP
+	// No nil check for ptrauth: the caller would crash anyway when they
+	// jump to a nil IMP. We don't care if that jump also fails ptrauth.
+	AuthAndResignAsIMP x17, x12, x1	// authenticate imp and re-sign as IMP
 	ret				// return imp via x17
 .else
 .abort oops

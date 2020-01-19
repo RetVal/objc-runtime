@@ -220,6 +220,27 @@ int state = 0;
 @end
 
 
+
+@interface SuperThrower : TestRoot @end
+@implementation SuperThrower
++(void)initialize {
+    testprintf("in [SuperThrower initialize]\n");
+    testassert(state == 0);
+    state = 10;
+    @throw AUTORELEASE([TestRoot new]);
+    fail("@throw didn't throw");
+}
+@end
+
+@interface SubThrower : SuperThrower @end
+@implementation SubThrower
++(void)initialize {
+    testprintf("in [SubThrower initialize]\n");
+    testassert(state == 0);
+    state = 20;
+}
+@end
+
 int main()
 {
     Class cls;
@@ -271,6 +292,31 @@ int main()
     [Sub7 class];
     testassert(state == 6);
 
+    // exception from +initialize must be handled cleanly
+    PUSH_POOL {
+        alarm(3);
+        testonthread( ^{
+            @try {
+                state = 0;
+                [SuperThrower class];
+                fail("where's the beef^Wexception?");
+            } @catch (...) {
+                testassert(state == 10);
+                state = 11;
+            }
+            testassert(state == 11);
+        });
+        @try {
+            state = 0;
+            [SuperThrower class];
+            testassert(state == 0);
+            [SubThrower class];
+            testassert(state == 20);
+        } @catch (...) {
+            fail("+initialize called again after exception");
+        }
+    } POP_POOL;
+    
     succeed(__FILE__);
 
     return 0;

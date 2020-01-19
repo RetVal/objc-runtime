@@ -1,4 +1,4 @@
-// TEST_CONFIG CC=clang
+// TEST_CONFIG 
 
 #include "test.h"
 #include <objc/runtime.h>

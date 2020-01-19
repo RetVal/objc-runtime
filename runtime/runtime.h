@@ -1728,6 +1728,65 @@ OBJC_EXPORT void objc_setHook_getImageName(objc_hook_getImageName _Nonnull newVa
                                            objc_hook_getImageName _Nullable * _Nonnull outOldValue)
     OBJC_AVAILABLE(10.14, 12.0, 12.0, 5.0, 3.0);
 
+/**
+ * Function type for a hook that assists objc_getClass() and related functions.
+ *
+ * @param name The class name to look up.
+ * @param outClass On return, the result of the class lookup.
+ * @return YES if a class with this name was found, NO otherwise.
+ *
+ * @see objc_getClass
+ * @see objc_setHook_getClass
+ */
+typedef BOOL (*objc_hook_getClass)(const char * _Nonnull name, Class _Nullable * _Nonnull outClass);
+
+/**
+ * Install a hook for objc_getClass() and related functions.
+ *
+ * @param newValue The hook function to install.
+ * @param outOldValue The address of a function pointer variable. On return,
+ *  the old hook function is stored in the variable.
+ *
+ * @note The store to *outOldValue is thread-safe: the variable will be
+ *  updated before objc_getClass() calls your new hook to read it,
+ *  even if your new hook is called from another thread before this
+ *  setter completes.
+ * @note Your hook should call the previous hook for class names
+ *  that you do not recognize.
+ *
+ * @see objc_getClass
+ * @see objc_hook_getClass
+ */
+#if !(TARGET_OS_OSX && __i386__)
+#define OBJC_GETCLASSHOOK_DEFINED 1
+OBJC_EXPORT void objc_setHook_getClass(objc_hook_getClass _Nonnull newValue,
+                                       objc_hook_getClass _Nullable * _Nonnull outOldValue)
+    OBJC_AVAILABLE(10.14, 12.0, 12.0, 5.0, 3.0);
+// rdar://44986431 fixme correct availability for _objc_realizeClassFromSwift
+#endif
+
+/** 
+ * Callback from Objective-C to Swift to perform Swift class initialization.
+ */
+#if !(TARGET_OS_OSX && __i386__)
+typedef Class _Nullable
+(*_objc_swiftMetadataInitializer)(Class _Nonnull cls, void * _Nullable arg);
+#endif
+
+
+/** 
+ * Perform Objective-C initialization of a Swift class.
+ * Do not call this function. It is provided for the Swift runtime's use only 
+ * and will change without notice or mercy.
+ */
+#if !(TARGET_OS_OSX && __i386__)
+#define OBJC_REALIZECLASSFROMSWIFT_DEFINED 1
+OBJC_EXPORT Class _Nullable
+_objc_realizeClassFromSwift(Class _Nullable cls, void * _Nullable previously)
+    OBJC_AVAILABLE(10.14, 12.0, 12.0, 5.0, 3.0);
+// rdar://44986431 fixme correct availability for _objc_realizeClassFromSwift
+#endif
+
 
 #define _C_ID       '@'
 #define _C_CLASS    '#'

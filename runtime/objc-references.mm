@@ -269,6 +269,16 @@ struct ReleaseValue {
 };
 
 void _object_set_associative_reference(id object, void *key, id value, uintptr_t policy) {
+    // This code used to work when nil was passed for object and key. Some code
+    // probably relies on that to not crash. Check and handle it explicitly.
+    // rdar://problem/44094390
+    if (!object && !value) return;
+    
+    assert(object);
+    
+    if (object->getIsa()->forbidsAssociatedObjects())
+        _objc_fatal("objc_setAssociatedObject called on instance (%p) of class %s which does not allow associated objects", object, object_getClassName(object));
+    
     // retain the new value (if any) outside the lock.
     ObjcAssociation old_association(0, nil);
     id new_value = value ? acquireValue(value, policy) : nil;

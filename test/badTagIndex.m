@@ -1,8 +1,8 @@
 /* 
 TEST_CRASHES
 TEST_RUN_OUTPUT
-objc\[\d+\]: tag index 8 is too large.
-CRASHED: SIG(ILL|TRAP)
+objc\[\d+\]: tag index 264 is invalid
+objc\[\d+\]: HALTED
 OR
 no tagged pointers
 OK: badTagIndex.m
@@ -18,7 +18,7 @@ END
 
 int main()
 {
-    _objc_registerTaggedPointerClass((objc_tag_index_t)8, [NSObject class]);
+    _objc_registerTaggedPointerClass((objc_tag_index_t)(OBJC_TAG_Last52BitPayload+1), [NSObject class]);
     fail(__FILE__);
 }
 

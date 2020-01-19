@@ -34,6 +34,8 @@ L_objc_blockTrampolineImpl:
 
 	// pad up to TrampolineBlockPagePair header size
 	nop
+	nop
+	nop
 	
 .macro TrampolineEntry
 	// load address of trampoline data (two pages before this instruction)
@@ -87,7 +89,7 @@ L_objc_blockTrampolineImpl:
 	
 .align 3
 __objc_blockTrampolineStart:
-	// 2048-3 trampolines to fill 16K page
+	// 2048-4 trampolines to fill 16K page
 	TrampolineEntryX256
 	TrampolineEntryX256
 	TrampolineEntryX256
@@ -129,10 +131,10 @@ __objc_blockTrampolineStart:
 	TrampolineEntry
 	TrampolineEntry
 	TrampolineEntry
-	TrampolineEntry
-
 __objc_blockTrampolineLast:
 	TrampolineEntry
+
+	// TrampolineEntry
 	// TrampolineEntry
 	// TrampolineEntry
 	// TrampolineEntry

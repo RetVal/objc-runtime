@@ -42,6 +42,20 @@ OBJC_ROOT_CLASS
 @interface NoProps @end
 @implementation NoProps @end
 
+OBJC_ROOT_CLASS
+@interface ClassProps 
+@property(readonly,class) int prop1;
+@property(readonly,class) int prop2;
+@property(readonly) int prop2;
+@property(readonly) int prop3;
+@end
+@implementation ClassProps 
++(int)prop1 { return 0; }
++(int)prop2 { return 0; }
+-(int)prop2 { return 0; }
+-(int)prop3 { return 0; }
+@end
+
 static int isNamed(objc_property_t p, const char *name)
 {
     return (0 == strcmp(name, property_getName(p)));
@@ -118,6 +132,35 @@ int main()
     props = class_copyPropertyList(cls, &count);
     testassert(!props);
     testassert(count == 0);
+
+    // Check class properties
+
+    cls = objc_getClass("ClassProps");
+    testassert(cls);
+
+    count = 100;
+    props = class_copyPropertyList(cls, &count);
+    testassert(props);
+    testassert(count == 2);
+    testassert((isNamed(props[0], "prop2")  &&  isNamed(props[1], "prop3"))  ||
+               (isNamed(props[1], "prop2")  &&  isNamed(props[0], "prop3")));
+    // props[] should be null-terminated
+    testassert(props[2] == NULL);
+    free(props);
+
+    cls = object_getClass(objc_getClass("ClassProps"));
+    testassert(cls);
+
+    count = 100;
+    props = class_copyPropertyList(cls, &count);
+    testassert(props);
+    testassert(count == 2);
+    testassert((isNamed(props[0], "prop1")  &&  isNamed(props[1], "prop2"))  ||
+               (isNamed(props[1], "prop1")  &&  isNamed(props[0], "prop2")));
+    // props[] should be null-terminated
+    testassert(props[2] == NULL);
+    free(props);
+
 
     succeed(__FILE__);
     return 0;

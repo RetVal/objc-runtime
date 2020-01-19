@@ -2,9 +2,9 @@
 // TEST_CONFIG MEM=mrc
 /*
 TEST_BUILD
-    $C{COMPILE} $DIR/customrr.m -fvisibility=default -o customrr.out 
-    $C{COMPILE} -undefined dynamic_lookup -dynamiclib $DIR/customrr-cat1.m -o customrr-cat1.dylib
-    $C{COMPILE} -undefined dynamic_lookup -dynamiclib $DIR/customrr-cat2.m -o customrr-cat2.dylib
+    $C{COMPILE} $DIR/customrr.m -fvisibility=default -o customrr.exe
+    $C{COMPILE} -bundle -bundle_loader customrr.exe $DIR/customrr-cat1.m -o customrr-cat1.bundle
+    $C{COMPILE} -bundle -bundle_loader customrr.exe $DIR/customrr-cat2.m -o customrr-cat2.bundle
 END
 */
 
@@ -12,20 +12,6 @@ END
 #include "test.h"
 #include <dlfcn.h>
 #include <Foundation/NSObject.h>
-
-#if !__OBJC2__
-
-// pacify exported symbols list
-OBJC_ROOT_CLASS
-@interface InheritingSubCat @end
-@implementation InheritingSubCat @end
-
-int main(int argc __unused, char **argv)
-{
-    succeed(basename(argv[0]));
-}
-
-#else
 
 static int Retains;
 static int Releases;
@@ -205,32 +191,37 @@ int main(int argc __unused, char **argv)
     // Don't use runtime functions to do this - 
     // we want the runtime to think that these are NSObject's real code
     {
+#if __has_feature(ptrauth_calls)
+        typedef IMP __ptrauth_objc_method_list_imp MethodListIMP;
+#else
+        typedef IMP MethodListIMP;
+#endif
+
         Class cls = [NSObject class];
-        IMP *m;
-        IMP imp;
-        imp = class_getMethodImplementation(cls, @selector(retain));
-        m = (IMP *)class_getInstanceMethod(cls, @selector(retain));
+        IMP imp = class_getMethodImplementation(cls, @selector(retain));
+        MethodListIMP *m = (MethodListIMP *)
+            class_getInstanceMethod(cls, @selector(retain));
         testassert(m[2] == imp);  // verify Method struct is as we expect
 
-        m = (IMP *)class_getInstanceMethod(cls, @selector(retain));
+        m = (MethodListIMP *)class_getInstanceMethod(cls, @selector(retain));
         m[2] = (IMP)HackRetain;
-        m = (IMP *)class_getInstanceMethod(cls, @selector(release));
+        m = (MethodListIMP *)class_getInstanceMethod(cls, @selector(release));
         m[2] = (IMP)HackRelease;
-        m = (IMP *)class_getInstanceMethod(cls, @selector(autorelease));
+        m = (MethodListIMP *)class_getInstanceMethod(cls, @selector(autorelease));
         m[2] = (IMP)HackAutorelease;
-        m = (IMP *)class_getInstanceMethod(cls, @selector(retainCount));
+        m = (MethodListIMP *)class_getInstanceMethod(cls, @selector(retainCount));
         m[2] = (IMP)HackRetainCount;
-        m = (IMP *)class_getClassMethod(cls, @selector(retain));
+        m = (MethodListIMP *)class_getClassMethod(cls, @selector(retain));
         m[2] = (IMP)HackPlusRetain;
-        m = (IMP *)class_getClassMethod(cls, @selector(release));
+        m = (MethodListIMP *)class_getClassMethod(cls, @selector(release));
         m[2] = (IMP)HackPlusRelease;
-        m = (IMP *)class_getClassMethod(cls, @selector(autorelease));
+        m = (MethodListIMP *)class_getClassMethod(cls, @selector(autorelease));
         m[2] = (IMP)HackPlusAutorelease;
-        m = (IMP *)class_getClassMethod(cls, @selector(retainCount));
+        m = (MethodListIMP *)class_getClassMethod(cls, @selector(retainCount));
         m[2] = (IMP)HackPlusRetainCount;
-        m = (IMP *)class_getClassMethod(cls, @selector(alloc));
+        m = (MethodListIMP *)class_getClassMethod(cls, @selector(alloc));
         m[2] = (IMP)HackAlloc;
-        m = (IMP *)class_getClassMethod(cls, @selector(allocWithZone:));
+        m = (MethodListIMP *)class_getClassMethod(cls, @selector(allocWithZone:));
         m[2] = (IMP)HackAllocWithZone;
 
         _objc_flush_caches(cls);
@@ -365,14 +356,12 @@ int main(int argc __unused, char **argv)
     autorelease_fn(ocl, @selector(autorelease));
     testassert(SubPlusAutoreleases == 1);
 
-#if __OBJC2__
     retain_fn((Class)&OBJC_CLASS_$_UnrealizedSubB1, @selector(retain));
     testassert(PlusRetains == 3);
     release_fn((Class)&OBJC_CLASS_$_UnrealizedSubB2, @selector(release));
     testassert(PlusReleases == 3);
     autorelease_fn((Class)&OBJC_CLASS_$_UnrealizedSubB3, @selector(autorelease));
     testassert(PlusAutoreleases == 3);
-#endif
 
 
     testprintf("arc function bypasses instance but not class or override\n");
@@ -420,14 +409,12 @@ int main(int argc __unused, char **argv)
     objc_autorelease(ocl);
     testassert(SubPlusAutoreleases == 1);
 
-#if __OBJC2__
     objc_retain((Class)&OBJC_CLASS_$_UnrealizedSubC1);
     testassert(PlusRetains == 3);
     objc_release((Class)&OBJC_CLASS_$_UnrealizedSubC2);
     testassert(PlusReleases == 3);
     objc_autorelease((Class)&OBJC_CLASS_$_UnrealizedSubC3);
     testassert(PlusAutoreleases == 3);
-#endif
 
 
     testprintf("unrelated addMethod does not clobber\n");
@@ -727,7 +714,7 @@ int main(int argc __unused, char **argv)
     objc_autorelease(oo2);
     testassert(Autoreleases == 0);
 
-    dlh = dlopen("customrr-cat1.dylib", RTLD_LAZY);
+    dlh = dlopen("customrr-cat1.bundle", RTLD_LAZY);
     testassert(dlh);
 
     objc_retain(ooo);
@@ -767,7 +754,7 @@ int main(int argc __unused, char **argv)
     objc_autorelease(oo2);
     testassert(Autoreleases == 0);
 
-    dlh = dlopen("customrr-cat2.dylib", RTLD_LAZY);
+    dlh = dlopen("customrr-cat2.bundle", RTLD_LAZY);
     testassert(dlh);
 
     objc_retain(ooo);
@@ -900,5 +887,3 @@ int main(int argc __unused, char **argv)
 
     succeed(basename(argv[0]));
 }
-
-#endif

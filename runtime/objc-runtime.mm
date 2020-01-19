@@ -132,6 +132,22 @@ id objc_noop_imp(id self, SEL _cmd __unused) {
 
 
 /***********************************************************************
+* _objc_isDebugBuild. Defined in debug builds only.
+* Some test code looks for the presence of this symbol.
+**********************************************************************/
+#if DEBUG != OBJC_IS_DEBUG_BUILD
+#error mismatch in debug-ness macros
+// DEBUG is used in our code. OBJC_IS_DEBUG_BUILD is used in the
+// header declaration of _objc_isDebugBuild() because that header
+// is visible to other clients who might have their own DEBUG macro.
+#endif
+
+#if OBJC_IS_DEBUG_BUILD
+void _objc_isDebugBuild(void) { }
+#endif
+
+
+/***********************************************************************
 * objc_getClass.  Return the id of the named class.  If the class does
 * not exist, call _objc_classLoader and then objc_classHandler, either of 
 * which may create a new class.
@@ -420,6 +436,7 @@ void _objc_pthread_destroyspecific(void *arg)
                 free(data->printableNames[i]);  
             }
         }
+        free(data->classNameLookups);
 
         // add further cleanup here...
 

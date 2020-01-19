@@ -1,4 +1,7 @@
 // TEST_CFLAGS -framework CoreFoundation
+// TEST_CONFIG MEM=mrc
+// not for ARC because ARC memory management doesn't
+// work on CF types whose ObjC side is not yet loaded
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <objc/runtime.h>
@@ -17,20 +20,19 @@ int main()
 
 int main()
 {
-    // rdar://6164781 setAssociatedObject on pure-CF object crashes LP64
+    // rdar://6164781 setAssociatedObject on unresolved future class crashes
 
-    id obj;
-    id array = objc_retainedObject(CFArrayCreate(0, 0, 0, 0));
-    testassert(array);
+    id mp = (id)CFMachPortCreate(0, 0, 0, 0);
+    testassert(mp);
 
-    testassert(! objc_getClass("NSCFArray"));
+    testassert(! objc_getClass("NSMachPort"));
 
-    objc_setAssociatedObject(array, (void*)1, array, OBJC_ASSOCIATION_ASSIGN);
+    objc_setAssociatedObject(mp, (void*)1, mp, OBJC_ASSOCIATION_ASSIGN);
 
-    obj = objc_getAssociatedObject(array, (void*)1);
-    testassert(obj == array);
+    id obj = objc_getAssociatedObject(mp, (void*)1);
+    testassert(obj == mp);
 
-    RELEASE_VAR(array);
+    CFRelease((CFTypeRef)mp);
 
     succeed(__FILE__);
 }

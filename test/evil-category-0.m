@@ -3,7 +3,7 @@ rdar://8553305
 
 TEST_BUILD
     $C{COMPILE} $DIR/evil-category-0.m -dynamiclib -o libevil.dylib
-    $C{COMPILE} $DIR/evil-main.m -x none -DNOT_EVIL libevil.dylib -o evil-category-0.out
+    $C{COMPILE} $DIR/evil-main.m -x none -DNOT_EVIL libevil.dylib -o evil-category-0.exe
 END
 */
 

@@ -1,16 +1,6 @@
-// TEST_CONFIG 
+// TEST_CFLAGS -fobjc-weak
 
 #include "test.h"
-
-#if __OBJC_GC__ && __cplusplus && __i386__
-
-int main()
-{
-    testwarn("rdar://19042235 test disabled for 32-bit objc++ GC because of unknown bit rot");
-    succeed(__FILE__);
-}
-
-#else
 
 #include "testroot.i"
 #include <stdint.h>
@@ -27,13 +17,6 @@ int main()
 
 Weak *oldObject;
 Weak *newObject;
-
-void *fn(void *arg __unused)
-{
-    objc_registerThreadWithCollector();
-
-    return NULL;
-}
 
 int main()
 {
@@ -60,17 +43,14 @@ int main()
         
         testcollect();
         TestRootDealloc = 0;
-        TestRootFinalize = 0;
         RELEASE_VAR(value);
     });
 
     testcollect();
-    testassert(TestRootDealloc || TestRootFinalize);
+    testassert(TestRootDealloc);
 
-#if defined(__OBJC_GC__)  ||  __has_feature(objc_arc)
+#if __has_feature(objc_arc_weak)
     testassert(oldObject->value == nil);
-#else
-    testassert(oldObject->value != nil);
 #endif
     testassert(newObject->value == nil);
 
@@ -80,5 +60,3 @@ int main()
     succeed(__FILE__);
     return 0;
 }
-
-#endif

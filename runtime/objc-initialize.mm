@@ -481,7 +481,7 @@ void performForkChildInitialize(Class cls, Class supercls)
 * class_initialize.  Send the '+initialize' message on demand to any
 * uninitialized class. Force initialization of superclasses first.
 **********************************************************************/
-void _class_initialize(Class cls)
+void initializeNonMetaClass(Class cls)
 {
     assert(!cls->isMetaClass());
 
@@ -492,7 +492,7 @@ void _class_initialize(Class cls)
     // See note about deadlock above.
     supercls = cls->superclass;
     if (supercls  &&  !supercls->isInitialized()) {
-        _class_initialize(supercls);
+        initializeNonMetaClass(supercls);
     }
     
     // Try to atomically set CLS_INITIALIZING.

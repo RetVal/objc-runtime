@@ -1,4 +1,15 @@
-// TEST_CONFIG
+/*
+TEST_BUILD_OUTPUT
+.*propertyDesc.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\]
+.*propertyDesc.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\]
+.*propertyDesc.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\]
+.*propertyDesc.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\]
+.*propertyDesc.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\]
+.*propertyDesc.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\]
+.*propertyDesc.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\]
+.*propertyDesc.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\]
+END
+*/
 
 #include "test.h"
 #include "testroot.i"

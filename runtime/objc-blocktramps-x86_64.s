@@ -32,18 +32,18 @@
 
 .align PAGE_SHIFT
 __objc_blockTrampolineImpl:
-    popq %r10
-    andq $0xFFFFFFFFFFFFFFF8, %r10
-    subq $ 2*PAGE_SIZE, %r10
-    movq %rdi, %rsi // arg1 -> arg2
-    movq (%r10), %rdi // block -> arg1
-    jmp  *16(%rdi)
+    movq (%rsp), %r10  // read return address pushed by TrampolineEntry's callq
+    movq %rdi, %rsi    // arg1 -> arg2
+    movq -2*PAGE_SIZE-5(%r10), %rdi  // block object pointer -> arg1
+                       // trampoline is -5 bytes from the return address
+                       // data is -2 pages from the trampoline
+    ret                // back to TrampolineEntry to preserve CPU's return stack
 
 .macro TrampolineEntry
+    // This trampoline is 8 bytes long.
+    // This callq is 5 bytes long.
     callq __objc_blockTrampolineImpl
-    nop
-    nop
-    nop
+    jmp  *16(%rdi)
 .endmacro
 
 .align 5
@@ -566,19 +566,20 @@ __objc_blockTrampolineLast:
 
 .align PAGE_SHIFT
 __objc_blockTrampolineImpl_stret:
-    popq %r10
-    andq $0xFFFFFFFFFFFFFFF8, %r10
-    subq $ 3*PAGE_SIZE, %r10
-    // %rdi -- first arg -- is address of return value's space. Don't mess with it.
-    movq %rsi, %rdx // arg2 -> arg3
-    movq (%r10), %rsi // block -> arg2
-    jmp  *16(%rsi)
+
+    // %rdi -- arg1 -- is address of return value's space. Don't mess with it.
+    movq (%rsp), %r10  // read return address pushed by TrampolineEntry's callq
+    movq %rsi, %rdx    // arg2 -> arg3
+    movq -3*PAGE_SIZE-5(%r10), %rsi  // block object pointer -> arg2
+                       // trampoline is -5 bytes from the return address
+                       // data is -3 pages from the trampoline
+    ret                // back to TrampolineEntry to preserve CPU's return stack
 
 .macro TrampolineEntry_stret
+    // This trampoline is 8 bytes long.
+    // This callq is 5 bytes long.
     callq __objc_blockTrampolineImpl_stret
-    nop
-    nop
-    nop
+    jmp  *16(%rsi)
 .endmacro
 
 .align 5

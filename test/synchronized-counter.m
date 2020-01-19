@@ -29,8 +29,6 @@ static void *threadfn(void *arg)
     int n, d;
     int depth = 1 + (int)(intptr_t)arg % 4;
 
-    objc_registerThreadWithCollector();
-
     for (n = 0; n < COUNT; n++) {
         // Lock
         for (d = 0; d < depth; d++) {

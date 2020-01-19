@@ -1,22 +1,22 @@
 /*
 TEST_BUILD
-    $C{COMPILE} $DIR/concurrentcat.m -o concurrentcat.out -framework Foundation
+    $C{COMPILE} $DIR/concurrentcat.m -o concurrentcat.exe -framework Foundation
 
-    $C{COMPILE} -undefined dynamic_lookup -dynamiclib $DIR/concurrentcat_category.m -DTN=cc1 -o cc1.dylib
-    $C{COMPILE} -undefined dynamic_lookup -dynamiclib $DIR/concurrentcat_category.m -DTN=cc2 -o cc2.dylib
-    $C{COMPILE} -undefined dynamic_lookup -dynamiclib $DIR/concurrentcat_category.m -DTN=cc3 -o cc3.dylib
-    $C{COMPILE} -undefined dynamic_lookup -dynamiclib $DIR/concurrentcat_category.m -DTN=cc4 -o cc4.dylib
-    $C{COMPILE} -undefined dynamic_lookup -dynamiclib $DIR/concurrentcat_category.m -DTN=cc5 -o cc5.dylib
-    $C{COMPILE} -undefined dynamic_lookup -dynamiclib $DIR/concurrentcat_category.m -DTN=cc6 -o cc6.dylib
-    $C{COMPILE} -undefined dynamic_lookup -dynamiclib $DIR/concurrentcat_category.m -DTN=cc7 -o cc7.dylib
-    $C{COMPILE} -undefined dynamic_lookup -dynamiclib $DIR/concurrentcat_category.m -DTN=cc8 -o cc8.dylib
-    $C{COMPILE} -undefined dynamic_lookup -dynamiclib $DIR/concurrentcat_category.m -DTN=cc9 -o cc9.dylib
-    $C{COMPILE} -undefined dynamic_lookup -dynamiclib $DIR/concurrentcat_category.m -DTN=cc10 -o cc10.dylib
-    $C{COMPILE} -undefined dynamic_lookup -dynamiclib $DIR/concurrentcat_category.m -DTN=cc11 -o cc11.dylib
-    $C{COMPILE} -undefined dynamic_lookup -dynamiclib $DIR/concurrentcat_category.m -DTN=cc12 -o cc12.dylib
-    $C{COMPILE} -undefined dynamic_lookup -dynamiclib $DIR/concurrentcat_category.m -DTN=cc13 -o cc13.dylib
-    $C{COMPILE} -undefined dynamic_lookup -dynamiclib $DIR/concurrentcat_category.m -DTN=cc14 -o cc14.dylib
-    $C{COMPILE} -undefined dynamic_lookup -dynamiclib $DIR/concurrentcat_category.m -DTN=cc15 -o cc15.dylib
+    $C{COMPILE} -bundle -bundle_loader concurrentcat.exe -framework Foundation $DIR/concurrentcat_category.m -DTN=cc1 -o cc1.bundle
+    $C{COMPILE} -bundle -bundle_loader concurrentcat.exe -framework Foundation $DIR/concurrentcat_category.m -DTN=cc2 -o cc2.bundle
+    $C{COMPILE} -bundle -bundle_loader concurrentcat.exe -framework Foundation $DIR/concurrentcat_category.m -DTN=cc3 -o cc3.bundle
+    $C{COMPILE} -bundle -bundle_loader concurrentcat.exe -framework Foundation $DIR/concurrentcat_category.m -DTN=cc4 -o cc4.bundle
+    $C{COMPILE} -bundle -bundle_loader concurrentcat.exe -framework Foundation $DIR/concurrentcat_category.m -DTN=cc5 -o cc5.bundle
+    $C{COMPILE} -bundle -bundle_loader concurrentcat.exe -framework Foundation $DIR/concurrentcat_category.m -DTN=cc6 -o cc6.bundle
+    $C{COMPILE} -bundle -bundle_loader concurrentcat.exe -framework Foundation $DIR/concurrentcat_category.m -DTN=cc7 -o cc7.bundle
+    $C{COMPILE} -bundle -bundle_loader concurrentcat.exe -framework Foundation $DIR/concurrentcat_category.m -DTN=cc8 -o cc8.bundle
+    $C{COMPILE} -bundle -bundle_loader concurrentcat.exe -framework Foundation $DIR/concurrentcat_category.m -DTN=cc9 -o cc9.bundle
+    $C{COMPILE} -bundle -bundle_loader concurrentcat.exe -framework Foundation $DIR/concurrentcat_category.m -DTN=cc10 -o cc10.bundle
+    $C{COMPILE} -bundle -bundle_loader concurrentcat.exe -framework Foundation $DIR/concurrentcat_category.m -DTN=cc11 -o cc11.bundle
+    $C{COMPILE} -bundle -bundle_loader concurrentcat.exe -framework Foundation $DIR/concurrentcat_category.m -DTN=cc12 -o cc12.bundle
+    $C{COMPILE} -bundle -bundle_loader concurrentcat.exe -framework Foundation $DIR/concurrentcat_category.m -DTN=cc13 -o cc13.bundle
+    $C{COMPILE} -bundle -bundle_loader concurrentcat.exe -framework Foundation $DIR/concurrentcat_category.m -DTN=cc14 -o cc14.bundle
+    $C{COMPILE} -bundle -bundle_loader concurrentcat.exe -framework Foundation $DIR/concurrentcat_category.m -DTN=cc15 -o cc15.bundle
 END
 */
 
@@ -62,8 +62,6 @@ END
 
 void *threadFun(void *aTargetClassName) {
     const char *className = (const char *)aTargetClassName;
-
-    objc_registerThreadWithCollector();
 
     PUSH_POOL {
         
@@ -116,7 +114,7 @@ int main()
     for(i=1; i<16; i++) {
 	pthread_t t;
 	char dlName[100];
-	sprintf(dlName, "cc%d.dylib", i);
+	sprintf(dlName, "cc%d.bundle", i);
 	dylib = dlopen(dlName, RTLD_LAZY);
 	char className[100];
 	sprintf(className, "cc%d", i);

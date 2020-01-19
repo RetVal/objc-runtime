@@ -32,16 +32,13 @@ L__objc_blockTrampolineImpl_func:
 
 	mov  r1, r0                   // _cmd = self
 
-	// Trampoline's data is one page before the trampoline text.
+	// Trampoline's data is two pages before the trampoline text.
 	// Also correct PC bias of 4 bytes.
 	sub  r12, # 2*PAGE_MAX_SIZE
 	ldr  r0, [r12, #-4]          // self = block object
 	ldr  pc, [r0, #12]           // tail call block->invoke
 	// not reached
 
-	// Align trampolines to 8 bytes
-.align 3
-	
 .macro TrampolineEntry
 	mov r12, pc
 	b L__objc_blockTrampolineImpl_func
@@ -92,8 +89,9 @@ L__objc_blockTrampolineImpl_func:
 	TrampolineEntryX16
 .endmacro
 
+.align 5
 __objc_blockTrampolineStart:
-	// 2048-2 trampolines to fill 16K page
+	// 2048-4 trampolines to fill 16K page
 	TrampolineEntryX256
 	TrampolineEntryX256
 	TrampolineEntryX256
@@ -134,12 +132,12 @@ __objc_blockTrampolineStart:
 
 	TrampolineEntry
 	TrampolineEntry
-	TrampolineEntry
-	TrampolineEntry
-
 	TrampolineEntry
 __objc_blockTrampolineLast:
 	TrampolineEntry
+
+	// TrampolineEntry
+	// TrampolineEntry
 	// TrampolineEntry
 	// TrampolineEntry
 
@@ -172,15 +170,12 @@ L__objc_blockTrampolineImpl_stret_func:
 
 	mov  r2, r1                   // _cmd = self
 
-	// Trampoline's data is one page before the trampoline text.
+	// Trampoline's data is three pages before the trampoline text.
 	// Also correct PC bias of 4 bytes.
 	sub  r12, # 3*PAGE_MAX_SIZE
 	ldr  r1, [r12, #-4]          // self = block object
 	ldr  pc, [r1, #12]           // tail call block->invoke
 	// not reached
-
-	// Align trampolines to 8 bytes
-.align 3
 	
 .macro TrampolineEntry_stret
 	mov r12, pc
@@ -232,8 +227,9 @@ L__objc_blockTrampolineImpl_stret_func:
 	TrampolineEntryX16_stret
 .endmacro
 
+.align 5
 __objc_blockTrampolineStart_stret:
-	// 2048-2 trampolines to fill 16K page
+	// 2048-4 trampolines to fill 16K page
 	TrampolineEntryX256_stret
 	TrampolineEntryX256_stret
 	TrampolineEntryX256_stret
@@ -274,12 +270,12 @@ __objc_blockTrampolineStart_stret:
 
 	TrampolineEntry_stret
 	TrampolineEntry_stret
-	TrampolineEntry_stret
-	TrampolineEntry_stret
-
 	TrampolineEntry_stret
 __objc_blockTrampolineLast_stret:
 	TrampolineEntry_stret
+
+	// TrampolineEntry_stret
+	// TrampolineEntry_stret
 	// TrampolineEntry_stret
 	// TrampolineEntry_stret
 

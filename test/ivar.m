@@ -1,4 +1,19 @@
-// TEST_CONFIG
+/*
+TEST_BUILD_OUTPUT
+.*ivar.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\](\n.* note: expanded from macro 'testassert')?
+.*ivar.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\](\n.* note: expanded from macro 'testassert')?
+.*ivar.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\](\n.* note: expanded from macro 'testassert')?
+.*ivar.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\](\n.* note: expanded from macro 'testassert')?
+.*ivar.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\]
+.*ivar.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\]
+.*ivar.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\](\n.* note: expanded from macro 'testassert')?
+.*ivar.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\](\n.* note: expanded from macro 'testassert')?
+.*ivar.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\](\n.* note: expanded from macro 'testassert')?
+.*ivar.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\](\n.* note: expanded from macro 'testassert')?
+.*ivar.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\](\n.* note: expanded from macro 'testassert')?
+.*ivar.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\](\n.* note: expanded from macro 'testassert')?
+END
+*/
 
 #include "test.h"
 #include "testroot.i"
@@ -34,7 +49,7 @@ int main()
     Ivar ivar;
     Sub *sub = [Sub new];
     sub->subIvar = [Sub class];
-    testassert(((Class *)objc_unretainedPointer(sub))[2] == [Sub class]);
+    testassert(((Class *)(__bridge void *)sub)[2] == [Sub class]);
 
     ivar = class_getInstanceVariable([Sub class], "subIvar");
     testassert(ivar);
@@ -103,6 +118,14 @@ int main()
     testassert(NULL == object_setInstanceVariable(sub, NULL, NULL));
     testassert(NULL == object_setInstanceVariable(NULL, "foo", NULL));
     testassert(NULL == object_setInstanceVariable(NULL, NULL, NULL));
+#else
+    // provoke the same nullability warnings as the real test
+    objc_getClass(nil);
+    objc_getClass(nil);
+    objc_getClass(nil);
+    objc_getClass(nil);
+    objc_getClass(nil);
+    objc_getClass(nil);
 #endif
 
     succeed(__FILE__);

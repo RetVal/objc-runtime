@@ -28,9 +28,6 @@
 
 // On some architectures, method lists and method caches store signed IMPs.
 
-// StorageSignedFunctionPointer is declared by libclosure.
-#include <Block_private.h>
-
 // fixme simply include ptrauth.h once all build trains have it
 #if __has_include (<ptrauth.h>)
 #include <ptrauth.h>
@@ -66,17 +63,16 @@
 
 #if __has_feature(ptrauth_calls)
 
+#if !__arm64__
+#error ptrauth other than arm64e is unimplemented
+#endif
+
 // Method lists use process-independent signature for compatibility.
-// Method caches use process-dependent signature for extra protection.
-//   (fixme not yet __ptrauth(...) because of `stp` inline asm in objc-cache.mm)
 using MethodListIMP = IMP __ptrauth_objc_method_list_imp;
-using MethodCacheIMP =
-    StorageSignedFunctionPointer<IMP, ptrauth_key_process_dependent_code>;
 
 #else
 
 using MethodListIMP = IMP;
-using MethodCacheIMP = IMP;
 
 #endif
 

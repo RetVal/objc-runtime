@@ -1,17 +1,6 @@
-// TEST_CONFIG MEM=mrc,gc
-// TEST_CFLAGS -Wno-deprecated-declarations
+// TEST_CONFIG MEM=mrc
 
 #include "test.h"
-
-#if __cplusplus  &&  !__clang__
-
-int main()
-{
-    // llvm-g++ is confused by @selector(foo::) and will never be fixed
-    succeed(__FILE__);
-}
-
-#else
 
 #include <objc/runtime.h>
 #include <objc/message.h>
@@ -72,8 +61,13 @@ OBJC_ROOT_CLASS
 long long forward_handler(id self, SEL _cmd, long i1, long i2, long i3, long i4, long i5, long i6, long i7, long i8, long i9, long i10, long i11, long i12, long i13, double f1, double f2, double f3, double f4, double f5, double f6, double f7, double f8, double f9, double f10, double f11, double f12, double f13, double f14, double f15)
 {
 #if __arm64__
+# if __LP64__
+#   define p "x"  // true arm64
+# else
+#   define p "w"  // arm64_32
+# endif
     void *struct_addr;
-    __asm__ volatile("mov %0, x8" : "=r" (struct_addr) : : "x8");
+    __asm__ volatile("mov %"p"0, "p"8" : "=r" (struct_addr) : : p"8");
 #endif
 
     testassert(self == receiver);
@@ -139,6 +133,10 @@ long long forward_handler(id self, SEL _cmd, long i1, long i2, long i3, long i4,
         __asm__ volatile("fldl %0" : : "m" (FP_RESULT));
 #elif defined(__x86_64__)
         __asm__ volatile("movsd %0, %%xmm0" : : "m" (FP_RESULT));
+#elif defined(__arm64__)
+        __asm__ volatile("ldr d0, %0" : : "m" (FP_RESULT));
+#elif defined(__arm__)  &&  __ARM_ARCH_7K__
+        __asm__ volatile("vld1.64 {d0}, %0" : : "m" (FP_RESULT));
 #elif defined(__arm__)
         union {
             double fpval;
@@ -146,8 +144,6 @@ long long forward_handler(id self, SEL _cmd, long i1, long i2, long i3, long i4,
         } result;
         result.fpval = FP_RESULT;
         return result.llval;
-#elif defined(__arm64__)
-        __asm__ volatile("ldr d0, %0" : : "m" (FP_RESULT));
 #else
 #       error unknown architecture
 #endif
@@ -159,7 +155,7 @@ long long forward_handler(id self, SEL _cmd, long i1, long i2, long i3, long i4,
     {
 #if __i386__  ||  __x86_64__  ||  __arm__
         fail("stret message sent to non-stret forward_handler");
-#elif __arm64__
+#elif __arm64_32__ || __arm64__
         testassert(state == 17);
         state = 18;
         memcpy(struct_addr, &STRET_RESULT, sizeof(STRET_RESULT));
@@ -238,167 +234,6 @@ struct stret forward_stret_handler(id self, SEL _cmd, long i1, long i2, long i3,
 @implementation Super
 +(void)initialize { }
 +(id)class { return self; }
-
-#if __OBJC2__
-// forward:: not supported
-#else
--(long long) forward:(SEL)sel :(marg_list)args
-{
-    char *p;
-    uintptr_t *gp;
-    double *fp;
-    struct stret *struct_addr;
-    
-#if defined(__i386__)
-    struct_addr = ((struct stret **)args)[-1];
-#elif defined(__x86_64__)
-    struct_addr = *(struct stret **)((char *)args + 8*16+4*8);
-#elif defined(__arm__)
-    struct_addr = *(struct stret **)((char *)args + 0);
-#else
-#   error unknown architecture
-#endif
-
-    testassert(self == receiver);
-    testassert(_cmd == sel_registerName("forward::"));
-
-    p = (char *)args;
-#if defined(__x86_64__)
-    p += 8*16 + 4*8;  // skip over xmm and linkage
-    if (sel == @selector(stret::::::::::::::::::::::::::::)  ||  
-        sel == @selector(stre2::::::::::::::::::::::::::::)  ||  
-        sel == @selector(stre3::::::::::::::::::::::::::::)) 
-    {
-        p += sizeof(void *);  // struct return
-    }
-#elif defined(__i386__)
-    // nothing to do
-#elif defined(__arm__)
-    if (sel == @selector(stret::::::::::::::::::::::::::::)  ||  
-        sel == @selector(stre2::::::::::::::::::::::::::::)  ||  
-        sel == @selector(stre3::::::::::::::::::::::::::::)) 
-    {
-        p += sizeof(void *);  // struct return;
-    }
-#else
-#   error unknown architecture
-#endif
-    gp = (uintptr_t *)p;
-    testassert(*gp++ == (uintptr_t)self);
-    testassert(*gp++ == (uintptr_t)(void *)sel);
-    testassert(*gp++ == 1);
-    testassert(*gp++ == 2);
-    testassert(*gp++ == 3);
-    testassert(*gp++ == 4);
-    testassert(*gp++ == 5);
-    testassert(*gp++ == 6);
-    testassert(*gp++ == 7);
-    testassert(*gp++ == 8);
-    testassert(*gp++ == 9);
-    testassert(*gp++ == 10);
-    testassert(*gp++ == 11);
-    testassert(*gp++ == 12);
-    testassert(*gp++ == 13);
-
-#if defined(__i386__)  ||  defined(__arm__)
-
-    fp = (double *)gp;
-    testassert(*fp++ == 1.0);
-    testassert(*fp++ == 2.0);
-    testassert(*fp++ == 3.0);
-    testassert(*fp++ == 4.0);
-    testassert(*fp++ == 5.0);
-    testassert(*fp++ == 6.0);
-    testassert(*fp++ == 7.0);
-    testassert(*fp++ == 8.0);
-    testassert(*fp++ == 9.0);
-    testassert(*fp++ == 10.0);
-    testassert(*fp++ == 11.0);
-    testassert(*fp++ == 12.0);
-    testassert(*fp++ == 13.0);
-    testassert(*fp++ == 14.0);
-    testassert(*fp++ == 15.0);
-
-#elif defined(__x86_64__)
-
-    fp = (double *)args;  // xmm, double-wide
-    testassert(*fp++ == 1.0); fp++;
-    testassert(*fp++ == 2.0); fp++;
-    testassert(*fp++ == 3.0); fp++;
-    testassert(*fp++ == 4.0); fp++;
-    testassert(*fp++ == 5.0); fp++;
-    testassert(*fp++ == 6.0); fp++;
-    testassert(*fp++ == 7.0); fp++;
-    testassert(*fp++ == 8.0); fp++;
-    fp = (double *)gp;
-    testassert(*fp++ == 9.0);
-    testassert(*fp++ == 10.0);
-    testassert(*fp++ == 11.0);
-    testassert(*fp++ == 12.0);
-    testassert(*fp++ == 13.0);
-    testassert(*fp++ == 14.0);
-    testassert(*fp++ == 15.0);
-
-#else
-#   error unknown architecture
-#endif
-
-    if (sel == @selector(idret::::::::::::::::::::::::::::)  ||  
-        sel == @selector(idre2::::::::::::::::::::::::::::)  ||  
-        sel == @selector(idre3::::::::::::::::::::::::::::)) 
-    {
-        union {
-            id idval;
-            long long llval;
-        } result;
-        testassert(state == 1);
-        state = 2;
-        result.idval = ID_RESULT;
-        return result.llval;
-    } else if (sel == @selector(llret::::::::::::::::::::::::::::)  ||  
-               sel == @selector(llre2::::::::::::::::::::::::::::)  ||  
-               sel == @selector(llre3::::::::::::::::::::::::::::)) 
-    {
-        testassert(state == 3);
-        state = 4;
-        return LL_RESULT;
-    } else if (sel == @selector(fpret::::::::::::::::::::::::::::)  ||  
-               sel == @selector(fpre2::::::::::::::::::::::::::::)  ||  
-               sel == @selector(fpre3::::::::::::::::::::::::::::)) 
-    {
-        testassert(state == 5);
-        state = 6;
-#if defined(__i386__)
-        __asm__ volatile("fldl %0" : : "m" (FP_RESULT));
-#elif defined(__x86_64__)
-        __asm__ volatile("movsd %0, %%xmm0" : : "m" (FP_RESULT));
-#elif defined(__arm__)
-        union {
-            double fpval;
-            long long llval;
-        } result;
-        result.fpval = FP_RESULT;
-        return result.llval;
-#else
-#       error unknown architecture
-#endif
-        return 0;
-    } else if (sel == @selector(stret::::::::::::::::::::::::::::)  ||  
-               sel == @selector(stre2::::::::::::::::::::::::::::)  ||  
-               sel == @selector(stre3::::::::::::::::::::::::::::)) 
-    {
-        testassert(state == 7);
-        state = 8;
-        *struct_addr = STRET_RESULT;
-        return 0;
-    } else {
-        fail("unknown selector %s in forward::", sel_getName(sel));
-    }
-    return 0;
-}
-
-#endif
-
 @end
 
 typedef id (*id_fn_t)(id self, SEL _cmd, long i1, long i2, long i3, long i4, long i5, long i6, long i7, long i8, long i9, long i10, long i11, long i12, long i13, double f1, double f2, double f3, double f4, double f5, double f6, double f7, double f8, double f9, double f10, double f11, double f12, double f13, double f14, double f15);
@@ -450,298 +285,6 @@ int main()
 #endif
 
     receiver = [Super class];
-
-#if __OBJC2__
-    // forward:: not supported
-#else
-    // Test default forward handler
-
-    state = 1;
-    sp1 = getSP();
-    idval = [Super idret:1:2:3:4:5:6:7:8:9:10:11:12:13:1.0:2.0:3.0:4.0:5.0:6.0:7.0:8.0:9.0:10.0:11.0:12.0:13.0:14.0:15.0];
-    sp2 = getSP();
-    testassert(sp1 == sp2);
-    testassert(state == 2);
-    testassert(idval == ID_RESULT);
-
-    state = 3;
-    sp1 = getSP();
-    llval = [Super llret:1:2:3:4:5:6:7:8:9:10:11:12:13:1.0:2.0:3.0:4.0:5.0:6.0:7.0:8.0:9.0:10.0:11.0:12.0:13.0:14.0:15.0];
-    sp2 = getSP();
-    testassert(sp1 == sp2);
-    testassert(state == 4);
-    testassert(llval == LL_RESULT);
-
-    state = 5;
-    sp1 = getSP();
-    fpval = [Super fpret:1:2:3:4:5:6:7:8:9:10:11:12:13:1.0:2.0:3.0:4.0:5.0:6.0:7.0:8.0:9.0:10.0:11.0:12.0:13.0:14.0:15.0];
-    sp2 = getSP();
-    testassert(sp1 == sp2);
-    testassert(state == 6);
-    testassert(fpval == FP_RESULT);
-
-    state = 7;
-    sp1 = getSP();
-    stval = [Super stret:1:2:3:4:5:6:7:8:9:10:11:12:13:1.0:2.0:3.0:4.0:5.0:6.0:7.0:8.0:9.0:10.0:11.0:12.0:13.0:14.0:15.0];
-    sp2 = getSP();
-    testassert(sp1 == sp2);
-    testassert(state == 8);
-    testassert(stret_equal(stval, STRET_RESULT));
-
-#if __x86_64__
-    // check stret return register
-    state = 7;
-    sp1 = getSP();
-    stptr = ((fake_st_fn_t)objc_msgSend_stret)(&stval, [Super class], @selector(stret::::::::::::::::::::::::::::), 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0);
-    sp2 = getSP();
-    testassert(sp1 == sp2);
-    testassert(state == 8);
-    testassert(stret_equal(stval, STRET_RESULT));
-    testassert(stptr == &stval);    
-#endif
-
-
-    // Test default forward handler, cached
-
-    state = 1;
-    sp1 = getSP();
-    idval = [Super idret:1:2:3:4:5:6:7:8:9:10:11:12:13:1.0:2.0:3.0:4.0:5.0:6.0:7.0:8.0:9.0:10.0:11.0:12.0:13.0:14.0:15.0];
-    sp2 = getSP();
-    testassert(sp1 == sp2);
-    testassert(state == 2);
-    testassert(idval == ID_RESULT);
-
-    state = 3;
-    sp1 = getSP();
-    llval = [Super llret:1:2:3:4:5:6:7:8:9:10:11:12:13:1.0:2.0:3.0:4.0:5.0:6.0:7.0:8.0:9.0:10.0:11.0:12.0:13.0:14.0:15.0];
-    sp2 = getSP();
-    testassert(sp1 == sp2);
-    testassert(state == 4);
-    testassert(llval == LL_RESULT);
-
-    state = 5;
-    sp1 = getSP();
-    fpval = [Super fpret:1:2:3:4:5:6:7:8:9:10:11:12:13:1.0:2.0:3.0:4.0:5.0:6.0:7.0:8.0:9.0:10.0:11.0:12.0:13.0:14.0:15.0];
-    sp2 = getSP();
-    testassert(sp1 == sp2);
-    testassert(state == 6);
-    testassert(fpval == FP_RESULT);
-
-    state = 7;
-    sp1 = getSP();
-    stval = [Super stret:1:2:3:4:5:6:7:8:9:10:11:12:13:1.0:2.0:3.0:4.0:5.0:6.0:7.0:8.0:9.0:10.0:11.0:12.0:13.0:14.0:15.0];
-    sp2 = getSP();
-    testassert(sp1 == sp2);
-    testassert(state == 8);
-    testassert(stret_equal(stval, STRET_RESULT));
-
-#if __x86_64__
-    // check stret return register
-    state = 7;
-    sp1 = getSP();
-    stptr = ((fake_st_fn_t)objc_msgSend_stret)(&stval, [Super class], @selector(stret::::::::::::::::::::::::::::), 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0);
-    sp2 = getSP();
-    testassert(sp1 == sp2);
-    testassert(state == 8);
-    testassert(stret_equal(stval, STRET_RESULT));
-    testassert(stptr == &stval);    
-#endif
-
-
-    // Test default forward handler, uncached but fixed-up
-
-    _objc_flush_caches(nil);
-
-    state = 1;
-    sp1 = getSP();
-    idval = [Super idret:1:2:3:4:5:6:7:8:9:10:11:12:13:1.0:2.0:3.0:4.0:5.0:6.0:7.0:8.0:9.0:10.0:11.0:12.0:13.0:14.0:15.0];
-    sp2 = getSP();
-    testassert(sp1 == sp2);
-    testassert(state == 2);
-    testassert(idval == ID_RESULT);
-
-    state = 3;
-    sp1 = getSP();
-    llval = [Super llret:1:2:3:4:5:6:7:8:9:10:11:12:13:1.0:2.0:3.0:4.0:5.0:6.0:7.0:8.0:9.0:10.0:11.0:12.0:13.0:14.0:15.0];
-    sp2 = getSP();
-    testassert(sp1 == sp2);
-    testassert(state == 4);
-    testassert(llval == LL_RESULT);
-
-    state = 5;
-    sp1 = getSP();
-    fpval = [Super fpret:1:2:3:4:5:6:7:8:9:10:11:12:13:1.0:2.0:3.0:4.0:5.0:6.0:7.0:8.0:9.0:10.0:11.0:12.0:13.0:14.0:15.0];
-    sp2 = getSP();
-    testassert(sp1 == sp2);
-    testassert(state == 6);
-    testassert(fpval == FP_RESULT);
-
-    state = 7;
-    sp1 = getSP();
-    stval = [Super stret:1:2:3:4:5:6:7:8:9:10:11:12:13:1.0:2.0:3.0:4.0:5.0:6.0:7.0:8.0:9.0:10.0:11.0:12.0:13.0:14.0:15.0];
-    sp2 = getSP();
-    testassert(sp1 == sp2);
-    testassert(state == 8);
-    testassert(stret_equal(stval, STRET_RESULT));
-
-#if __x86_64__
-    // check stret return register
-    state = 7;
-    sp1 = getSP();
-    stptr = ((fake_st_fn_t)objc_msgSend_stret)(&stval, [Super class], @selector(stret::::::::::::::::::::::::::::), 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0);
-    sp2 = getSP();
-    testassert(sp1 == sp2);
-    testassert(state == 8);
-    testassert(stret_equal(stval, STRET_RESULT));
-    testassert(stptr == &stval);    
-#endif
-
-
-    // Test manual forwarding
-
-    state = 1;
-    sp1 = getSP();
-    idval = ((id_fn_t)_objc_msgForward)(receiver, @selector(idre2::::::::::::::::::::::::::::), 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0);
-    sp2 = getSP();
-    testassert(sp1 == sp2);
-    testassert(state == 2);
-    testassert(idval == ID_RESULT);
-
-    state = 3;
-    sp1 = getSP();
-    llval = ((ll_fn_t)_objc_msgForward)(receiver, @selector(llre2::::::::::::::::::::::::::::), 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0);
-    sp2 = getSP();
-    testassert(sp1 == sp2);
-    testassert(state == 4);
-    testassert(llval == LL_RESULT);
-
-    state = 5;
-    sp1 = getSP();
-    fpval = ((fp_fn_t)_objc_msgForward)(receiver, @selector(fpre2::::::::::::::::::::::::::::), 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0);
-    sp2 = getSP();
-    testassert(sp1 == sp2);
-    testassert(state == 6);
-    testassert(fpval == FP_RESULT);
-
-    state = 7;
-    sp1 = getSP();
-    stval = stret_fwd(receiver, @selector(stre2::::::::::::::::::::::::::::), 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0);
-    sp2 = getSP();
-    testassert(sp1 == sp2);
-    testassert(state == 8);
-    testassert(stret_equal(stval, STRET_RESULT));
-
-#if __x86_64__
-    // check stret return register
-    state = 7;
-    sp1 = getSP();
-    stptr = ((fake_st_fn_t)_objc_msgForward_stret)(&stval, receiver, @selector(stre2::::::::::::::::::::::::::::), 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0);
-    sp2 = getSP();
-    testassert(sp1 == sp2);
-    testassert(state == 8);
-    testassert(stret_equal(stval, STRET_RESULT));
-    testassert(stptr == &stval);    
-#endif
-
-
-    // Test manual forwarding, cached
-
-    state = 1;
-    sp1 = getSP();
-    idval = ((id_fn_t)_objc_msgForward)(receiver, @selector(idre2::::::::::::::::::::::::::::), 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0);
-    sp2 = getSP();
-    testassert(sp1 == sp2);
-    testassert(state == 2);
-    testassert(idval == ID_RESULT);
-
-    state = 3;
-    sp1 = getSP();
-    llval = ((ll_fn_t)_objc_msgForward)(receiver, @selector(llre2::::::::::::::::::::::::::::), 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0);
-    sp2 = getSP();
-    testassert(sp1 == sp2);
-    testassert(state == 4);
-    testassert(llval == LL_RESULT);
-
-    state = 5;
-    sp1 = getSP();
-    fpval = ((fp_fn_t)_objc_msgForward)(receiver, @selector(fpre2::::::::::::::::::::::::::::), 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0);
-    sp2 = getSP();
-    testassert(sp1 == sp2);
-    testassert(state == 6);
-    testassert(fpval == FP_RESULT);
-
-    state = 7;
-    sp1 = getSP();
-    stval = stret_fwd(receiver, @selector(stre2::::::::::::::::::::::::::::), 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0);
-    sp2 = getSP();
-    testassert(sp1 == sp2);
-    testassert(state == 8);
-    testassert(stret_equal(stval, STRET_RESULT));
-
-#if __x86_64__
-    // check stret return register
-    state = 7;
-    sp1 = getSP();
-    stptr = ((fake_st_fn_t)_objc_msgForward_stret)(&stval, receiver, @selector(stre2::::::::::::::::::::::::::::), 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0);
-    sp2 = getSP();
-    testassert(sp1 == sp2);
-    testassert(state == 8);
-    testassert(stret_equal(stval, STRET_RESULT));
-    testassert(stptr == &stval);    
-#endif
-
-
-    // Test manual forwarding, uncached but fixed-up
-
-    _objc_flush_caches(nil);
-
-    state = 1;
-    sp1 = getSP();
-    idval = ((id_fn_t)_objc_msgForward)(receiver, @selector(idre2::::::::::::::::::::::::::::), 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0);
-    sp2 = getSP();
-    testassert(sp1 == sp2);
-    testassert(state == 2);
-    testassert(idval == ID_RESULT);
-
-    state = 3;
-    sp1 = getSP();
-    llval = ((ll_fn_t)_objc_msgForward)(receiver, @selector(llre2::::::::::::::::::::::::::::), 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0);
-    sp2 = getSP();
-    testassert(sp1 == sp2);
-    testassert(state == 4);
-    testassert(llval == LL_RESULT);
-
-    state = 5;
-    sp1 = getSP();
-    fpval = ((fp_fn_t)_objc_msgForward)(receiver, @selector(fpre2::::::::::::::::::::::::::::), 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0);
-    sp2 = getSP();
-    testassert(sp1 == sp2);
-    testassert(state == 6);
-    testassert(fpval == FP_RESULT);
-
-    state = 7;
-    sp1 = getSP();
-    stval = stret_fwd(receiver, @selector(stre2::::::::::::::::::::::::::::), 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0);
-    sp2 = getSP();
-    testassert(sp1 == sp2);
-    testassert(state == 8);
-    testassert(stret_equal(stval, STRET_RESULT));
-
-#if __x86_64__
-    // check stret return register
-    state = 7;
-    sp1 = getSP();
-    stptr = ((fake_st_fn_t)_objc_msgForward_stret)(&stval, receiver, @selector(stre2::::::::::::::::::::::::::::), 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0);
-    sp2 = getSP();
-    testassert(sp1 == sp2);
-    testassert(state == 8);
-    testassert(stret_equal(stval, STRET_RESULT));
-    testassert(stptr == &stval);    
-#endif
-
-// !__OBJC2__
-#endif
-
 
     // Test user-defined forward handler
 
@@ -998,5 +541,3 @@ int main()
 
     succeed(__FILE__);
 }
-
-#endif

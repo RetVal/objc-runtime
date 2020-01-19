@@ -9,7 +9,7 @@
 void testTaggedNumber()
 {
     NSNumber *taggedNS = [NSNumber numberWithInt: 1234];
-    CFNumberRef taggedCF = (CFNumberRef)objc_unretainedPointer(taggedNS);
+    CFNumberRef taggedCF = (__bridge CFNumberRef)taggedNS;
     int result;
     
     testassert( CFGetTypeID(taggedCF) == CFNumberGetTypeID() );
@@ -71,7 +71,7 @@ int main()
 int main() 
 {
     PUSH_POOL {
-        testassert(*(void **)objc_unretainedPointer([NSNumber numberWithInt:1234]));
+        testassert(*(void **)(__bridge void *)[NSNumber numberWithInt:1234]);
     } POP_POOL;
     
     succeed(__FILE__);

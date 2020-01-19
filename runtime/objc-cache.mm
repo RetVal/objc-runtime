@@ -243,9 +243,9 @@ ldp(uintptr_t& onep, uintptr_t& twop, const void *srcp)
 // Class points to cache. SEL is key. Cache buckets store SEL+IMP.
 // Caches are never built in the dyld shared cache.
 
-static inline mask_t cache_hash(cache_key_t key, mask_t mask) 
+static inline mask_t cache_hash(SEL sel, mask_t mask) 
 {
-    return (mask_t)(key & mask);
+    return (mask_t)(uintptr_t)sel & mask;
 }
 
 cache_t *getCache(Class cls) 
@@ -254,52 +254,49 @@ cache_t *getCache(Class cls)
     return &cls->cache;
 }
 
-cache_key_t getKey(SEL sel) 
-{
-    assert(sel);
-    return (cache_key_t)sel;
-}
-
 #if __arm64__
 
-void bucket_t::set(cache_key_t newKey, IMP newImp)
+template<Atomicity atomicity>
+void bucket_t::set(SEL newSel, IMP newImp)
 {
-    assert(_key == 0  ||  _key == newKey);
+    assert(_sel == 0  ||  _sel == newSel);
 
-    static_assert(offsetof(bucket_t,_imp) == 0 && offsetof(bucket_t,_key) == sizeof(void *),
-                  "bucket_t doesn't match arm64 bucket_t::set()");
+    static_assert(offsetof(bucket_t,_imp) == 0 &&
+                  offsetof(bucket_t,_sel) == sizeof(void *),
+                  "bucket_t layout doesn't match arm64 bucket_t::set()");
 
-#if __has_feature(ptrauth_calls)
-    // Authenticate as a C function pointer and re-sign for the cache bucket.
-    uintptr_t signedImp = _imp.prepareWrite(newImp);
-#else
-    // No function pointer signing.
-    uintptr_t signedImp = (uintptr_t)newImp;
-#endif
+    uintptr_t signedImp = signIMP(newImp, newSel);
 
-    // Write to the bucket.
-    // LDP/STP guarantees that all observers get
-    // either imp/key or newImp/newKey
-    stp(signedImp, newKey, this);
+    if (atomicity == Atomic) {
+        // LDP/STP guarantees that all observers get
+        // either imp/sel or newImp/newSel
+        stp(signedImp, (uintptr_t)newSel, this);
+    } else {
+        _sel = newSel;
+        _imp = signedImp;
+    }
 }
 
 #else
 
-void bucket_t::set(cache_key_t newKey, IMP newImp)
+template<Atomicity atomicity>
+void bucket_t::set(SEL newSel, IMP newImp)
 {
-    assert(_key == 0  ||  _key == newKey);
+    assert(_sel == 0  ||  _sel == newSel);
 
-    // objc_msgSend uses key and imp with no locks.
-    // It is safe for objc_msgSend to see new imp but NULL key
+    // objc_msgSend uses sel and imp with no locks.
+    // It is safe for objc_msgSend to see new imp but NULL sel
     // (It will get a cache miss but not dispatch to the wrong place.)
-    // It is unsafe for objc_msgSend to see old imp and new key.
-    // Therefore we write new imp, wait a lot, then write new key.
+    // It is unsafe for objc_msgSend to see old imp and new sel.
+    // Therefore we write new imp, wait a lot, then write new sel.
     
-    _imp = newImp;
+    _imp = (uintptr_t)newImp;
     
-    if (_key != newKey) {
-        mega_barrier();
-        _key = newKey;
+    if (_sel != newSel) {
+        if (atomicity == Atomic) {
+            mega_barrier();
+        }
+        _sel = newSel;
     }
 }
 
@@ -385,14 +382,12 @@ bucket_t *allocateBuckets(mask_t newCapacity)
     bucket_t *end = cache_t::endMarker(newBuckets, newCapacity);
 
 #if __arm__
-    // End marker's key is 1 and imp points BEFORE the first bucket.
+    // End marker's sel is 1 and imp points BEFORE the first bucket.
     // This saves an instruction in objc_msgSend.
-    end->setKey((cache_key_t)(uintptr_t)1);
-    end->setImp((IMP)(newBuckets - 1));
+    end->set<NotAtomic>((SEL)(uintptr_t)1, (IMP)(newBuckets - 1));
 #else
-    // End marker's key is 1 and imp points to the first bucket.
-    end->setKey((cache_key_t)(uintptr_t)1);
-    end->setImp((IMP)newBuckets);
+    // End marker's sel is 1 and imp points to the first bucket.
+    end->set<NotAtomic>((SEL)(uintptr_t)1, (IMP)newBuckets);
 #endif
     
     if (PrintCaches) recordNewCache(newCapacity);
@@ -521,23 +516,23 @@ void cache_t::bad_cache(id receiver, SEL sel, Class isa)
 }
 
 
-bucket_t * cache_t::find(cache_key_t k, id receiver)
+bucket_t * cache_t::find(SEL s, id receiver)
 {
-    assert(k != 0);
+    assert(s != 0);
 
     bucket_t *b = buckets();
     mask_t m = mask();
-    mask_t begin = cache_hash(k, m);
+    mask_t begin = cache_hash(s, m);
     mask_t i = begin;
     do {
-        if (b[i].key() == 0  ||  b[i].key() == k) {
+        if (b[i].sel() == 0  ||  b[i].sel() == s) {
             return &b[i];
         }
     } while ((i = cache_next(i, m)) != begin);
 
     // hack
     Class cls = (Class)((uintptr_t)this - offsetof(objc_class, cache));
-    cache_t::bad_cache(receiver, (SEL)k, cls);
+    cache_t::bad_cache(receiver, (SEL)s, cls);
 }
 
 
@@ -570,7 +565,6 @@ static void cache_fill_nolock(Class cls, SEL sel, IMP imp, id receiver)
     if (cache_getImp(cls, sel)) return;
 
     cache_t *cache = getCache(cls);
-    cache_key_t key = getKey(sel);
 
     // Use the cache as-is if it is less than 3/4 full
     mask_t newOccupied = cache->occupied() + 1;
@@ -590,9 +584,9 @@ static void cache_fill_nolock(Class cls, SEL sel, IMP imp, id receiver)
     // Scan for the first unused slot and insert there.
     // There is guaranteed to be an empty slot because the 
     // minimum size is 4 and we resized at 3/4 full.
-    bucket_t *bucket = cache->find(key, receiver);
-    if (bucket->key() == 0) cache->incrementOccupied();
-    bucket->set(key, imp);
+    bucket_t *bucket = cache->find(sel, receiver);
+    if (bucket->sel() == 0) cache->incrementOccupied();
+    bucket->set<Atomic>(sel, imp);
 }
 
 void cache_fill(Class cls, SEL sel, IMP imp, id receiver)

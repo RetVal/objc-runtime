@@ -1,1 +1,2 @@
-int state = 0;
+#include "test.h"
+atomic_int state;

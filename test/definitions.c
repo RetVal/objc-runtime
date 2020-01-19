@@ -13,20 +13,18 @@ BOOL b2 = NO;
 __strong void *p;
 #endif
 id __unsafe_unretained u;
+#if __has_feature(objc_arc_weak)
 id __weak w;
+#endif
 
 void fn(void) __unused;
 void fn(void) {
     id __autoreleasing a __unused;
 }
 
-#if __llvm__ && !__clang__
-// llvm-gcc defines _NSConcreteGlobalBlock wrong
-#else
-// rdar://10118972 wrong type inference for blocks returning YES and NO
+// check type inference for blocks returning YES and NO (rdar://10118972)
 BOOL (^block1)(void) = ^{ return YES; };
 BOOL (^block2)(void) = ^{ return NO; };
-#endif
 
 #include "test.h"
 

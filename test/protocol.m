@@ -1,16 +1,17 @@
 // TEST_CFLAGS -framework Foundation -Wno-deprecated-declarations
 // need Foundation to get NSObject compatibility additions for class Protocol
 // because ARC calls [protocol retain]
+/*
+TEST_BUILD_OUTPUT
+.*protocol.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\](\n.* note: expanded from macro 'testassert')?
+END
+*/
 
 #include "test.h"
 #include "testroot.i"
 #include <string.h>
 #include <objc/runtime.h>
 #include <objc/objc-internal.h>
-
-#if !__OBJC2__
-#include <objc/Protocol.h>
-#endif
 
 @protocol Proto1 
 +(id)proto1ClassMethod;
@@ -60,16 +61,11 @@ SEL fn(int x) { if (x) return @selector(m12:); else return @selector(m22:); }
 @protocol ProtoEmpty
 @end
 
-#if __OBJC2__
-#define TEST_SWIFT 1
 #define SwiftV1MangledName "_TtP6Module15SwiftV1Protocol_"
-#endif
 
-#if TEST_SWIFT
 __attribute__((objc_runtime_name(SwiftV1MangledName)))
 @protocol SwiftV1Protocol
 @end
-#endif
 
 @interface Super : TestRoot <Proto1> @end
 @implementation Super
@@ -95,9 +91,6 @@ int main()
     Class cls;
     Protocol * __unsafe_unretained *list;
     Protocol *protocol, *empty;
-#if !__OBJC2__
-    struct objc_method_description *desc;
-#endif
     struct objc_method_description desc2;
     objc_property_t *proplist;
     unsigned int count;
@@ -107,12 +100,6 @@ int main()
     testassert(protocol);
     testassert(empty);
 
-#if !__OBJC2__
-    testassert([protocol isKindOf:[Protocol class]]);
-    testassert([empty isKindOf:[Protocol class]]);
-    testassert(0 == strcmp([protocol name], "Proto3"));
-    testassert(0 == strcmp([empty name], "ProtoEmpty"));
-#endif
     testassert(0 == strcmp(protocol_getName(protocol), "Proto3"));
     testassert(0 == strcmp(protocol_getName(empty), "ProtoEmpty"));
 
@@ -126,33 +113,9 @@ int main()
     testassert(protocol_conformsToProtocol(@protocol(Proto3), @protocol(Proto2)));
     testassert(!protocol_conformsToProtocol(@protocol(Proto2), @protocol(Proto3)));
 
-#if !__OBJC2__
-    testassert([@protocol(Proto1) isEqual:@protocol(Proto1)]);
-    testassert(! [@protocol(Proto1) isEqual:@protocol(Proto2)]);
-#endif
     testassert(protocol_isEqual(@protocol(Proto1), @protocol(Proto1)));
     testassert(! protocol_isEqual(@protocol(Proto1), @protocol(Proto2)));
 
-#if !__OBJC2__
-    desc = [protocol descriptionForInstanceMethod:@selector(proto3InstanceMethod)];
-    testassert(desc);
-    testassert(desc->name == @selector(proto3InstanceMethod));
-    desc = [protocol descriptionForClassMethod:@selector(proto3ClassMethod)];
-    testassert(desc);
-    testassert(desc->name == @selector(proto3ClassMethod));
-    desc = [protocol descriptionForClassMethod:@selector(proto2ClassMethod)];
-    testassert(desc);
-    testassert(desc->name == @selector(proto2ClassMethod));
-
-    desc = [protocol descriptionForInstanceMethod:@selector(proto3ClassMethod)];
-    testassert(!desc);
-    desc = [protocol descriptionForClassMethod:@selector(proto3InstanceMethod)];
-    testassert(!desc);    
-    desc = [empty descriptionForInstanceMethod:@selector(proto3ClassMethod)];
-    testassert(!desc);
-    desc = [empty descriptionForClassMethod:@selector(proto3InstanceMethod)];
-    testassert(!desc);    
-#endif
     desc2 = protocol_getMethodDescription(protocol, @selector(proto3InstanceMethod), YES, YES);
     testassert(desc2.name && desc2.types);
     testassert(desc2.name == @selector(proto3InstanceMethod));
@@ -309,12 +272,10 @@ int main()
         testassert(0 == strcmp(_protocol_getMethodTypeEncoding(@protocol(Proto6), @selector(m41:), false, false), types41));
     }
 
-#if TEST_SWIFT
     testassert(@protocol(SwiftV1Protocol) == objc_getProtocol("Module.SwiftV1Protocol"));
     testassert(@protocol(SwiftV1Protocol) == objc_getProtocol(SwiftV1MangledName));
     testassert(0 == strcmp(protocol_getName(@protocol(SwiftV1Protocol)), "Module.SwiftV1Protocol"));
     testassert(!objc_getProtocol("SwiftV1Protocol"));
-#endif
 
     succeed(__FILE__);
 }

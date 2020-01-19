@@ -8,12 +8,12 @@ TEST_CRASHES
 
 TEST_BUILD
     $C{COMPILE} $DIR/evil-class-5.m -dynamiclib -o libevil.dylib
-    $C{COMPILE} $DIR/evil-main.m -x none libevil.dylib -o evil-class-5.out
+    $C{COMPILE} $DIR/evil-main.m -x none libevil.dylib -o evil-class-5.exe
 END
 
 TEST_RUN_OUTPUT
 objc\[\d+\]: bad method implementation \(0x[0-9a-f]+ at 0x[0-9a-f]+\)
-CRASHED: SIG(ILL|TRAP)
+objc\[\d+\]: HALTED
 END
 */
 

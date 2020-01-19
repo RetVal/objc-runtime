@@ -30,7 +30,7 @@ __BEGIN_DECLS
 
 struct _objc_initializing_classes;
 
-extern void _class_initialize(Class cls);
+extern void initializeNonMetaClass(Class cls);
 
 extern void _destroyInitializingClassList(struct _objc_initializing_classes *list);
 

@@ -6,32 +6,22 @@
 use strict;
 use File::Basename;
 
+# We use encode_json() to write BATS plist files.
+# JSON::PP does not exist on iOS devices, but we need not write plists there.
+# So we simply load JSON:PP if it exists.
+if (eval { require JSON::PP; 1; }) {
+    JSON::PP->import();
+}
+
+
 chdir dirname $0;
 chomp (my $DIR = `pwd`);
 
-my $TESTLIBNAME = "libobjc.A.dylib";
-my $TESTLIBPATH = "/usr/lib/$TESTLIBNAME";
-
-my $BUILDDIR = "/tmp/test-$TESTLIBNAME-build";
-
-# xterm colors
-my $red = "\e[41;37m";
-my $yellow = "\e[43;30m";
-my $nocolor = "\e[0m";
-
-# clean, help
 if (scalar(@ARGV) == 1) {
     my $arg = $ARGV[0];
-    if ($arg eq "clean") {
-        my $cmd = "rm -rf $BUILDDIR *~";
-        print "$cmd\n";
-        `$cmd`;
-        exit 0;
-    }
-    elsif ($arg eq "-h" || $arg eq "-H" || $arg eq "-help" || $arg eq "help") {
+    if ($arg eq "-h" || $arg eq "-H" || $arg eq "-help" || $arg eq "help") {
         print(<<END);
 usage: $0 [options] [testname ...]
-       $0 clean
        $0 help
 
 testname:
@@ -45,27 +35,27 @@ options:
     CC=<compiler name>
 
     LANGUAGE=c,c++,objective-c,objective-c++,swift
-    MEM=mrc,arc,gc
-    STDLIB=libc++,libstdc++
+    MEM=mrc,arc
     GUARDMALLOC=0|1|before|after
 
-    BUILD=0|1
-    RUN=0|1
-    VERBOSE=0|1|2
+    BUILD=0|1      (build the tests?)
+    RUN=0|1        (run the tests?)
+    VERBOSE=0|1|2  (0=quieter  1=print commands executed  2=full test output)
+    BATS=0|1       (build for and/or run in BATS?)
 
 examples:
 
-    test installed library, x86_64, no gc
+    test installed library, x86_64
     $0
 
-    test buildit-built root, i386 and x86_64, MRC and ARC and GC, clang compiler
-    $0 ARCH=i386,x86_64 ROOT=/tmp/libclosure.roots MEM=mrc,arc,gc CC=clang
+    test buildit-built root, i386 and x86_64, MRC and ARC, clang compiler
+    $0 ARCH=i386,x86_64 ROOT=/tmp/objc4.roots MEM=mrc,arc CC=clang
 
     test buildit-built root with iOS simulator, deploy to iOS 7, run on iOS 8
-    $0 ARCH=i386 ROOT=/tmp/libclosure.roots OS=iphonesimulator-7.0-8.0
+    $0 ARCH=x86_64 ROOT=/tmp/objc4.roots OS=iphonesimulator-7.0-8.0
 
     test buildit-built root on attached iOS device
-    $0 ARCH=armv7 ROOT=/tmp/libclosure.roots OS=iphoneos
+    $0 ARCH=arm64 ROOT=/tmp/objc4.roots OS=iphoneos
 END
         exit 0;
     }
@@ -74,6 +64,9 @@ END
 #########################################################################
 ## Tests
 
+# Maps test name => test's filename extension.
+# ex: "msgSend" => "m"
+# `keys %ALL_TESTS` is also used as the list of all tests found on disk.
 my %ALL_TESTS;
 
 #########################################################################
@@ -85,9 +78,8 @@ my %ALL_TESTS;
 # ARCH=i386,x86_64,armv6,armv7
 # OS=macosx,iphoneos,iphonesimulator (plus sdk/deployment/run versions)
 # LANGUAGE=c,c++,objective-c,objective-c++,swift
-# CC=clang,gcc-4.2,llvm-gcc-4.2
-# MEM=mrc,arc,gc
-# STDLIB=libc++,libstdc++
+# CC=clang
+# MEM=mrc,arc
 # GUARDMALLOC=0,1,before,after
 
 # things you can set once on the command line
@@ -95,12 +87,47 @@ my %ALL_TESTS;
 # BUILD=0|1
 # RUN=0|1
 # VERBOSE=0|1|2
+# BATS=0|1
+
+# environment variables from the command line
+# DSTROOT
+# OBJROOT
+# (SRCROOT is ignored; test sources are assumed to
+# be in the same directory as the test script itself.)
+# fixme SYMROOT for dsymutil output?
 
 
-
+# Some arguments as read from the command line.
+my %args;
 my $BUILD;
 my $RUN;
 my $VERBOSE;
+my $BATS;
+
+my @TESTLIBNAMES = ("libobjc.A.dylib", "libobjc-trampolines.dylib");
+my $TESTLIBDIR = "/usr/lib";
+
+# Top level directory for intermediate and final build products.
+# Intermediate files must be kept separate for XBS BATS builds.
+my $OBJROOT = $ENV{OBJROOT} || "";
+my $DSTROOT = $ENV{DSTROOT} || "";
+
+# Build product directory inside DSTROOT and OBJROOT.
+# Each test config gets its own build directory inside this.
+my $BUILDDIR;
+
+# Local top-level directory.
+# This is the default value for $BUILDDIR.
+my $LOCALBASE = "/tmp/test-$TESTLIBNAMES[0]-build";
+
+# Device-side top-level directory.
+# This replaces $DSTROOT$BUILDDIR/ for on-device execution.
+my $REMOTEBASE = "/AppleInternal/objctest";
+
+# BATS top-level directory.
+# This replaces $DSTROOT$BUILDDIR/ for BATS execution.
+my $BATSBASE = "/AppleInternal/CoreOS/tests/objc4";
+
 
 my $crashcatch = <<'END';
 // interpose-able code to catch crashes, print, and exit cleanly
@@ -115,16 +142,22 @@ static void catchcrash(int sig)
 {
     const char *msg;
     switch (sig) {
-    case SIGILL:  msg = "CRASHED: SIGILL\\n";  break;
-    case SIGBUS:  msg = "CRASHED: SIGBUS\\n";  break;
-    case SIGSYS:  msg = "CRASHED: SIGSYS\\n";  break;
-    case SIGSEGV: msg = "CRASHED: SIGSEGV\\n"; break;
-    case SIGTRAP: msg = "CRASHED: SIGTRAP\\n"; break;
-    case SIGABRT: msg = "CRASHED: SIGABRT\\n"; break;
-    default: msg = "SIG\?\?\?\?\\n"; break;
+    case SIGILL:  msg = "CRASHED: SIGILL";  break;
+    case SIGBUS:  msg = "CRASHED: SIGBUS";  break;
+    case SIGSYS:  msg = "CRASHED: SIGSYS";  break;
+    case SIGSEGV: msg = "CRASHED: SIGSEGV"; break;
+    case SIGTRAP: msg = "CRASHED: SIGTRAP"; break;
+    case SIGABRT: msg = "CRASHED: SIGABRT"; break;
+    default: msg = "unknown signal"; break;
     }
     write(STDERR_FILENO, msg, strlen(msg));
-    _exit(0);
+
+    // avoid backslash-n newline due to escaping differences somewhere
+    // in BATS versus local execution (perhaps different perl versions?)
+    char newline = 0xa;
+    write(STDERR_FILENO, &newline, 1);
+
+    _exit(1);
 }
 
 static void setupcrash(void) __attribute__((constructor));
@@ -202,11 +235,62 @@ sub make {
 }
 
 sub chdir_verbose {
-    my $dir = shift;
+    my $dir = shift || die;
     print "cd $dir\n" if $VERBOSE;
-    chdir $dir || die;
+    chdir $dir || die "couldn't cd $dir";
 }
 
+sub rm_rf_verbose {
+    my $dir = shift || die;
+    print "mkdir -p $dir\n" if $VERBOSE;
+    `rm -rf '$dir'`;
+    die "couldn't rm -rf $dir" if $?;
+}
+
+sub mkdir_verbose {
+    my $dir = shift || die;
+    print "mkdir -p $dir\n" if $VERBOSE;
+    `mkdir -p '$dir'`;
+    die "couldn't mkdir $dir" if $?;
+}
+
+
+# xterm colors
+my $red = "\e[41;37m";
+my $yellow = "\e[43;30m";
+my $nocolor = "\e[0m";
+if (! -t STDIN) {
+    # Not isatty. Don't use colors.
+    $red = "";
+    $yellow = "";
+    $nocolor = "";
+}
+
+# print text with a colored prefix on each line
+# fixme some callers pass an array of lines and some don't
+sub colorprefix {
+    my $color = shift;
+    while (defined(my $lines = shift)) {
+        $lines = "\n" if ($lines eq "");
+        for my $line (split(/^/, $lines)) {
+            chomp $line;
+            print "$color $nocolor$line\n";
+        }
+    }
+}
+
+# print text colored
+# fixme some callers pass an array of lines and some don't
+sub colorprint {
+    my $color = shift;
+    while (defined(my $lines = shift)) {
+        $lines = "\n" if ($lines eq "");
+        for my $line (split(/^/, $lines)) {
+            chomp $line;
+            print "$color$line$nocolor\n";
+        }
+    }
+}
 
 # Return test names from the command line.
 # Returns all tests if no tests were named.
@@ -225,7 +309,7 @@ sub gettests {
         open(my $in, "< $file") || die "$file";
         my $contents = join "", <$in>;
         if (defined $ALL_TESTS{$name}) {
-            print "${yellow}SKIP: multiple tests named '$name'; skipping file '$file'.${nocolor}\n";
+            colorprint $yellow, "SKIP: multiple tests named '$name'; skipping file '$file'.";
         } else {
             $ALL_TESTS{$name} = $ext  if ($contents =~ m#^[/*\s]*TEST_#m);
         }
@@ -318,24 +402,6 @@ sub newersdk {
     return $rhs;
 }
 
-# Returns whether the given sdk supports -lauto
-sub supportslibauto {
-    my ($sdk) = @_;
-    return 1 if $sdk =~ /^macosx/;
-    return 0;
-}
-
-# print text with a colored prefix on each line
-sub colorprint {
-    my $color = shift;
-    while (my @lines = split("\n", shift)) {
-        for my $line (@lines) {
-            chomp $line;
-            print "$color $nocolor$line\n";
-        }
-    }
-}
-
 sub rewind {
     seek($_[0], 0, 0);
 }
@@ -385,16 +451,16 @@ sub check_output {
     $bad = "(output not 'OK: $name')" if ($bad eq ""  &&  (scalar(@output) != 1  ||  $output[0] !~ /^OK: $name/));
     
     if ($bad ne "") {
-        print "${red}FAIL: /// test '$name' \\\\\\$nocolor\n";
-        colorprint($red, @original_output);
-        print "${red}FAIL: \\\\\\ test '$name' ///$nocolor\n";
-        print "${red}FAIL: $name: $bad$nocolor\n";
+        colorprint  $red, "FAIL: /// test '$name' \\\\\\";
+        colorprefix $red, @original_output;
+        colorprint  $red, "FAIL: \\\\\\ test '$name' ///";
+        colorprint  $red, "FAIL: $name: $bad";
         $xit = 0;
     } 
     elsif ($warn ne "") {
-        print "${yellow}PASS: /// test '$name' \\\\\\$nocolor\n";
-        colorprint($yellow, @original_output);
-        print "${yellow}PASS: \\\\\\ test '$name' ///$nocolor\n";
+        colorprint  $yellow, "PASS: /// test '$name' \\\\\\";
+        colorprefix $yellow, @original_output;
+        colorprint  $yellow, "PASS: \\\\\\ test '$name' ///";
         print "PASS: $name (with warnings)\n";
     }
     else {
@@ -481,21 +547,10 @@ sub filter_simulator
 
     my @new_output;
     for my $line (@$outputref) {
-	if ($line !~ /No simulator devices appear to be running/) {
-	    push @new_output, $line;
-	}
-    }
-
-    @$outputref = @new_output;
-}
-
-sub filter_simulator
-{
-    my $outputref = shift;
-
-    my @new_output;
-    for my $line (@$outputref) {
-	if ($line !~ /No simulator devices appear to be running/) {
+	if (($line !~ /No simulator devices appear to be running/)  &&  
+            ($line !~ /CoreSimulator is attempting to unload a stale CoreSimulatorService job/)  &&  
+            ($line !~ /Failed to locate a valid instance of CoreSimulatorService/))
+        {
 	    push @new_output, $line;
 	}
     }
@@ -690,7 +745,7 @@ sub gather_simple {
     return 0 if !$test_h && !$disabled && !$crashes && !defined($conditionstring) && !defined($envstring) && !defined($cflags) && !defined($buildcmd) && !defined($builderror) && !defined($runerror);
 
     if ($disabled) {
-        print "${yellow}SKIP: $name    (disabled by $disabled)$nocolor\n";
+        colorprint $yellow, "SKIP: $name    (disabled by $disabled)";
         return 0;
     }
 
@@ -750,18 +805,57 @@ sub gather_simple {
         TEST_RUN_OUTPUT => $runerror, 
         TEST_CFLAGS => $cflags,
         TEST_ENV => $envstring,
-        TEST_RUN => $run, 
+        TEST_RUN => $run,
+        DSTDIR => "$C{DSTDIR}/$name.build",
+        OBJDIR => "$C{OBJDIR}/$name.build",
     };
 
     return 1;
 }
+
+
+# Test description plist to write when building for BATS execution.
+my %bats_plist;
+$bats_plist{'Project'} = "objc4";
+$bats_plist{'Tests'} = [];  # populated by append_bats_test()
+
+# Saves run instructions for a single test in all configurations as a BATS test.
+sub append_bats_test {
+    my $name = shift;
+
+    my $arch = join(',', @{$args{ARCH}});
+    my $os = join(',', @{$args{OSVERSION}});
+    my $mem = join(',', @{$args{MEM}});
+    my $language = join(',', @{$args{LANGUAGE}});
+
+    push @{$bats_plist{'Tests'}}, {
+        "TestName" => "$name",
+        "Command" => [
+            "/usr/bin/perl",
+            "$BATSBASE/test/test.pl",
+            $name,
+            "ARCH=$arch",
+            "OS=$os",
+            "MEM=$mem",
+            "LANGUAGE=$language",
+            "BUILD=0",
+            "RUN=1",
+            "VERBOSE=1",
+            "BATS=1",
+        ]
+    };
+}
+
 
 # Builds a simple test
 sub build_simple {
     my %C = %{shift()};
     my $name = shift;
     my %T = %{$C{"TEST_$name"}};
-    chdir_verbose "$C{DIR}/$name.build";
+
+    mkdir_verbose $T{DSTDIR};
+    chdir_verbose $T{DSTDIR};
+    # we don't mkdir $T{OBJDIR} because most tests don't use it
 
     my $ext = $ALL_TESTS{$name};
     my $file = "$DIR/$name.$ext";
@@ -772,12 +866,19 @@ sub build_simple {
         die "$?" if $?;
     }
 
-    my $cmd = $T{TEST_BUILD} ? eval "return \"$T{TEST_BUILD}\"" : "$C{COMPILE}   $T{TEST_CFLAGS} $file -o $name.out";
+    my $cmd = $T{TEST_BUILD} ? eval "return \"$T{TEST_BUILD}\"" : "$C{COMPILE}   $T{TEST_CFLAGS} $file -o $name.exe";
 
     my $output = make($cmd);
 
+    # ignore out-of-date text-based stubs (caused by ditto into SDK)
+    $output =~ s/ld: warning: text-based stub file.*\n//g;
     # rdar://10163155
     $output =~ s/ld: warning: could not create compact unwind for [^\n]+: does not use standard frame\n//g;
+    # rdar://37937122
+    $output =~ s/^warning: Cannot lower [^\n]+\n//g;
+    $output =~ s/^warning:     key: [^\n]+\n//g;
+    $output =~ s/^warning:     discriminator: [^\n]+\n//g;
+    $output =~ s/^warning:     callee: [^\n]+\n//g;
 
     my $ok;
     if (my $builderror = $T{TEST_BUILD_OUTPUT}) {
@@ -785,39 +886,50 @@ sub build_simple {
         if ($output =~ /$builderror/) {
             $ok = 1;
         } else {
-            print "${red}FAIL: /// test '$name' \\\\\\$nocolor\n";
-            colorprint $red, $output;
-            print "${red}FAIL: \\\\\\ test '$name' ///$nocolor\n";                
-            print "${red}FAIL: $name (build output does not match TEST_BUILD_OUTPUT)$nocolor\n";
+            colorprint  $red, "FAIL: /// test '$name' \\\\\\";
+            colorprefix $red, $output;
+            colorprint  $red, "FAIL: \\\\\\ test '$name' ///";
+            colorprint  $red, "FAIL: $name (build output does not match TEST_BUILD_OUTPUT)";
             $ok = 0;
         }
     } elsif ($?) {
-        print "${red}FAIL: /// test '$name' \\\\\\$nocolor\n";
-        colorprint $red, $output;
-        print "${red}FAIL: \\\\\\ test '$name' ///$nocolor\n";                
-        print "${red}FAIL: $name (build failed)$nocolor\n";
+        colorprint  $red, "FAIL: /// test '$name' \\\\\\";
+        colorprefix $red, $output;
+        colorprint  $red, "FAIL: \\\\\\ test '$name' ///";
+        colorprint  $red, "FAIL: $name (build failed)";
         $ok = 0;
     } elsif ($output ne "") {
-        print "${red}FAIL: /// test '$name' \\\\\\$nocolor\n";
-        colorprint $red, $output;
-        print "${red}FAIL: \\\\\\ test '$name' ///$nocolor\n";                
-        print "${red}FAIL: $name (unexpected build output)$nocolor\n";
+        colorprint  $red, "FAIL: /// test '$name' \\\\\\";
+        colorprefix $red, $output;
+        colorprint  $red, "FAIL: \\\\\\ test '$name' ///";
+        colorprint  $red, "FAIL: $name (unexpected build output)";
         $ok = 0;
     } else {
         $ok = 1;
     }
 
-    
     if ($ok) {
-        foreach my $file (glob("*.out *.dylib *.bundle")) {
-            make("dsymutil $file");
+        foreach my $file (glob("*.exe *.dylib *.bundle")) {
+            if (!$BATS) {
+                # not for BATS to save space and build time
+                # fixme use SYMROOT?
+                make("xcrun dsymutil $file");
+            }
+            if ($C{OS} eq "macosx"  ||  $C{OS} =~ /simulator/) {
+                # setting any entitlements disables dyld environment variables
+            } else {
+                # get-task-allow entitlement is required
+                # to enable dyld environment variables
+                make("xcrun codesign -s - --entitlements $DIR/get_task_allow_entitlement.plist $file");
+                die "$?" if $?;
+            }
         }
     }
 
     return $ok;
 }
 
-# Run a simple test (testname.out, with error checking of stdout and stderr)
+# Run a simple test (testname.exe, with error checking of stdout and stderr)
 sub run_simple {
     my %C = %{shift()};
     my $name = shift;
@@ -828,39 +940,51 @@ sub run_simple {
         return 1;
     }
 
-    my $testdir = "$C{DIR}/$name.build";
+    my $testdir = $T{DSTDIR};
     chdir_verbose $testdir;
 
     my $env = "$C{ENV} $T{TEST_ENV}";
 
+    if ($T{TEST_CRASHES}) {
+        $env .= " OBJC_DEBUG_DONT_CRASH=YES";
+    }
+
     my $output;
 
-    if ($C{ARCH} =~ /^arm/ && `unamep -p` !~ /^arm/) {
-        # run on iOS or watchos device
-
-        my $remotedir = "/var/root/objctest/" . basename($C{DIR}) . "/$name.build";
+    if ($C{ARCH} =~ /^arm/ && `uname -p` !~ /^arm/) {
+        # run on iOS or watchos or tvos device
+        # fixme device selection and verification
+        my $remotedir = "$REMOTEBASE/" . basename($C{DSTDIR}) . "/$name.build";
 
         # Add test dir and libobjc's dir to DYLD_LIBRARY_PATH.
         # Insert libcrashcatch.dylib if necessary.
         $env .= " DYLD_LIBRARY_PATH=$remotedir";
-        $env .= ":/var/root/objctest/"  if ($C{TESTLIB} ne $TESTLIBPATH);
+        $env .= ":$REMOTEBASE"  if ($C{TESTLIBDIR} ne $TESTLIBDIR);
         if ($T{TEST_CRASHES}) {
             $env .= " DYLD_INSERT_LIBRARIES=$remotedir/libcrashcatch.dylib";
         }
 
-        my $cmd = "ssh iphone 'cd $remotedir && env $env ./$name.out'";
+        my $cmd = "ssh iphone 'cd $remotedir && env $env ./$name.exe'";
         $output = make("$cmd");
     }
     elsif ($C{OS} =~ /simulator/) {
-        # run locally in an iOS simulator
-        # fixme appletvsimulator and watchsimulator
-        # fixme SDK
-        my $sim = "xcrun -sdk iphonesimulator simctl spawn 'iPhone 6'";
-
+        # run locally in a simulator
+        # fixme selection of simulated OS version
+        my $simdevice;
+        if ($C{OS} =~ /iphonesimulator/) {
+            $simdevice = 'iPhone 6';
+        } elsif ($C{OS} =~ /watchsimulator/) {
+            $simdevice = 'Apple Watch Series 4 - 40mm';
+        } elsif ($C{OS} =~ /tvsimulator/) {
+            $simdevice = 'Apple TV 1080p';
+        } else {
+            die "unknown simulator $C{OS}\n";
+        }
+        my $sim = "xcrun -sdk iphonesimulator simctl spawn '$simdevice'";
         # Add test dir and libobjc's dir to DYLD_LIBRARY_PATH.
         # Insert libcrashcatch.dylib if necessary.
         $env .= " DYLD_LIBRARY_PATH=$testdir";
-        $env .= ":" . dirname($C{TESTLIB})  if ($C{TESTLIB} ne $TESTLIBPATH);
+        $env .= ":" . $C{TESTLIBDIR}  if ($C{TESTLIBDIR} ne $TESTLIBDIR);
         if ($T{TEST_CRASHES}) {
             $env .= " DYLD_INSERT_LIBRARIES=$testdir/libcrashcatch.dylib";
         }
@@ -870,7 +994,7 @@ sub run_simple {
             $simenv .= "SIMCTL_CHILD_$keyvalue ";
         }
         # Use the full path here so hack_cwd in test.h works.
-        $output = make("env $simenv $sim $testdir/$name.out");
+        $output = make("env $simenv $sim $testdir/$name.exe");
     }
     else {
         # run locally
@@ -878,12 +1002,12 @@ sub run_simple {
         # Add test dir and libobjc's dir to DYLD_LIBRARY_PATH.
         # Insert libcrashcatch.dylib if necessary.
         $env .= " DYLD_LIBRARY_PATH=$testdir";
-        $env .= ":" . dirname($C{TESTLIB})  if ($C{TESTLIB} ne $TESTLIBPATH);
+        $env .= ":" . $C{TESTLIBDIR}  if ($C{TESTLIBDIR} ne $TESTLIBDIR);
         if ($T{TEST_CRASHES}) {
             $env .= " DYLD_INSERT_LIBRARIES=$testdir/libcrashcatch.dylib";
         }
 
-        $output = make("sh -c '$env ./$name.out'");
+        $output = make("sh -c '$env ./$name.exe'");
     }
 
     return check_output(\%C, $name, split("\n", $output));
@@ -906,6 +1030,19 @@ sub find_compiler {
     return $result;
 }
 
+sub dirContainsAllTestLibs {
+    my $dir = shift;
+
+    foreach my $testlib (@TESTLIBNAMES) {
+        my $found = (-e "$dir/$testlib");
+        my $foundstr = ($found ? "found" : "didn't find");
+        print "note: $foundstr $testlib in $dir\n"  if ($VERBOSE);
+        return 0  if (!$found);
+    }
+
+    return 1;
+}
+
 sub make_one_config {
     my $configref = shift;
     my $root = shift;
@@ -922,54 +1059,18 @@ sub make_one_config {
     $deployment_arg = "default" if !defined($deployment_arg);
     $run_arg = "default" if !defined($run_arg);
 
-    
-    die "unknown OS '$os_arg' (expected iphoneos or iphonesimulator or watchos or watchsimulator or macosx)\n" if ($os_arg ne "iphoneos"  &&  $os_arg ne "iphonesimulator"  &&  $os_arg ne "watchos"  &&  $os_arg ne "watchsimulator"  &&  $os_arg ne "macosx");
+    my %allowed_os_args = (
+        "macosx" => "macosx", "osx" => "macosx", "macos" => "macosx",
+        "iphoneos" => "iphoneos", "ios" => "iphoneos",
+        "iphonesimulator" => "iphonesimulator", "iossimulator" => "iphonesimulator",
+        "watchos" => "watchos",
+        "watchsimulator" => "watchsimulator", "watchossimulator" => "watchsimulator",
+        "appletvos" => "appletvos", "tvos" => "appletvos",
+        "appletvsimulator" => "appletvsimulator", "tvsimulator" => "appletvsimulator",
+        "bridgeos" => "bridgeos",
+        );
 
-    $C{OS} = $os_arg;
-
-    if ($os_arg eq "iphoneos" || $os_arg eq "iphonesimulator") {
-        $C{TOOLCHAIN} = "ios";
-    } elsif ($os_arg eq "watchos" || $os_arg eq "watchsimulator") {
-        $C{TOOLCHAIN} = "watchos";
-    } elsif ($os_arg eq "macosx") {
-        $C{TOOLCHAIN} = "osx";
-    } else {
-        print "${yellow}WARN: don't know toolchain for OS $C{OS}${nocolor}\n";
-        $C{TOOLCHAIN} = "default";
-    }
-    
-    # Look up SDK
-    # Try exact match first.
-    # Then try lexically-last prefix match (so "macosx" => "macosx10.7internal")
-    my @sdks = getsdks();
-    if ($VERBOSE) {
-        print "note: Installed SDKs: @sdks\n";
-    }
-    my $exactsdk = undef;
-    my $prefixsdk = undef;
-    foreach my $sdk (@sdks) {
-        $exactsdk = $sdk  if ($sdk eq $sdk_arg);
-        $prefixsdk = newersdk($sdk, $prefixsdk)  if ($sdk =~ /^$sdk_arg/);
-    }
-
-    my $sdk;
-    if ($exactsdk) {
-        $sdk = $exactsdk;
-    } elsif ($prefixsdk) {
-        $sdk = $prefixsdk;
-    } else {
-        die "unknown SDK '$sdk_arg'\nInstalled SDKs: @sdks\n";
-    }
-
-    # Set deployment target and run target.
-    # fixme can't enforce version when run_arg eq "default" 
-    # because we don't know it yet
-    $deployment_arg = versionsuffix($sdk) if $deployment_arg eq "default";
-    if ($run_arg ne "default") {
-        die "Deployment target '$deployment_arg' is newer than run target '$run_arg'\n"  if $deployment_arg > $run_arg;
-    }
-    $C{DEPLOYMENT_TARGET} = $deployment_arg;
-    $C{RUN_TARGET} = $run_arg;
+    $C{OS} = $allowed_os_args{$os_arg} || die "unknown OS '$os_arg' (expected " . join(', ', sort keys %allowed_os_args) . ")\n";
 
     # set the config name now, after massaging the language and OS versions, 
     # but before adding other settings
@@ -978,9 +1079,72 @@ sub make_one_config {
     die if ($configname =~ / /);
     ($C{NAME} = $configname) =~ s/~/ /g;
     (my $configdir = $configname) =~ s#/##g;
-    $C{DIR} = "$BUILDDIR/$configdir";
+    $C{DSTDIR} = "$DSTROOT$BUILDDIR/$configdir";
+    $C{OBJDIR} = "$OBJROOT$BUILDDIR/$configdir";
 
-    $C{SDK_PATH} = getsdkpath($sdk);
+    # Allow tests to see BATS-edness in TEST_CONFIG.
+    $C{BATS} = $BATS;
+
+    if ($C{OS} eq "iphoneos" || $C{OS} eq "iphonesimulator") {
+        $C{TOOLCHAIN} = "ios";
+    } elsif ($C{OS} eq "watchos" || $C{OS} eq "watchsimulator") {
+        $C{TOOLCHAIN} = "watchos";
+    } elsif ($C{OS} eq "appletvos" || $C{OS} eq "appletvsimulator") {
+        $C{TOOLCHAIN} = "appletvos";
+    } elsif ($C{OS} eq "bridgeos") {
+        $C{TOOLCHAIN} = "bridgeos";
+    } elsif ($C{OS} eq "macosx") {
+        $C{TOOLCHAIN} = "osx";
+    } else {
+        colorprint $yellow, "WARN: don't know toolchain for OS $C{OS}";
+        $C{TOOLCHAIN} = "default";
+    }
+
+    if ($BUILD) {
+        # Look up SDK.
+        # Try exact match first.
+        # Then try lexically-last prefix match 
+        #   (so "macosx" => "macosx10.7internal")
+
+        $sdk_arg =~ s/$os_arg/$C{OS}/;
+
+        my @sdks = getsdks();
+        if ($VERBOSE) {
+            print "note: Installed SDKs: @sdks\n";
+        }
+        my $exactsdk = undef;
+        my $prefixsdk = undef;
+        foreach my $sdk (@sdks) {
+            $exactsdk = $sdk  if ($sdk eq $sdk_arg);
+            $prefixsdk = newersdk($sdk, $prefixsdk)  if ($sdk =~ /^$sdk_arg/);
+        }
+
+        my $sdk;
+        if ($exactsdk) {
+            $sdk = $exactsdk;
+        } elsif ($prefixsdk) {
+            $sdk = $prefixsdk;
+        } else {
+            die "unknown SDK '$sdk_arg'\nInstalled SDKs: @sdks\n";
+        }
+
+        # Set deployment target.
+        # fixme can't enforce version when run_arg eq "default" 
+        # because we don't know it yet
+        $deployment_arg = versionsuffix($sdk) if $deployment_arg eq "default";
+        if ($run_arg ne "default") {
+            die "Deployment target '$deployment_arg' is newer than run target '$run_arg'\n"  if $deployment_arg > $run_arg;
+        }
+        $C{DEPLOYMENT_TARGET} = $deployment_arg;
+        $C{SDK_PATH} = getsdkpath($sdk);
+    } else {
+        # not $BUILD
+        $C{DEPLOYMENT_TARGET} = "unknown_deployment_target";
+        $C{SDK_PATH} = "/unknown/sdk";
+    }
+
+    # Set run target.
+    $C{RUN_TARGET} = $run_arg;
 
     # Look up test library (possible in root or SDK_PATH)
     
@@ -1000,26 +1164,45 @@ sub make_one_config {
         }
     }
 
-    if ($root ne ""  &&  -e "$root$C{SDK_PATH}$TESTLIBPATH") {
-        $C{TESTLIB} = "$root$C{SDK_PATH}$TESTLIBPATH";
-    } elsif (-e "$root$TESTLIBPATH") {
-        $C{TESTLIB} = "$root$TESTLIBPATH";
-    } elsif (-e "$root/$TESTLIBNAME") {
-        $C{TESTLIB} = "$root/$TESTLIBNAME";
-    } else {
-        die "No $TESTLIBNAME in root '$rootarg' for sdk '$C{SDK_PATH}'\n"
-            # . join("\n", @dstpaths) . "\n"
-            ;
+    if ($root ne "") {
+        # Root specified. Require that it contain our dylibs.
+        if (dirContainsAllTestLibs("$root$C{SDK_PATH}$TESTLIBDIR")) {
+            $C{TESTLIBDIR} = "$root$C{SDK_PATH}$TESTLIBDIR";
+        } elsif (dirContainsAllTestLibs("$root$TESTLIBDIR")) {
+            $C{TESTLIBDIR} = "$root$TESTLIBDIR";
+        } elsif (dirContainsAllTestLibs($root)) {
+            $C{TESTLIBDIR} = "$root";
+        } else {
+            die "Didn't find some libs in root '$rootarg' for sdk '$C{SDK_PATH}'\n";
+        }
+    }
+    else {
+        # No root specified. Use the SDK or / for our dylibs.
+        if (dirContainsAllTestLibs("$C{SDK_PATH}$TESTLIBDIR")) {
+            $C{TESTLIBDIR} = "$C{SDK_PATH}$TESTLIBDIR";
+        } else {
+            # We don't actually check in / because on devices
+            # there are no dylib files there.
+            $C{TESTLIBDIR} = $TESTLIBDIR;
+        }
     }
 
-    if (-e "$symroot/$TESTLIBNAME.dSYM") {
-        $C{TESTDSYM} = "$symroot/$TESTLIBNAME.dSYM";
+    @{$C{TESTLIBS}} = map { "$C{TESTLIBDIR}/$_" } @TESTLIBNAMES;
+    # convenience for tests that want libobjc.dylib's path
+    $C{TESTLIB} = @{$C{TESTLIBS}}[0];
+
+    foreach my $testlibname (@TESTLIBNAMES) {
+        if (-e "$symroot/$testlibname.dSYM") {
+            push(@{$C{TESTDSYMS}}, "$symroot/$testlibname.dSYM");
+        }
     }
 
     if ($VERBOSE) {
-        my @uuids = `/usr/bin/dwarfdump -u '$C{TESTLIB}'`;
-        while (my $uuid = shift @uuids) {
-            print "note: $uuid";
+        foreach my $testlib (@{$C{TESTLIBS}}) {
+            my @uuids = `/usr/bin/dwarfdump -u '$testlib'`;
+            while (my $uuid = shift @uuids) {
+                print "note: $uuid";
+            }
         }
     }
 
@@ -1036,15 +1219,28 @@ sub make_one_config {
         $C{CXX} = find_compiler($cxx, $C{TOOLCHAIN}, $C{SDK_PATH});
         $C{SWIFT} = find_compiler($swift, $C{TOOLCHAIN}, $C{SDK_PATH});
 
-        die "No compiler '$cc' ('$C{CC}') in toolchain '$C{TOOLCHAIN}'\n" if !-e $C{CC};
-        die "No compiler '$cxx' ('$C{CXX}') in toolchain '$C{TOOLCHAIN}'\n" if !-e $C{CXX};
-        die "No compiler '$swift' ('$C{SWIFT}') in toolchain '$C{TOOLCHAIN}'\n" if !-e $C{SWIFT};
+        die "No C compiler '$cc' ('$C{CC}') in toolchain '$C{TOOLCHAIN}'\n" if !-e $C{CC};
+        die "No C++ compiler '$cxx' ('$C{CXX}') in toolchain '$C{TOOLCHAIN}'\n" if !-e $C{CXX};
+        die "No Swift compiler '$swift' ('$C{SWIFT}') in toolchain '$C{TOOLCHAIN}'\n" if !-e $C{SWIFT};
     }    
-    
+
+    if ($C{ARCH} eq "i386" && $C{OS} eq "macosx") {
+        # libarclite no longer available on i386
+        # fixme need an archived copy for bincompat testing
+        $C{FORCE_LOAD_ARCLITE} = "";
+    } else {
+        $C{FORCE_LOAD_ARCLITE} = "-Xlinker -force_load -Xlinker " . dirname($C{CC}) . "/../lib/arc/libarclite_$C{OS}.a";
+    }
+
     # Populate cflags
 
-    # save-temps so dsymutil works so debug info works
-    my $cflags = "-I$DIR -W -Wall -Wno-deprecated-declarations -Wshorten-64-to-32 -g -save-temps -Os -arch $C{ARCH} ";
+    my $cflags = "-I$DIR -W -Wall -Wno-objc-weak-compat -Wno-arc-bridge-casts-disallowed-in-nonarc -Wshorten-64-to-32 -Qunused-arguments -fno-caret-diagnostics -Os -arch $C{ARCH} ";
+    if (!$BATS) {
+        # save-temps so dsymutil works so debug info works.
+        # Disabled in BATS to save disk space.
+        # rdar://45656803 -save-temps causes bad -Wstdlibcxx-not-found warnings
+        $cflags .= "-g -save-temps -Wno-stdlibcxx-not-found";
+    }
     my $objcflags = "";
     my $swiftflags = "-g ";
     
@@ -1068,8 +1264,20 @@ sub make_one_config {
         $target = "$C{ARCH}-apple-watchos$C{DEPLOYMENT_TARGET}";
     }
     elsif ($C{OS} eq "watchsimulator") {
-        $cflags .= " -mwatch-simulator-version-min=$C{DEPLOYMENT_TARGET}";
+        $cflags .= " -mwatchos-simulator-version-min=$C{DEPLOYMENT_TARGET}";
         $target = "$C{ARCH}-apple-watchos$C{DEPLOYMENT_TARGET}";
+    }
+    elsif ($C{OS} eq "appletvos") {
+        $cflags .= " -mtvos-version-min=$C{DEPLOYMENT_TARGET}";
+        $target = "$C{ARCH}-apple-tvos$C{DEPLOYMENT_TARGET}";
+    }
+    elsif ($C{OS} eq "appletvsimulator") {
+        $cflags .= " -mtvos-simulator-version-min=$C{DEPLOYMENT_TARGET}";
+        $target = "$C{ARCH}-apple-tvos$C{DEPLOYMENT_TARGET}";
+    }
+    elsif ($C{OS} eq "bridgeos") {
+        $cflags .= " -mbridgeos-version-min=$C{DEPLOYMENT_TARGET}";
+        $target = "$C{ARCH}-apple-bridgeos$C{DEPLOYMENT_TARGET}";
     }
     else {
         $cflags .= " -mmacosx-version-min=$C{DEPLOYMENT_TARGET}";
@@ -1077,37 +1285,28 @@ sub make_one_config {
     }
     $swiftflags .= " -target $target";
 
-    # fixme still necessary?
-    if ($C{OS} eq "iphonesimulator"  &&  $C{ARCH} eq "i386") {
-        $objcflags .= " -fobjc-abi-version=2 -fobjc-legacy-dispatch";
-    }
-    
+    $C{TESTINCLUDEDIR} = "$C{SDK_PATH}/usr/include";
+    $C{TESTLOCALINCLUDEDIR} = "$C{SDK_PATH}/usr/local/include";
     if ($root ne "") {
-        my $library_path = dirname($C{TESTLIB});
-        $cflags .= " -L$library_path";
-        $cflags .= " -I '$root/usr/include'";
-        $cflags .= " -I '$root/usr/local/include'";
-        
         if ($C{SDK_PATH} ne "/") {
-            $cflags .= " -I '$root$C{SDK_PATH}/usr/include'";
-            $cflags .= " -I '$root$C{SDK_PATH}/usr/local/include'";
+            $cflags .= " -isystem '$root$C{SDK_PATH}/usr/include'";
+            $cflags .= " -isystem '$root$C{SDK_PATH}/usr/local/include'";
         }
-    }
 
-    if ($C{CC} =~ /clang/) {
-        $cflags .= " -Qunused-arguments -fno-caret-diagnostics";
-        $cflags .= " -stdlib=$C{STDLIB}"; # fixme -fno-objc-link-runtime"
-        $cflags .= " -Wl,-segalign,0x4000 ";
+        my $library_path = $C{TESTLIBDIR};
+        $cflags .= " -L$library_path";
+        # fixme Root vs SDKContentRoot
+        $C{TESTINCLUDEDIR} = "$root/../SDKContentRoot/usr/include";
+        $C{TESTLOCALINCLUDEDIR} = "$root/../SDKContentRoot/usr/local/include";
+        $cflags .= " -isystem '$C{TESTINCLUDEDIR}'";
+        $cflags .= " -isystem '$C{TESTLOCALINCLUDEDIR}'";
     }
 
     
     # Populate objcflags
     
     $objcflags .= " -lobjc";
-    if ($C{MEM} eq "gc") {
-        $objcflags .= " -fobjc-gc";
-    }
-    elsif ($C{MEM} eq "arc") {
+    if ($C{MEM} eq "arc") {
         $objcflags .= " -fobjc-arc";
     }
     elsif ($C{MEM} eq "mrc") {
@@ -1116,20 +1315,15 @@ sub make_one_config {
     else {
         die "unrecognized MEM '$C{MEM}'\n";
     }
-
-    if (supportslibauto($C{OS})) {
-        # do this even for non-GC tests
-        $objcflags .= " -lauto";
-    }
     
     # Populate ENV_PREFIX
     $C{ENV} = "LANG=C MallocScribble=1";
     $C{ENV} .= " VERBOSE=$VERBOSE"  if $VERBOSE;
     if ($root ne "") {
-        die "no spaces allowed in root" if dirname($C{TESTLIB}) =~ /\s+/;
+        die "no spaces allowed in root" if $C{TESTLIBDIR} =~ /\s+/;
     }
     if ($C{GUARDMALLOC}) {
-        $ENV{GUARDMALLOC} = "1";  # checked by tests and errcheck.pl
+        $C{ENV} .= " GUARDMALLOC=1";  # checked by tests and errcheck.pl
         $C{ENV} .= " DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib";
         if ($C{GUARDMALLOC} eq "before") {
             $C{ENV} .= " MALLOC_PROTECT_BEFORE=1";
@@ -1141,11 +1335,13 @@ sub make_one_config {
     }
 
     # Populate compiler commands
-    $C{COMPILE_C}   = "env LANG=C '$C{CC}'  $cflags -x c -std=gnu99";
-    $C{COMPILE_CXX} = "env LANG=C '$C{CXX}' $cflags -x c++";
-    $C{COMPILE_M}   = "env LANG=C '$C{CC}'  $cflags $objcflags -x objective-c -std=gnu99";
-    $C{COMPILE_MM}  = "env LANG=C '$C{CXX}' $cflags $objcflags -x objective-c++";
-    $C{COMPILE_SWIFT} = "env LANG=C '$C{SWIFT}' $swiftflags";
+    $C{XCRUN} = "env LANG=C /usr/bin/xcrun -toolchain '$C{TOOLCHAIN}'";
+
+    $C{COMPILE_C}   = "$C{XCRUN} '$C{CC}'  $cflags -x c -std=gnu99";
+    $C{COMPILE_CXX} = "$C{XCRUN} '$C{CXX}' $cflags -x c++";
+    $C{COMPILE_M}   = "$C{XCRUN} '$C{CC}'  $cflags $objcflags -x objective-c -std=gnu99";
+    $C{COMPILE_MM}  = "$C{XCRUN} '$C{CXX}' $cflags $objcflags -x objective-c++";
+    $C{COMPILE_SWIFT} = "$C{XCRUN} '$C{SWIFT}' $swiftflags";
     
     $C{COMPILE} = $C{COMPILE_C}      if $C{LANGUAGE} eq "c";
     $C{COMPILE} = $C{COMPILE_CXX}    if $C{LANGUAGE} eq "c++";
@@ -1154,40 +1350,25 @@ sub make_one_config {
     $C{COMPILE} = $C{COMPILE_SWIFT}  if $C{LANGUAGE} eq "swift";
     die "unknown language '$C{LANGUAGE}'\n" if !defined $C{COMPILE};
 
-    ($C{COMPILE_NOMEM} = $C{COMPILE}) =~ s/ -fobjc-(?:gc|arc)\S*//g;
+    ($C{COMPILE_NOMEM} = $C{COMPILE}) =~ s/ -fobjc-arc\S*//g;
     ($C{COMPILE_NOLINK} = $C{COMPILE}) =~ s/ '?-(?:Wl,|l)\S*//g;
     ($C{COMPILE_NOLINK_NOMEM} = $C{COMPILE_NOMEM}) =~ s/ '?-(?:Wl,|l)\S*//g;
 
 
-    # Reject some self-inconsistent configurations
-    if ($C{MEM} !~ /^(mrc|arc|gc)$/) {
-        die "unknown MEM=$C{MEM} (expected one of mrc arc gc)\n";
+    # Reject some self-inconsistent and disallowed configurations
+    if ($C{MEM} !~ /^(mrc|arc)$/) {
+        die "unknown MEM=$C{MEM} (expected one of mrc arc)\n";
     }
 
-    if ($C{MEM} eq "gc"  &&  $C{OS} !~ /^macosx/) {
-        print "note: skipping configuration $C{NAME}\n";
-        print "note:   because OS=$C{OS} does not support MEM=$C{MEM}\n";
-        return 0;
-    }
-    if ($C{MEM} eq "gc"  &&  $C{ARCH} eq "x86_64h") {
-        print "note: skipping configuration $C{NAME}\n";
-        print "note:   because ARCH=$C{ARCH} does not support MEM=$C{MEM}\n";
-        return 0;
-    }
-    if ($C{MEM} eq "arc"  &&  $C{OS} =~ /^macosx/  &&  $C{ARCH} eq "i386") {
-        print "note: skipping configuration $C{NAME}\n";
-        print "note:   because 32-bit Mac does not support MEM=$C{MEM}\n";
-        return 0;
-    }
     if ($C{MEM} eq "arc"  &&  $C{CC} !~ /clang/) {
         print "note: skipping configuration $C{NAME}\n";
         print "note:   because CC=$C{CC} does not support MEM=$C{MEM}\n";
         return 0;
     }
 
-    if ($C{STDLIB} ne "libstdc++"  &&  $C{CC} !~ /clang/) {
-        print "note: skipping configuration $C{NAME}\n";
-        print "note:   because CC=$C{CC} does not support STDLIB=$C{STDLIB}\n";
+    if ($C{ARCH} eq "i386"  &&  $C{OS} eq "macosx") {
+        colorprint $yellow, "WARN: skipping configuration $C{NAME}\n";
+        colorprint $yellow, "WARN:   because 32-bit Mac is dead\n";
         return 0;
     }
 
@@ -1200,8 +1381,8 @@ sub make_one_config {
 
     # fixme unimplemented run targets
     if ($C{RUN_TARGET} ne "default" &&  $C{OS} !~ /simulator/) {
-        print "${yellow}WARN: skipping configuration $C{NAME}${nocolor}\n";
-        print "${yellow}WARN:   because OS=$C{OS} does not yet implement RUN_TARGET=$C{RUN_TARGET}${nocolor}\n";
+        colorprint $yellow, "WARN: skipping configuration $C{NAME}";
+        colorprint $yellow, "WARN:   because OS=$C{OS} does not yet implement RUN_TARGET=$C{RUN_TARGET}";
     }
 
     %$configref = %C;
@@ -1246,13 +1427,24 @@ sub config_name {
     return $name;
 }
 
-sub run_one_config {
+sub rsync_ios {
+    my ($src, $timeout) = @_;
+    for (my $i = 0; $i < 10; $i++) {
+        make("$DIR/timeout.pl $timeout env RSYNC_PASSWORD=alpine rsync -av $src rsync://root\@localhost:10873/root/$REMOTEBASE/");
+        return if $? == 0;
+        colorprint $yellow, "WARN: RETRY\n"  if $VERBOSE;
+    }
+    die "Couldn't rsync tests to device. Check: device is connected; tcprelay is running; device trusts your Mac; device is unlocked; filesystem is mounted r/w\n";
+}
+
+sub build_and_run_one_config {
     my %C = %{shift()};
     my @tests = @_;
 
     # Build and run
     my $testcount = 0;
     my $failcount = 0;
+    my $skipconfig = 0;
 
     my @gathertests;
     foreach my $test (@tests) {
@@ -1273,15 +1465,10 @@ sub run_one_config {
         @builttests = @gathertests;
         $testcount = scalar(@gathertests);
     } else {
-        my $configdir = $C{DIR};
-        print $configdir, "\n"  if $VERBOSE;
-        mkdir $configdir  || die;
-
         foreach my $test (@gathertests) {
             if ($VERBOSE) {
                 print "\nBUILD $test\n";
             }
-            mkdir "$configdir/$test.build"  || die;
             
             if ($ALL_TESTS{$test}) {
                 $testcount++;
@@ -1300,34 +1487,67 @@ sub run_one_config {
         # nothing to do
     }
     else {
-        if ($C{ARCH} =~ /^arm/ && `unamep -p` !~ /^arm/) {
+        if ($C{ARCH} =~ /^arm/ && `uname -p` !~ /^arm/) {
+            # upload timeout - longer for slow watch devices
+            my $timeout = ($C{OS} =~ /watch/) ? 120 : 20;
+            
             # upload all tests to iOS device
-            make("RSYNC_PASSWORD=alpine rsync -av $C{DIR} rsync://root\@localhost:10873/root/var/root/objctest/");
-            die "Couldn't rsync tests to device\n" if ($?);
+            rsync_ios($C{DSTDIR}, $timeout);
 
             # upload library to iOS device
-            if ($C{TESTLIB} ne $TESTLIBPATH) {
-                make("RSYNC_PASSWORD=alpine rsync -av $C{TESTLIB} rsync://root\@localhost:10873/root/var/root/objctest/");
-                die "Couldn't rsync $C{TESTLIB} to device\n" if ($?);
-                make("RSYNC_PASSWORD=alpine rsync -av $C{TESTDSYM} rsync://root\@localhost:10873/root/var/root/objctest/");
+            if ($C{TESTLIBDIR} ne $TESTLIBDIR) {
+                foreach my $thing (@{$C{TESTLIBS}}, @{$C{TESTDSYMS}}) {
+                    rsync_ios($thing, $timeout);
+                }
+            }
+        }
+        elsif ($C{OS} =~ /simulator/) {
+            # run locally in a simulator
+        }
+        else {
+            # run locally
+            if ($BATS) {
+                # BATS execution tries to run architectures that
+                # aren't supported by the device. Skip those configs here.
+                my $machine = `machine`;
+                chomp $machine;
+                # unsupported:
+                # running arm64e on non-arm64e device
+                # running arm64 on non-arm64* device
+                # running armv7k on non-armv7k device
+                # running arm64_32 on armv7k device
+                # We don't need to handle all mismatches here, 
+                # only mismatches that arise within a single OS.
+                $skipconfig = 
+                    (($C{ARCH} eq "arm64e"   && $machine ne "arm64e")  ||
+                     ($C{ARCH} eq "arm64"    && $machine !~ /^arm64/)  ||
+                     ($C{ARCH} eq "armv7k"   && $machine ne "armv7k")  ||
+                     ($C{ARCH} eq "arm64_32" && $machine eq "armv7k"));
+                if ($skipconfig) {
+                    print "note: skipping configuration $C{NAME}\n";
+                    print "note:   because test arch $C{ARCH} is not " .
+                        "supported on device arch $machine\n";
+                    $testcount = 0;
+                }
             }
         }
 
-        foreach my $test (@builttests) {
-            print "\nRUN $test\n"  if ($VERBOSE);
-            
-            if ($ALL_TESTS{$test})
-            {
-                if (!run_simple(\%C, $test)) {
-                    $failcount++;
+        if (!$skipconfig) {
+            foreach my $test (@builttests) {
+                print "\nRUN $test\n"  if ($VERBOSE);
+
+                if ($ALL_TESTS{$test}) {
+                    if (!run_simple(\%C, $test)) {
+                        $failcount++;
+                    }
+                } else {
+                    die "No test named '$test'\n";
                 }
-            } else {
-                die "No test named '$test'\n";
             }
         }
     }
     
-    return ($testcount, $failcount);
+    return ($testcount, $failcount, $skipconfig);
 }
 
 
@@ -1385,19 +1605,14 @@ sub getint {
 }
 
 
-# main
-my %args;
-
-
-my $default_arch = (`/usr/sbin/sysctl hw.optional.x86_64` eq "hw.optional.x86_64: 1\n") ? "x86_64" : "i386";
+my $default_arch = "x86_64";
 $args{ARCH} = getargs("ARCH", 0);
 $args{ARCH} = getargs("ARCHS", $default_arch)  if !@{$args{ARCH}}[0];
 
 $args{OSVERSION} = getargs("OS", "macosx-default-default");
 
 $args{MEM} = getargs("MEM", "mrc");
-$args{LANGUAGE} = [ map { lc($_) } @{getargs("LANGUAGE", "objective-c,swift")} ];
-$args{STDLIB} = getargs("STDLIB", "libc++");
+$args{LANGUAGE} = [ map { lc($_) } @{getargs("LANGUAGE", "objective-c")} ];
 
 $args{CC} = getargs("CC", "clang");
 
@@ -1416,11 +1631,18 @@ $args{CC} = getargs("CC", "clang");
 $BUILD = getbool("BUILD", 1);
 $RUN = getbool("RUN", 1);
 $VERBOSE = getint("VERBOSE", 0);
+$BATS = getbool("BATS", 0);
+$BUILDDIR = getarg("BUILDDIR", $BATS ? $BATSBASE : $LOCALBASE);
 
 my $root = getarg("ROOT", "");
 $root =~ s#/*$##;
 
 my @tests = gettests();
+
+if ($BUILD) {
+    rm_rf_verbose "$DSTROOT$BUILDDIR";
+    rm_rf_verbose "$OBJROOT$BUILDDIR";
+}
 
 print "note: -----\n";
 print "note: testing root '$root'\n";
@@ -1434,15 +1656,11 @@ for my $configref (@configs) {
     print "note: configuration $configname\n";
 }
 
-if ($BUILD) {
-    `rm -rf '$BUILDDIR'`;
-    mkdir "$BUILDDIR" || die;
-}
-
 my $failed = 0;
 
 my $testconfigs = @configs;
 my $failconfigs = 0;
+my $skipconfigs = 0;
 my $testcount = 0;
 my $failcount = 0;
 for my $configref (@configs) {
@@ -1450,17 +1668,19 @@ for my $configref (@configs) {
     print "note: -----\n";
     print "note: \nnote: $configname\nnote: \n";
 
-    (my $t, my $f) = eval { run_one_config($configref, @tests); };
+    (my $t, my $f, my $skipconfig) = 
+        eval { build_and_run_one_config($configref, @tests); };
+    $skipconfigs += $skipconfig;
     if ($@) {
         chomp $@;
-        print "${red}FAIL: $configname${nocolor}\n";
-        print "${red}FAIL: $@${nocolor}\n";
+        colorprint $red, "FAIL: $configname";
+        colorprint $red, "FAIL: $@";
         $failconfigs++;
     } else {
         my $color = ($f ? $red : "");
         print "note:\n";
-        print "${color}note: $configname$nocolor\n";
-        print "${color}note: $t tests, $f failures$nocolor\n";
+        colorprint $color, "note: $configname\n";
+        colorprint $color, "note: $t tests, $f failures";
         $testcount += $t;
         $failcount += $f;
         $failconfigs++ if ($f);
@@ -1469,9 +1689,27 @@ for my $configref (@configs) {
 
 print "note: -----\n";
 my $color = ($failconfigs ? $red : "");
-print "${color}note: $testconfigs configurations, $failconfigs with failures$nocolor\n";
-print "${color}note: $testcount tests, $failcount failures$nocolor\n";
+colorprint $color, "note: $testconfigs configurations, " . 
+    "$failconfigs with failures, $skipconfigs skipped";
+colorprint $color, "note: $testcount tests, $failcount failures";
 
 $failed = ($failconfigs ? 1 : 0);
+
+
+if ($BUILD && $BATS && !$failed) {
+    # Collect BATS execution instructions for all tests.
+    # Each BATS "test" is all configurations together of one of our tests.
+    for my $testname (@tests) {
+        append_bats_test($testname);
+    }
+
+    # Write the BATS plist to disk.
+    my $json = encode_json(\%bats_plist);
+    my $filename = "$DSTROOT$BATSBASE/objc4.plist";
+    print "note: writing BATS config to $filename\n";
+    open(my $file, '>', $filename);
+    print $file $json;
+    close $file;
+}
 
 exit ($failed ? 1 : 0);

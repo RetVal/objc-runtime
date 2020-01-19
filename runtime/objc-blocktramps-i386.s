@@ -32,20 +32,21 @@
 
 .align PAGE_SHIFT
 __objc_blockTrampolineImpl:
-    popl %eax
-    andl $0xFFFFFFF8, %eax
-    subl $ 2*PAGE_SIZE, %eax
-    movl 4(%esp), %ecx // self -> ecx
-    movl %ecx, 8(%esp) // ecx -> _cmd
-    movl (%eax), %ecx // blockPtr -> ecx
-    movl %ecx, 4(%esp) // ecx -> self
-    jmp  *12(%ecx) // tail to block->invoke
+    movl (%esp), %eax  // return address pushed by trampoline
+    //   4(%esp) is return address pushed by the call site
+    movl 8(%esp), %ecx // self -> ecx
+    movl %ecx, 12(%esp) // ecx -> _cmd
+    movl -2*PAGE_SIZE-5(%eax), %ecx // block object pointer -> ecx
+                       // trampoline is -5 bytes from the return address
+                       // data is -2 pages from the trampoline
+    movl %ecx, 8(%esp) // ecx -> self
+    ret                // back to TrampolineEntry to preserve CPU's return stack
 
 .macro TrampolineEntry
-    call __objc_blockTrampolineImpl
-    nop
-    nop
-    nop
+    // This trampoline is 8 bytes long.
+    // This callq is 5 bytes long.
+    calll __objc_blockTrampolineImpl
+    jmp  *12(%ecx)     // tail call block->invoke
 .endmacro
 
 .align 5
@@ -568,20 +569,22 @@ __objc_blockTrampolineLast:
 
 .align PAGE_SHIFT
 __objc_blockTrampolineImpl_stret:
-    popl %eax
-    andl $0xFFFFFFF8, %eax
-    subl $ 3*PAGE_SIZE, %eax
-    movl 8(%esp), %ecx // self -> ecx
-    movl %ecx, 12(%esp) // ecx -> _cmd
-    movl (%eax), %ecx // blockPtr -> ecx
-    movl %ecx, 8(%esp) // ecx -> self
-    jmp  *12(%ecx) // tail to block->invoke
+    movl (%esp), %eax  // return address pushed by trampoline
+    //   4(%esp) is return address pushed by the call site
+    //   8(%esp) is struct-return address
+    movl 12(%esp), %ecx // self -> ecx
+    movl %ecx, 16(%esp) // ecx -> _cmd
+    movl -3*PAGE_SIZE-5(%eax), %ecx // block object pointer -> ecx
+                       // trampoline is -5 bytes from the return address
+                       // data is -3 pages from the trampoline
+    movl %ecx, 12(%esp) // ecx -> self
+    ret
 
 .macro TrampolineEntry_stret
+    // This trampoline is 8 bytes long.
+    // This callq is 5 bytes long.
     call __objc_blockTrampolineImpl_stret
-    nop
-    nop
-    nop
+    jmp  *12(%ecx) // tail to block->invoke
 .endmacro
 
 .align 5

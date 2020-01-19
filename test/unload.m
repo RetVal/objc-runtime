@@ -4,8 +4,16 @@
 TEST_BUILD
     $C{COMPILE}   $DIR/unload4.m -o unload4.dylib -dynamiclib
     $C{COMPILE_C} $DIR/unload3.c -o unload3.dylib -dynamiclib
-    $C{COMPILE}   $DIR/unload2.m -o unload2.bundle -bundle
-    $C{COMPILE}   $DIR/unload.m -o unload.out
+    $C{COMPILE}   $DIR/unload2.m -o unload2.bundle -bundle $C{FORCE_LOAD_ARCLITE}
+    $C{COMPILE}   $DIR/unload.m -o unload.exe -framework Foundation
+END
+*/
+
+/*
+i386 Mac doesn't have libarclite
+TEST_BUILD_OUTPUT
+ld: warning: ignoring file .* which is not the architecture being linked \(i386\).*
+OR
 END
  */
 
@@ -104,7 +112,9 @@ void cycle(void)
     testassert(err == 0);
     err = dlclose(bundle);
     testassert(err == -1);  // already closed
-    
+
+    _objc_flush_caches(nil);
+
     testassert(objc_getClass("SmallClass") == NULL);
     testassert(objc_getClass("BigClass") == NULL);
 
@@ -127,9 +137,6 @@ void cycle(void)
 
 int main()
 {
-    // fixme object_dispose() not aggressive enough?
-    if (objc_collectingEnabled()) succeed(__FILE__);
-
     objc_setForwardHandler((void*)&forward_handler, (void*)&forward_handler);
 
 #if defined(__arm__)  ||  defined(__arm64__)
@@ -163,8 +170,6 @@ int main()
     testassert(dylib);
     err = dlclose(dylib);
     testassert(err == 0);
-    err = dlclose(dylib);
-    testassert(err == 0);   // dlopen from libobjc itself
     err = dlclose(dylib);
     testassert(err == -1);  // already closed
 

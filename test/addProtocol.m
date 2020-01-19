@@ -1,4 +1,12 @@
 /*
+TEST_CFLAGS -framework Foundation
+TEST_BUILD_OUTPUT
+.*addProtocol.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\](\n.* note: expanded from macro 'testassert')?
+.*addProtocol.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\](\n.* note: expanded from macro 'testassert')?
+.*addProtocol.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\](\n.* note: expanded from macro 'testassert')?
+.*addProtocol.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\](\n.* note: expanded from macro 'testassert')?
+.*addProtocol.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\](\n.* note: expanded from macro 'testassert')?
+END
 TEST_RUN_OUTPUT
 objc\[\d+\]: protocol_addProtocol: added protocol 'EmptyProto' is still under construction!
 objc\[\d+\]: objc_registerProtocol: protocol 'Proto1' was already registered!
@@ -14,6 +22,7 @@ END
 #include "test.h"
 
 #include <objc/runtime.h>
+#include <Foundation/Foundation.h>
 
 @protocol SuperProto @end
 @protocol SuperProto2 @end
@@ -30,6 +39,10 @@ void Crash(id self, SEL _cmd)
 
 int main()
 {
+    // old-ABI implementation of [Protocol retain] 
+    // is added by +[NSObject(NSObject) load] in CF.
+    [NSObject class];
+
     Protocol *proto, *proto2;
     Protocol * __unsafe_unretained *protolist;
     struct objc_method_description *desclist;
@@ -87,6 +100,10 @@ int main()
     char *name1 = strdup("ReqInst1");
     char *name2 = strdup("ReqInst2");
     char *name3 = strdup("ReqInst3");
+    char *name4 = strdup("ReqClass0");
+    char *name5 = strdup("ReqClass1");
+    char *name6 = strdup("ReqClass2");
+    char *name7 = strdup("ReqClass3");
     char *attrname = strdup("T");
     char *attrvalue = strdup("i");
     objc_property_attribute_t attrs[] = {{attrname, attrvalue}};
@@ -95,6 +112,10 @@ int main()
     protocol_addProperty(proto, name1, attrs, attrcount, YES, YES);
     protocol_addProperty(proto, name2, attrs, attrcount, YES, YES);
     protocol_addProperty(proto, name3, attrs, attrcount, YES, YES);
+    protocol_addProperty(proto, name4, attrs, attrcount, YES, NO);
+    protocol_addProperty(proto, name5, attrs, attrcount, YES, NO);
+    protocol_addProperty(proto, name6, attrs, attrcount, YES, NO);
+    protocol_addProperty(proto, name7, attrs, attrcount, YES, NO);
 
     objc_registerProtocol(proto);
     testassert(0 == strcmp(protocol_getName(proto), "Proto1"));
@@ -145,9 +166,16 @@ int main()
     strcpy(name1, "XXXXXXXX");  // name is copied
     strcpy(name2, "XXXXXXXX");  // name is copied
     strcpy(name3, "XXXXXXXX");  // name is copied
+    strcpy(name4, "XXXXXXXXX");  // name is copied
+    strcpy(name5, "XXXXXXXXX");  // name is copied
+    strcpy(name6, "XXXXXXXXX");  // name is copied
+    strcpy(name7, "XXXXXXXXX");  // name is copied
     strcpy(attrname, "X");             // description is copied
     strcpy(attrvalue, "X");            // description is copied
     memset(attrs, 'X', sizeof(attrs)); // description is copied
+
+    // instance properties
+    count = 100;
     proplist = protocol_copyPropertyList(proto, &count);
     testassert(proplist);
     testassert(count == 4);
@@ -156,6 +184,22 @@ int main()
     testassert(0 == strcmp(property_getName(proplist[1]), "ReqInst1"));
     testassert(0 == strcmp(property_getName(proplist[2]), "ReqInst2"));
     testassert(0 == strcmp(property_getName(proplist[3]), "ReqInst3"));
+    testassert(0 == strcmp(property_getAttributes(proplist[0]), "Ti"));
+    testassert(0 == strcmp(property_getAttributes(proplist[1]), "Ti"));
+    testassert(0 == strcmp(property_getAttributes(proplist[2]), "Ti"));
+    testassert(0 == strcmp(property_getAttributes(proplist[3]), "Ti"));
+    free(proplist);
+
+    // class properties
+    count = 100;
+    proplist = protocol_copyPropertyList2(proto, &count, YES, NO);
+    testassert(proplist);
+    testassert(count == 4);
+    // note this order is not required
+    testassert(0 == strcmp(property_getName(proplist[0]), "ReqClass0"));
+    testassert(0 == strcmp(property_getName(proplist[1]), "ReqClass1"));
+    testassert(0 == strcmp(property_getName(proplist[2]), "ReqClass2"));
+    testassert(0 == strcmp(property_getName(proplist[3]), "ReqClass3"));
     testassert(0 == strcmp(property_getAttributes(proplist[0]), "Ti"));
     testassert(0 == strcmp(property_getAttributes(proplist[1]), "Ti"));
     testassert(0 == strcmp(property_getAttributes(proplist[2]), "Ti"));
@@ -202,8 +246,8 @@ int main()
 
     // NULL protocols ignored
 
-    protocol_addProtocol((Protocol *)objc_unretainedObject((void*)1), NULL);
-    protocol_addProtocol(NULL, (Protocol *)objc_unretainedObject((void*)1));
+    protocol_addProtocol((__bridge Protocol *)((void*)1), NULL);
+    protocol_addProtocol(NULL, (__bridge Protocol *)((void*)1));
     protocol_addProtocol(NULL, NULL);
     protocol_addMethodDescription(NULL, @selector(foo), "", YES, YES);
 

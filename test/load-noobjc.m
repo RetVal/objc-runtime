@@ -1,23 +1,12 @@
 /*
 TEST_BUILD
-    $C{COMPILE} $DIR/load-noobjc.m -o load-noobjc.out
-    $C{COMPILE} $DIR/load-noobjc2.m -o libload-noobjc2.dylib -bundle -bundle_loader load-noobjc.out
-    $C{COMPILE} $DIR/load-noobjc3.m -o libload-noobjc3.dylib -bundle -bundle_loader load-noobjc.out
+    $C{COMPILE} $DIR/load-noobjc.m -o load-noobjc.exe
+    $C{COMPILE} $DIR/load-noobjc2.m -o libload-noobjc2.dylib -bundle -bundle_loader load-noobjc.exe
+    $C{COMPILE} $DIR/load-noobjc3.m -o libload-noobjc3.dylib -bundle -bundle_loader load-noobjc.exe
 END
 */
 
 #include "test.h"
-
-#if !__OBJC2__
-// old runtime can't fix this deadlock
-
-int main()
-{
-    succeed(__FILE__);
-}
-
-#else
-
 #include <dlfcn.h>
 
 int state = 0;
@@ -25,7 +14,6 @@ semaphore_t go;
 
 void *thread(void *arg __unused)
 {
-    objc_registerThreadWithCollector();
     dlopen("libload-noobjc2.dylib", RTLD_LAZY);
     fail("dlopen should not have returned");
 }
@@ -48,5 +36,3 @@ int main()
 
     succeed(__FILE__);
 }
-
-#endif

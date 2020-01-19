@@ -3,10 +3,6 @@
 #include "test.h"
 #include "testroot.i"
 #include <objc/runtime.h>
-#ifndef OBJC_NO_GC
-#include <objc/objc-auto.h>
-#include <auto_zone.h>
-#endif
 
 static int state;
 
@@ -66,13 +62,6 @@ int main()
 
     cls = [Super class];
     clone = objc_duplicateClass(cls, "Super_copy", 0);
-#ifndef OBJC_NO_GC
-    if (objc_collectingEnabled()) {
-        testassert(auto_zone_size(objc_collectableZone(), objc_unretainedPointer(clone)));
-        // objc_duplicateClass() doesn't duplicate the metaclass
-        // no: testassert(auto_zone_size(objc_collectableZone(), clone->isa));
-    }
-#endif
 
     testassert(clone != cls);
     testassert(object_getClass(clone) == object_getClass(cls));
@@ -81,9 +70,6 @@ int main()
     testassert(class_isMetaClass(clone) == class_isMetaClass(cls));
     testassert(class_getIvarLayout(clone) == class_getIvarLayout(cls));
     testassert(class_getWeakIvarLayout(clone) == class_getWeakIvarLayout(cls));
-#if !__OBJC2__
-    testassert((clone->info & (CLS_CLASS|CLS_META)) == (cls->info & (CLS_CLASS|CLS_META)));
-#endif
 
     // Check method list
 

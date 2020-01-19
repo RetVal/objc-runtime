@@ -12,9 +12,6 @@
 
 int main()
 {
-#if __OBJC2__
     testassert(gdb_class_getClass([Foo class]) == [Foo class]);
-#endif
-
     succeed(__FILE__);
 }

@@ -248,6 +248,11 @@ struct objc_class : objc_object {
     void setHasDefaultAWZ() { }
     void printCustomAWZ(bool) { }
 
+    bool forbidsAssociatedObjects() {
+        // Old runtime doesn't support forbidding associated objects.
+        return false;
+    }
+    
     bool instancesHaveAssociatedObjects() {
         return info & CLS_INSTANCES_HAVE_ASSOCIATED_OBJECTS;
     }

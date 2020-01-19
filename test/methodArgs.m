@@ -1,4 +1,24 @@
-// TEST_CFLAGS -Wno-deprecated-declarations
+/*
+TEST_CFLAGS -Wno-deprecated-declarations
+TEST_BUILD_OUTPUT
+.*methodArgs.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\](\n.* note: expanded from macro 'testassert')?
+.*methodArgs.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\](\n.* note: expanded from macro 'testassert')?
+.*methodArgs.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\](\n.* note: expanded from macro 'testassert')?
+.*methodArgs.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\](\n.* note: expanded from macro 'testassert')?
+.*methodArgs.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\](\n.* note: expanded from macro 'testassert')?
+.*methodArgs.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\]
+.*methodArgs.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\]
+.*methodArgs.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\]
+.*methodArgs.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\]
+.*methodArgs.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\]
+.*methodArgs.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\]
+.*methodArgs.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\]
+.*methodArgs.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\]
+.*methodArgs.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\]
+.*methodArgs.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\]
+.*methodArgs.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\]
+END
+*/
 
 #include "test.h"
 #include "testroot.i"
@@ -22,9 +42,6 @@ int main()
     testassert(m);
 
     testassert(method_getNumberOfArguments(m) == 4);
-#if !__OBJC2__
-    testassert(method_getSizeOfArguments(m) == 16);
-#endif
 
     arg = method_copyArgumentType(m, 0);
     testassert(arg);
@@ -123,9 +140,6 @@ int main()
 #endif
 
     testassert(0 == method_getNumberOfArguments(NULL));
-#if !__OBJC2__
-    testassert(0 == method_getSizeOfArguments(NULL));
-#endif
     testassert(NULL == method_copyArgumentType(NULL, 10));
     testassert(NULL == method_copyReturnType(NULL));
     testassert(NULL == method_getDescription(NULL));

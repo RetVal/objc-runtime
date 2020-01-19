@@ -3,7 +3,7 @@
 /*
 TEST_RUN_OUTPUT
 objc\[\d+\]: Cannot form weak reference to instance \(0x[0-9a-f]+\) of class Crash. It is possible that this object was over-released, or is in the process of deallocation.
-CRASHED: SIG(ILL|TRAP)
+objc\[\d+\]: HALTED
 END
 */
 

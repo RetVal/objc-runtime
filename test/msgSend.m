@@ -1,23 +1,22 @@
-// TEST_CFLAGS -Wno-unused-parameter -Wundeclared-selector
+/*
+asm-placeholder.exe is used below to disassemble objc_msgSend
+
+TEST_BUILD
+    $C{COMPILE} -x assembler $DIR/asm-placeholder.s -o asm-placeholder.exe
+    $C{COMPILE} $DIR/msgSend.m -o msgSend.exe -Wno-unused-parameter -Wundeclared-selector -D__DARWIN_OPAQUE_ARM_THREAD_STATE64=1
+END
+*/
 
 #include "test.h"
 #include "testroot.i"
 
-#if __cplusplus  &&  !__clang__
-
-int main()
-{
-    // llvm-g++ is confused by @selector(foo::) and will never be fixed
-    succeed(__FILE__);
-}
-
-#else
-
+#include <sys/stat.h>
 #include <objc/objc.h>
 #include <objc/runtime.h>
 #include <objc/objc-internal.h>
 #include <objc/objc-abi.h>
 #include <simd/simd.h>
+#include <mach-o/loader.h>
 
 // rdar://21694990 simd.h should have a vector_equal(a, b) function
 static bool vector_equal(vector_ulong2 lhs, vector_ulong2 rhs) {
@@ -31,6 +30,8 @@ static bool vector_equal(vector_ulong2 lhs, vector_ulong2 rhs) {
 #   define objc_msgSendSuper2_stret objc_msgSendSuper2
 #   define objc_msgSend_stret_debug objc_msgSend_debug
 #   define objc_msgSendSuper2_stret_debug objc_msgSendSuper2_debug
+#   define objc_msgLookup_stret objc_msgLookup
+#   define objc_msgLookupSuper2_stret objc_msgLookupSuper2
 #   define method_invoke_stret method_invoke
 #else
 #   define SUPPORT_STRET 1
@@ -73,14 +74,6 @@ vector_ulong2 (*vecmsg0)(id, SEL) __attribute__((unused));
 do { \
     testassert(self == SELF); \
     testassert(_cmd == sel_registerName(#sel "::::::::::::::::::::::::::::::::::::"));\
-    testassert(vector_all(v1 == 1)); \
-    testassert(vector_all(v2 == 2)); \
-    testassert(vector_all(v3 == 3)); \
-    testassert(vector_all(v4 == 4)); \
-    testassert(vector_all(v5 == 5)); \
-    testassert(vector_all(v6 == 6)); \
-    testassert(vector_all(v7 == 7)); \
-    testassert(vector_all(v8 == 8)); \
     testassert(i1 == 1); \
     testassert(i2 == 2); \
     testassert(i3 == 3); \
@@ -109,6 +102,14 @@ do { \
     testassert(f13 == 13.0); \
     testassert(f14 == 14.0); \
     testassert(f15 == 15.0); \
+    testassert(vector_all(v1 == 1)); \
+    testassert(vector_all(v2 == 2)); \
+    testassert(vector_all(v3 == 3)); \
+    testassert(vector_all(v4 == 4)); \
+    testassert(vector_all(v5 == 5)); \
+    testassert(vector_all(v6 == 6)); \
+    testassert(vector_all(v7 == 7)); \
+    testassert(vector_all(v8 == 8)); \
 } while (0) 
 
 #define CHECK_ARGS_NOARG(sel) \
@@ -379,10 +380,6 @@ asm("\n .text"
     "\n vmov.i32 q1, #0"
     "\n vmov.i32 q2, #0"
     "\n vmov.i32 q3, #0"
-    "\n vmov.i32 q4, #0"
-    "\n vmov.i32 q5, #0"
-    "\n vmov.i32 q6, #0"
-    "\n vmov.i32 q7, #0"
     "\n vmov.i32 q8, #0"
     "\n vmov.i32 q9, #0"
     "\n vmov.i32 q10, #0"
@@ -517,45 +514,11 @@ asm("\n .text"
 }
 
 
--(void)voidret_nop
-{
-    return;
-}
-
--(void)voidret_nop2
-{
-    return;
-}
-
--(id)idret_nop
-{
-    return ID_RESULT;
-}
-
--(long long)llret_nop
-{
-    return LL_RESULT;
-}
-
 -(struct stret)stret_nop
 {
     return STRET_RESULT;
 }
 
--(double)fpret_nop
-{
-    return FP_RESULT;
-}
-
--(long double)lfpret_nop
-{
-    return LFP_RESULT;
-}
-
--(vector_ulong2)vecret_nop
-{
-    return VEC_RESULT;
-}
 
 #define STRET_IMP(n)                            \
 +(struct stret_##n)stret_##n##_zero             \
@@ -830,7 +793,18 @@ STRET_IMP(d9)
 
 +(void)initialize
 {
-    _objc_registerTaggedPointerClass(OBJC_TAG_7, self);
+    _objc_registerTaggedPointerClass(OBJC_TAG_1, self);
+}
+
+@end
+
+@interface ExtTaggedSub : Sub @end
+
+@implementation ExtTaggedSub : Sub
+
++(void)initialize
+{
+    _objc_registerTaggedPointerClass(OBJC_TAG_First52BitPayload, self);
 }
 
 @end
@@ -842,12 +816,16 @@ STRET_IMP(d9)
 
 #if TARGET_OS_WIN32
 // unimplemented on this platform
-#elif !__OBJC2__
-// 32-bit Mac doesn't use DWARF unwind
-#elif TARGET_OS_IPHONE && __arm__
-// 32-bit iOS device doesn't use DWARF unwind
+#define NO_DWARF_REASON "(windows)"
+
+#elif TARGET_OS_WATCH
+// fixme unimplemented - ucontext not passed to signal handlers
+#define NO_DWARF_REASON "(watchOS)"
+
 #elif __has_feature(objc_arc)
 // ARC's extra RR calls hit the traps at the wrong times
+#define NO_DWARF_REASON "(ARC)"
+
 #else
 
 #define TEST_DWARF 1
@@ -867,9 +845,6 @@ STRET_IMP(d9)
 #include <sys/mman.h>
 #include <libunwind.h>
 
-#define UNW_STEP_SUCCESS 1
-#define UNW_STEP_END     0
-
 bool caught = false;
 uintptr_t clobbered;
 
@@ -880,10 +855,10 @@ __END_DECLS
 
 #if __x86_64__
 
-#define OTOOL "/usr/bin/xcrun otool -arch x86_64 "
-
 typedef uint8_t insn_t;
-#define BREAK_INSN ((insn_t)0xcc)  // int3
+typedef insn_t clobbered_insn_t;
+#define BREAK_INSN ((insn_t)0x06)  // undefined
+#define BREAK_SIGNAL SIGILL
 
 uintptr_t r12 = 0;
 uintptr_t r13 = 0;
@@ -905,7 +880,7 @@ void handle_exception(x86_thread_state64_t *state)
     testassert(!err);
 
     step = unw_step(&curs);
-    testassert(step == UNW_STEP_SUCCESS);
+    testassert(step > 0);
 
     err = unw_get_reg(&curs, UNW_X86_64_R12, &reg);
     testassert(!err);
@@ -954,15 +929,15 @@ void handle_exception(x86_thread_state64_t *state)
 }
 
 
-void sigtrap(int sig, siginfo_t *info, void *cc)
+void break_handler(int sig, siginfo_t *info, void *cc)
 {
     ucontext_t *uc = (ucontext_t *)cc;
     mcontext_t mc = (mcontext_t)uc->uc_mcontext;
 
     testprintf("    handled\n");
 
-    testassert(sig == SIGTRAP);
-    testassert((uintptr_t)info->si_addr-1 == clobbered);
+    testassert(sig == BREAK_SIGNAL);
+    testassert((uintptr_t)info->si_addr == clobbered);
 
     handle_exception(&mc->__ss);
     // handle_exception changed register state for continuation
@@ -1011,10 +986,10 @@ __asm__(
 
 #elif __i386__
 
-#define OTOOL "/usr/bin/xcrun otool -arch i386 "
-
 typedef uint8_t insn_t;
+typedef insn_t clobbered_insn_t;
 #define BREAK_INSN ((insn_t)0xcc)  // int3
+#define BREAK_SIGNAL SIGTRAP
 
 uintptr_t eip = 0;
 uintptr_t esp = 0;
@@ -1035,7 +1010,7 @@ void handle_exception(i386_thread_state_t *state)
     testassert(!err);
 
     step = unw_step(&curs);
-    testassert(step == UNW_STEP_SUCCESS);
+    testassert(step > 0);
 
     err = unw_get_reg(&curs, UNW_REG_IP, &reg);
     testassert(!err);
@@ -1074,14 +1049,14 @@ void handle_exception(i386_thread_state_t *state)
 }
 
 
-void sigtrap(int sig, siginfo_t *info, void *cc)
+void break_handler(int sig, siginfo_t *info, void *cc)
 {
     ucontext_t *uc = (ucontext_t *)cc;
     mcontext_t mc = (mcontext_t)uc->uc_mcontext;
 
     testprintf("    handled\n");
 
-    testassert(sig == SIGTRAP);
+    testassert(sig == BREAK_SIGNAL);
     testassert((uintptr_t)info->si_addr-1 == clobbered);
 
     handle_exception(&mc->__ss);
@@ -1134,11 +1109,10 @@ __asm__(
 
 #include <sys/ucontext.h>
 
-// runs on iOS device, no xcrun command present
-#define OTOOL "/usr/bin/otool -arch arm64 "
-
 typedef uint32_t insn_t;
+typedef insn_t clobbered_insn_t;
 #define BREAK_INSN ((insn_t)0xd4200020)  // brk #1
+#define BREAK_SIGNAL SIGTRAP
 
 uintptr_t x19 = 0;
 uintptr_t x20 = 0;
@@ -1161,11 +1135,29 @@ void handle_exception(arm_thread_state64_t *state)
     int err;
     int step;
 
-    err = unw_init_local(&curs, (unw_context_t *)state);
+    // libunwind layout differs from mcontext layout
+    // GPRs are the same but vector registers are not
+    unw_context_t unwstate;
+    unw_getcontext(&unwstate);
+    memcpy(&unwstate, state, sizeof(*state));
+
+    // libunwind and xnu sign some pointers differently
+    // xnu: not signed (fixme this may change?)
+    // libunwind: PC and LR both signed with return address key and SP
+    void **pcp = &((arm_thread_state64_t *)&unwstate)->__opaque_pc;
+    *pcp = ptrauth_sign_unauthenticated((void*)__darwin_arm_thread_state64_get_pc(*state),
+                                        ptrauth_key_return_address,
+                                        (ptrauth_extra_data_t)__darwin_arm_thread_state64_get_sp(*state));
+    void **lrp = &((arm_thread_state64_t *)&unwstate)->__opaque_lr;
+    *lrp = ptrauth_sign_unauthenticated((void*)__darwin_arm_thread_state64_get_lr(*state),
+                                        ptrauth_key_return_address,
+                                        (ptrauth_extra_data_t)__darwin_arm_thread_state64_get_sp(*state));
+
+    err = unw_init_local(&curs, &unwstate);
     testassert(!err);
 
     step = unw_step(&curs);
-    testassert(step == UNW_STEP_SUCCESS);
+    testassert(step > 0);
 
     err = unw_get_reg(&curs, UNW_ARM64_X19, &reg);
     testassert(!err);
@@ -1217,6 +1209,8 @@ void handle_exception(arm_thread_state64_t *state)
 
     err = unw_get_reg(&curs, UNW_REG_IP, &reg);
     testassert(!err);
+    // libunwind's return is signed but our value is not
+    reg = (uintptr_t)ptrauth_strip((void *)reg, ptrauth_key_return_address);
     testassert(reg == pc);
 
     // libunwind restores PC into LR and doesn't track LR
@@ -1224,10 +1218,10 @@ void handle_exception(arm_thread_state64_t *state)
     // testassert(!err);
     // testassert(reg == lr);
 
-    // set thread state to unwound state
+    // set signal handler's thread state to unwound state
     state->__x[19] = x19;
     state->__x[20] = x20;
-    state->__x[20] = x21;
+    state->__x[21] = x21;
     state->__x[22] = x22;
     state->__x[23] = x23;
     state->__x[24] = x24;
@@ -1235,23 +1229,23 @@ void handle_exception(arm_thread_state64_t *state)
     state->__x[26] = x26;
     state->__x[27] = x27;
     state->__x[28] = x28;
-    state->__fp = fp;
-    state->__lr = pc;  // libunwind restores PC into LR
-    state->__sp = sp;
-    state->__pc = pc;
+    state->__opaque_fp = (void *)fp;
+    state->__opaque_lr = (void *)pc;  // libunwind restores PC into LR
+    state->__opaque_sp = (void *)sp;
+    state->__opaque_pc = (void *)pc;
 
     caught = true;
 }
 
 
-void sigtrap(int sig, siginfo_t *info, void *cc)
+void break_handler(int sig, siginfo_t *info, void *cc)
 {
     ucontext_t *uc = (ucontext_t *)cc;
     struct __darwin_mcontext64 *mc = (struct __darwin_mcontext64 *)uc->uc_mcontext;
 
     testprintf("    handled\n");
 
-    testassert(sig == SIGTRAP);
+    testassert(sig == BREAK_SIGNAL);
     testassert((uintptr_t)info->si_addr == clobbered);
 
     handle_exception(&mc->__ss);
@@ -1297,6 +1291,167 @@ __asm__(
 
 
 // arm64
+#elif __arm__
+
+#include <sys/ucontext.h>
+
+typedef uint16_t insn_t;
+typedef struct {
+    insn_t first;
+    insn_t second;
+    bool thirty_two;
+} clobbered_insn_t;
+#define BREAK_INSN ((insn_t)0xdefe)  // trap
+#define BREAK_SIGNAL SIGILL
+#define BREAK_SIGNAL2 SIGTRAP
+
+uintptr_t r4 = 0;
+uintptr_t r5 = 0;
+uintptr_t r6 = 0;
+uintptr_t r7 = 0;
+uintptr_t r8 = 0;
+uintptr_t r10 = 0;
+uintptr_t r11 = 0;
+uintptr_t sp = 0;
+uintptr_t pc = 0;
+
+void handle_exception(arm_thread_state_t *state)
+{
+    // No unwind tables on this architecture so no libunwind checks.
+    // We run the test anyway to verify instruction-level coverage.
+
+    // set thread state to unwound state
+    state->__r[4] = r4;
+    state->__r[5] = r5;
+    state->__r[6] = r6;
+    state->__r[7] = r7;
+    state->__r[8] = r8;
+    state->__r[10] = r10;
+    state->__r[11] = r11;
+    state->__sp = sp;
+    state->__pc = pc;
+    // clear IT... bits so caller doesn't act on them
+    state->__cpsr &= ~0x0600fc00;  
+
+    caught = true;
+}
+
+
+void break_handler(int sig, siginfo_t *info, void *cc)
+{
+    ucontext_t *uc = (ucontext_t *)cc;
+    struct __darwin_mcontext32 *mc = (struct __darwin_mcontext32 *)uc->uc_mcontext;
+
+    testprintf("    handled\n");
+
+    testassert(sig == BREAK_SIGNAL  ||  sig == BREAK_SIGNAL2);
+    testassert((uintptr_t)info->si_addr == clobbered);
+
+    handle_exception(&mc->__ss);
+    // handle_exception changed register state for continuation
+}
+
+
+__asm__(
+"\n  .text"
+"\n  .syntax unified"
+"\n  .code 16"
+"\n  .align 5"
+"\n  .globl _callit"
+"\n  .thumb_func"
+"\n  _callit:"
+// save sp and return address to variables
+"\n      movw  r12, :lower16:(_sp-1f-4)"
+"\n      movt  r12, :upper16:(_sp-1f-4)"
+"\n  1:  add   r12, pc"
+"\n      str   sp, [r12]"
+"\n      movw  r12, :lower16:(_pc-1f-4)"
+"\n      movt  r12, :upper16:(_pc-1f-4)"
+"\n  1:  add   r12, pc"
+"\n      str   lr, [r12]"
+// save other non-volatile registers to variables
+"\n      movw  r12, :lower16:(_r4-1f-4)"
+"\n      movt  r12, :upper16:(_r4-1f-4)"
+"\n  1:  add   r12, pc"
+"\n      str   r4, [r12]"
+"\n      movw  r12, :lower16:(_r5-1f-4)"
+"\n      movt  r12, :upper16:(_r5-1f-4)"
+"\n  1:  add   r12, pc"
+"\n      str   r5, [r12]"
+"\n      movw  r12, :lower16:(_r6-1f-4)"
+"\n      movt  r12, :upper16:(_r6-1f-4)"
+"\n  1:  add   r12, pc"
+"\n      str   r6, [r12]"
+"\n      movw  r12, :lower16:(_r7-1f-4)"
+"\n      movt  r12, :upper16:(_r7-1f-4)"
+"\n  1:  add   r12, pc"
+"\n      str   r7, [r12]"
+"\n      movw  r12, :lower16:(_r8-1f-4)"
+"\n      movt  r12, :upper16:(_r8-1f-4)"
+"\n  1:  add   r12, pc"
+"\n      str   r8, [r12]"
+"\n      movw  r12, :lower16:(_r10-1f-4)"
+"\n      movt  r12, :upper16:(_r10-1f-4)"
+"\n  1:  add   r12, pc"
+"\n      str   r10, [r12]"
+"\n      movw  r12, :lower16:(_r11-1f-4)"
+"\n      movt  r12, :upper16:(_r11-1f-4)"
+"\n  1:  add   r12, pc"
+"\n      str   r11, [r12]"
+"\n      bx    r2"
+        );
+
+__asm__(
+"\n  .text"
+"\n  .syntax unified"
+"\n  .code 16"
+"\n  .align 5"
+"\n  .globl _callit_stret"
+"\n  .thumb_func"
+"\n  _callit_stret:"
+// save sp and return address to variables
+"\n      movw  r12, :lower16:(_sp-1f-4)"
+"\n      movt  r12, :upper16:(_sp-1f-4)"
+"\n  1:  add   r12, pc"
+"\n      str   sp, [r12]"
+"\n      movw  r12, :lower16:(_pc-1f-4)"
+"\n      movt  r12, :upper16:(_pc-1f-4)"
+"\n  1:  add   r12, pc"
+"\n      str   lr, [r12]"
+// save other non-volatile registers to variables
+"\n      movw  r12, :lower16:(_r4-1f-4)"
+"\n      movt  r12, :upper16:(_r4-1f-4)"
+"\n  1:  add   r12, pc"
+"\n      str   r4, [r12]"
+"\n      movw  r12, :lower16:(_r5-1f-4)"
+"\n      movt  r12, :upper16:(_r5-1f-4)"
+"\n  1:  add   r12, pc"
+"\n      str   r5, [r12]"
+"\n      movw  r12, :lower16:(_r6-1f-4)"
+"\n      movt  r12, :upper16:(_r6-1f-4)"
+"\n  1:  add   r12, pc"
+"\n      str   r6, [r12]"
+"\n      movw  r12, :lower16:(_r7-1f-4)"
+"\n      movt  r12, :upper16:(_r7-1f-4)"
+"\n  1:  add   r12, pc"
+"\n      str   r7, [r12]"
+"\n      movw  r12, :lower16:(_r8-1f-4)"
+"\n      movt  r12, :upper16:(_r8-1f-4)"
+"\n  1:  add   r12, pc"
+"\n      str   r8, [r12]"
+"\n      movw  r12, :lower16:(_r10-1f-4)"
+"\n      movt  r12, :upper16:(_r10-1f-4)"
+"\n  1:  add   r12, pc"
+"\n      str   r10, [r12]"
+"\n      movw  r12, :lower16:(_r11-1f-4)"
+"\n      movt  r12, :upper16:(_r11-1f-4)"
+"\n  1:  add   r12, pc"
+"\n      str   r11, [r12]"
+"\n      bx    r3"
+        );
+
+
+// arm
 #else
 
 #error unknown architecture
@@ -1304,68 +1459,157 @@ __asm__(
 #endif
 
 
+#if __arm__
+uintptr_t fnaddr(void *fn) { return (uintptr_t)fn & ~(uintptr_t)1; }
+#else
+uintptr_t fnaddr(void *fn) { return (uintptr_t)fn; }
+#endif
+
 insn_t set(uintptr_t dst, insn_t newvalue)
 {
     uintptr_t start = dst & ~(PAGE_MAX_SIZE-1);
-    mprotect((void*)start, PAGE_MAX_SIZE, PROT_READ|PROT_WRITE);
+    int err = mprotect((void*)start, PAGE_MAX_SIZE, PROT_READ|PROT_WRITE);
+    if (err) fail("mprotect(%p, RW-) failed (%d)", start, errno);
     insn_t oldvalue = *(insn_t *)dst;
     *(insn_t *)dst = newvalue;
-    mprotect((void*)start, PAGE_MAX_SIZE, PROT_READ|PROT_EXEC);
+    err = mprotect((void*)start, PAGE_MAX_SIZE, PROT_READ|PROT_EXEC);
+    if (err) fail("mprotect(%p, R-X) failed (%d)", start, errno);
     return oldvalue;
 }
 
-insn_t clobber(void *fn, uintptr_t offset)
+clobbered_insn_t clobber(void *fn, uintptr_t offset)
 {
-    clobbered = (uintptr_t)fn + offset;
-    return set((uintptr_t)fn + offset, BREAK_INSN);
+    clobbered = fnaddr(fn) + offset;
+    insn_t oldInsn = set(fnaddr(fn) + offset, BREAK_INSN);
+#if __arm__
+    // Need to clobber 32-bit Thumb instructions with another 32-bit instruction
+    // to preserve the behavior of IT... blocks.
+    clobbered_insn_t result = {oldInsn, 0, false};
+    if (((oldInsn & 0xf000) == 0xf000)  ||  
+        ((oldInsn & 0xf800) == 0xe800)) 
+    {
+        testprintf("clobbering thumb-32 at offset %zu\n", offset);
+        // Old insn was 32-bit. Clobber all of it.
+        // First unclobber.
+        set(fnaddr(fn) + offset, oldInsn);
+        // f7f0 a0f0 is a "permanently undefined" Thumb-2 instruction.
+        // Clobber the first half last so `clobbered` gets the right value.
+        result.second = set(fnaddr(fn) + offset + 2, 0xa0f0);
+        result.first = set(fnaddr(fn) + offset, 0xf7f0);
+        result.thirty_two = true;
+    }
+    return result;
+#else
+    return oldInsn;
+#endif
 }
 
-void unclobber(void *fn, uintptr_t offset, insn_t oldvalue)
+void unclobber(void *fn, uintptr_t offset, clobbered_insn_t oldvalue)
 {
-    set((uintptr_t)fn + offset, oldvalue);
+#if __arm__
+    if (oldvalue.thirty_two) {
+        set(fnaddr(fn) + offset + 2, oldvalue.second);
+    }
+    set(fnaddr(fn) + offset, oldvalue.first);
+#else
+    set(fnaddr(fn) + offset, oldvalue);
+#endif
 }
 
 
-uintptr_t *getOffsets(void *symbol, const char *symname, uintptr_t *outBase)
+// terminator for the list of instruction offsets
+#define END_OFFSETS ~0UL
+
+// Disassemble instructions symbol..<symbolEnd.
+// Write the offset of each non-NOP instruction start to *offsets..<end.
+// Return the incremented offsets pointer.
+uintptr_t *disassemble(uintptr_t symbol, uintptr_t symbolEnd,
+                       uintptr_t *offsets, uintptr_t *end)
 {
-    uintptr_t *result = (uintptr_t *)malloc(1000 * sizeof(uintptr_t));
-    uintptr_t *end = result + 1000;
-    uintptr_t *p = result;
+    // To disassemble:
+    // 1. Copy asm-placeholder.exe into a temporary file.
+    // 2. Write the instructions into the temp file.
+    // 3. Run llvm-objdump on the temp file.
+    // 4. Parse the llvm-objdump output.
 
-    // find library
-    Dl_info dl;
-    dladdr(symbol, &dl);
+    // copy asm-placeholder.exe into a new temporary file and open it.
+    int placeholder = open("asm-placeholder.exe", O_RDONLY);
+    if (placeholder < 0) {
+        fail("couldn't open asm-placeholder.exe (%d)", errno);
+    }
 
-    // call `otool` on library
-    unsetenv("DYLD_LIBRARY_PATH");
-    unsetenv("DYLD_ROOT_PATH");
-    unsetenv("DYLD_INSERT_LIBRARIES");
-    unsetenv("DYLD_SHARED_REGION");
-    unsetenv("DYLD_SHARED_CACHE_DIR");
-    unsetenv("DYLD_SHARED_CACHE_DONT_VALIDATE");
+    size_t tempdirlen = confstr(_CS_DARWIN_USER_TEMP_DIR, nil, 0);
+    char tempsuffix[] = "objc-test-msgSend-asm-XXXXXX";
+    char *tempname = (char *)malloc(tempdirlen + strlen(tempsuffix));
+    confstr(_CS_DARWIN_USER_TEMP_DIR, tempname, tempdirlen);
+    strcat(tempname, tempsuffix);
+
+    int fd = mkstemp(tempname);
+    if (fd < 0) {
+        fail("couldn't create asm temp file %s (%d)", tempname, errno);
+    }
+    struct stat st;
+    if (fstat(placeholder, &st) < 0) {
+        fail("couldn't stat asm-placeholder.exe (%d)", errno);
+    }
+    char *buf = (char *)malloc(st.st_size);
+    if (pread(placeholder, buf, st.st_size, 0) != st.st_size) {
+        fail("couldn't read asm-placeholder.exe (%d)", errno);
+    }
+    if (pwrite(fd, buf, st.st_size, 0) != st.st_size) {
+        fail("couldn't write asm temp file %s (%d)", tempname, errno);
+    }
+    free(buf);
+    close(placeholder);
+
+    // write code into asm-placeholder.exe
+    // asm-placeholder.exe may have as little as 1024 bytes of space reserved
+    testassert(symbolEnd - symbol < 1024);
+    // text section should be 16KB into asm-placeholder.exe
+    if (pwrite(fd, (void*)symbol, symbolEnd - symbol, 16384) < 0) {
+        fail("couldn't write code into asm temp file %s (%d)", tempname, errno);
+    }
+    close(fd);
+
+    // run `llvm-objdump -disassemble`
+    const char *objdump;
+    if (0 == access("/usr/local/bin/llvm-objdump", F_OK)) {
+        objdump = "/usr/local/bin/llvm-objdump";
+    } else if (0 == access("/usr/bin/llvm-objdump", F_OK)) {
+        objdump = "/usr/bin/llvm-objdump";
+    } else {
+        fail("couldn't find llvm-objdump");
+    }
     char *cmd;
-    asprintf(&cmd, OTOOL "-tv -p _%s %s", 
-             symname, dl.dli_fname);
-    testprintf("%s\n", cmd);
+    asprintf(&cmd, "%s -disassemble %s", objdump, tempname);
     FILE *disa = popen(cmd, "r");
+    if (!disa) {
+        fail("couldn't popen %s", cmd);
+    }
     free(cmd);
-    testassert(disa);
+    free(tempname);
 
-    // read past "_symname:" line
+    // read past "_main:" line
     char *line;
     size_t len;
     while ((line = fgetln(disa, &len))) {
-        if (0 == strncmp(1+line, symname, MIN(len-1, strlen(symname)))) break;
+        testprintf("ASM: %.*s", (int)len, line);
+        if (0 == strncmp(line, "_main:", strlen("_main:"))) break;
     }
 
     // read instructions and save offsets
     char op[128];
     long base = 0;
     long addr;
-    while (2 == fscanf(disa, "%lx%s%*[^\n]\n", &addr, op)) {
+    uintptr_t *p = offsets;
+    // disassembly format:
+    // ADDR:\t ...instruction bytes... \tOPCODE ...etc...\n
+    while (2 == fscanf(disa, "%lx:\t%*[a-fA-F0-9 ]\t%s%*[^\n]\n", &addr, op)) {
         if (base == 0) base = addr;
+        testprintf("ASM: %lx (+%d) ... %s ...\n", addr, addr - base, op);
+        // allow longer nops like Intel nopw and nopl
         if (0 != strncmp(op, "nop", 3)) {
-            testassert(p < end);
+            testassert(offsets < end);
             *p++ = addr - base;
         } else {
             // assume nops are unreached (e.g. alignment padding)
@@ -1373,36 +1617,109 @@ uintptr_t *getOffsets(void *symbol, const char *symname, uintptr_t *outBase)
     }
     pclose(disa);
 
-#if __arm64__
-    // Also add breakpoints in _objc_msgSend_uncached_impcache
-    // (which is the slow path and has a frame to unwind)
-    if (0 != strcmp(symname, "_objc_msgSend_uncached_impcache")) {
-        uintptr_t base2;
-        uintptr_t *more_offsets = getOffsets(symbol, "_objc_msgSend_uncached_impcache", &base2);
-        uintptr_t *q = more_offsets;
-        // Skip prologue because it's imprecisely modeled in compact unwind
-        testassert(*q != ~0UL);
-        q++;
-        testassert(*q != ~0UL);
-        q++;
-        while (*q != ~0UL) *p++ = *q++ + base2 - base;
-        // Skip return because it's imprecisely modeled in compact unwind
-        p--;
-        free(more_offsets);
-    }
-#endif
-
-    testassert(p > result);
-    testassert(p < end);
-    *p = ~0UL;
 #if __x86_64__
     // hack: skip last instruction because libunwind blows up if it's 
     // one byte long and followed by the next function with no NOPs first
-    p[-1] = ~0UL;
+    if (p > offsets) *p-- = END_OFFSETS;
 #endif
-    if (outBase) *outBase = base;
+
+    return p;
+}
+
+
+uintptr_t *getOffsets(const char *symname, uintptr_t *outBase)
+{
+    // Find the start of our function.
+    uintptr_t symbol = (uintptr_t)dlsym(RTLD_NEXT, symname);
+    if (!symbol) return nil;
+#if __has_feature(ptrauth_calls)
+    symbol = (uintptr_t)
+        ptrauth_strip((void*)symbol, ptrauth_key_function_pointer);
+#endif
+
+    if (outBase) *outBase = symbol;
+
+    // Find the end of our function by finding the start
+    // of the next symbol after our target symbol.
+
+    const int insnIncrement =
+#if __arm64__
+        4;
+#elif __arm__
+        2;  // in case of thumb or thumb-2
+#elif __i386__ || __x86_64__
+        1;
+#else
+#error unknown architecture
+#endif
+
+    uintptr_t symbolEnd;
+    Dl_info dli;
+    int ok;
+    for (symbolEnd = symbol + insnIncrement;
+         ((ok = dladdr((void*)symbolEnd, &dli)))  &&  dli.dli_saddr == (void*)symbol;
+         symbolEnd += insnIncrement)
+        ;
+
+    testprintf("found %s at %p..<%p %d %p %s\n",
+               symname, (void*)symbol, (void*)symbolEnd, ok, dli.dli_saddr, dli.dli_sname);
+
+    // Record the offset to each non-NOP instruction.
+    uintptr_t *result = (uintptr_t *)malloc(1000 * sizeof(uintptr_t));
+    uintptr_t *end = result + 1000;
+    uintptr_t *p = result;
+
+    p = disassemble(symbol, symbolEnd, p, end);
+
+    // Also record the offsets in _objc_msgSend_uncached when present
+    // (which is the slow path and has a frame to unwind)
+    if (!strstr(symname, "_uncached")) {
+        const char *uncached_symname = strstr(symname, "stret") 
+            ? "_objc_msgSend_stret_uncached" : "_objc_msgSend_uncached";
+        uintptr_t uncached_symbol;
+        uintptr_t *uncached_offsets =
+            getOffsets(uncached_symname, &uncached_symbol);
+        if (uncached_offsets) {
+            uintptr_t *q = uncached_offsets;
+            // Skip prologue and epilogue of objc_msgSend_uncached
+            // because it's imprecisely modeled in compact unwind
+            int prologueInstructions, epilogueInstructions;
+#if __arm64e__
+            prologueInstructions = 3;
+            epilogueInstructions = 2;
+#elif __arm64__ || __x86_64__ || __i386__ || __arm__
+            prologueInstructions = 2;
+            epilogueInstructions = 1;
+#else
+#error unknown architecture
+#endif
+            // skip past prologue
+            for (int i = 0; i < prologueInstructions; i++) {
+                testassert(*q != END_OFFSETS);
+                q++;
+            }
+
+            // copy instructions
+            while (*q != END_OFFSETS) *p++ = *q++ + uncached_symbol - symbol;
+
+            // rewind past epilogue
+            for (int i = 0; i < epilogueInstructions; i++) {
+                testassert(p > result);
+                p--;
+            }
+
+            free(uncached_offsets);
+        }
+    }
+
+    // Terminate the list of offsets and return.
+    testassert(p > result);
+    testassert(p < end);
+    *p = END_OFFSETS;
+
     return result;
 }
+
 
 void CALLIT(void *o, void *sel_arg, SEL s, void *f, bool stret) __attribute__((noinline));
 void CALLIT(void *o, void *sel_arg, SEL s, void *f, bool stret)
@@ -1440,7 +1757,7 @@ struct stret test_dw_forward_stret(void)
 // sel_arg = arg to pass in sel register (may be message_ref)
 // uncaughtAllowed is the number of acceptable unreachable instructions
 //   (for example, the ones that handle the corrupt-cache-error case)
-void test_dw(const char *name, id sub, id tagged, bool stret, 
+void test_dw(const char *name, id sub, id tagged, id exttagged, bool stret, 
              int uncaughtAllowed)
 {
 
@@ -1485,11 +1802,14 @@ void test_dw(const char *name, id sub, id tagged, bool stret,
         IMP imp = stret ? (IMP)test_dw_forward_stret : (IMP)test_dw_forward;
         Class cls = object_getClass(sub);
         Class tagcls = object_getClass(tagged);
+        Class exttagcls = object_getClass(exttagged);
         class_replaceMethod(cls, sel, imp, "");
         class_replaceMethod(tagcls, sel, imp, "");
+        class_replaceMethod(exttagcls, sel, imp, "");
         for (size_t i = 0; i < sizeof(lotsOfSels)/sizeof(lotsOfSels[0]); i++) {
             class_replaceMethod(cls, lotsOfSels[i], imp, "");
             class_replaceMethod(tagcls, lotsOfSels[i], imp, "");
+            class_replaceMethod(exttagcls, lotsOfSels[i], imp, "");
         }
     }
     
@@ -1510,26 +1830,36 @@ void test_dw(const char *name, id sub, id tagged, bool stret,
     }
 
     void *fn = dlsym(RTLD_DEFAULT, name);
+#if __has_feature(ptrauth_calls)
+    fn = ptrauth_strip(fn, ptrauth_key_function_pointer);
+#endif
     testassert(fn);
 
     // argument substitutions
 
-    void *sub_arg = (void*)objc_unretainedPointer(sub);
-    void *tagged_arg = (void*)objc_unretainedPointer(tagged);
+    void *sub_arg = (__bridge void*)sub;
+    void *tagged_arg = (__bridge void*)tagged;
+    void *exttagged_arg = (__bridge void*)exttagged;
     void *sel_arg = (void*)sel;
 
     struct objc_super sup_st = { sub, object_getClass(sub) };
     struct objc_super tagged_sup_st = { tagged, object_getClass(tagged) };
+    struct objc_super exttagged_sup_st = { exttagged, object_getClass(exttagged) };
     struct { void *imp; SEL sel; } message_ref = { fn, sel };
 
     Class cache_cls = object_getClass(sub);
+    Class tagged_cache_cls = object_getClass(tagged);
+    Class exttagged_cache_cls = object_getClass(exttagged);
 
     if (strstr(name, "Super")) {
         // super version - replace receiver with objc_super
         // clear caches of superclass
         cache_cls = class_getSuperclass(cache_cls);
+        tagged_cache_cls = class_getSuperclass(tagged_cache_cls);
+        exttagged_cache_cls = class_getSuperclass(exttagged_cache_cls);
         sub_arg = &sup_st;
         tagged_arg = &tagged_sup_st;
+        exttagged_arg = &exttagged_sup_st;
     }
 
     if (strstr(name, "_fixup")) {
@@ -1538,18 +1868,19 @@ void test_dw(const char *name, id sub, id tagged, bool stret,
     }
 
 
-    uintptr_t *insnOffsets = getOffsets(fn, name, nil);
+    uintptr_t *insnOffsets = getOffsets(name, nil);
+    testassert(insnOffsets);
     uintptr_t offset;
     int uncaughtCount = 0;
     for (int oo = 0; insnOffsets[oo] != ~0UL; oo++) {
         offset = insnOffsets[oo];
         testprintf("OFFSET %lu\n", offset);
 
-        insn_t saved_insn = clobber(fn, offset);
+        clobbered_insn_t saved_insn = clobber(fn, offset);
         caught = false;
 
         // nil
-        if ((void*)objc_unretainedPointer(sub) == sub_arg) {
+        if ((__bridge void*)sub == sub_arg) {
             SELF = nil;
             testprintf("  nil\n");
             CALLIT(nil, sel_arg, sel, fn, stret);
@@ -1573,21 +1904,27 @@ void test_dw(const char *name, id sub, id tagged, bool stret,
         // uncached,tagged
         SELF = tagged;
         testprintf("  uncached,tagged\n");
-        _objc_flush_caches(cache_cls);
+        _objc_flush_caches(tagged_cache_cls);
         CALLIT(tagged_arg, sel_arg, sel, fn, stret);
-        _objc_flush_caches(cache_cls);
+        _objc_flush_caches(tagged_cache_cls);
         CALLIT(tagged_arg, sel_arg, sel, fn, stret);
+        _objc_flush_caches(exttagged_cache_cls);
+        CALLIT(exttagged_arg, sel_arg, sel, fn, stret);
+        _objc_flush_caches(exttagged_cache_cls);
+        CALLIT(exttagged_arg, sel_arg, sel, fn, stret);
 
         // cached,tagged
         SELF = tagged;
         testprintf("  cached,tagged\n");
         CALLIT(tagged_arg, sel_arg, sel, fn, stret);
         CALLIT(tagged_arg, sel_arg, sel, fn, stret);
+        CALLIT(exttagged_arg, sel_arg, sel, fn, stret);
+        CALLIT(exttagged_arg, sel_arg, sel, fn, stret);
 
         // multiple SEL alignments, collisions, wraps
         SELF = sub;
         for (int a = 0; a < ALIGNCOUNT; a++) {
-            testprintf("  cached, SEL alignment %d\n", a);
+            testprintf("  cached and uncached, SEL alignment %d\n", a);
 
             // Count both up and down to be independent of 
             // implementation's cache scan direction
@@ -1667,6 +2004,7 @@ void test_basic(id receiver)
     // message cached noarg (as above)
     // fixme verify that uncached lookup didn't happen the 2nd time?
     SELF = receiver;
+    _objc_flush_caches(object_getClass(receiver));
     for (int i = 0; i < 5; i++) {
         testprintf("idret\n");
         state = 0;
@@ -1705,7 +2043,6 @@ void test_basic(id receiver)
         testassert(state == 106);
         testassert(vector_equal(vecval, VEC_RESULT));
 
-#if __OBJC2__
         // explicitly call noarg messenger, even if compiler doesn't emit it
         state = 0;
         testprintf("idret noarg\n");
@@ -1727,7 +2064,7 @@ void test_basic(id receiver)
         testassert(state == 113);
         testassert(stret_equal(stretval, STRET_RESULT));
         */
-# if !__i386__
+#if !__i386__
         testprintf("fpret noarg\n");
         fpval = 0;
         fpval = ((typeof(fpmsg0))objc_msgSend_noarg)(receiver, @selector(fpret_noarg));
@@ -1739,14 +2076,13 @@ void test_basic(id receiver)
         vecval = ((typeof(vecmsg0))objc_msgSend_noarg)(receiver, @selector(vecret_noarg));
         testassert(state == 116);
         testassert(vector_equal(vecval, VEC_RESULT));
-# endif
-# if !__i386__ && !__x86_64__
+#endif
+#if !__i386__ && !__x86_64__
         testprintf("lfpret noarg\n");
         lfpval = 0;
         lfpval = ((typeof(lfpmsg0))objc_msgSend_noarg)(receiver, @selector(lfpret_noarg));
         testassert(state == 115);
         testassert(lfpval == LFP_RESULT);
-# endif
 #endif
     }
 
@@ -1756,8 +2092,6 @@ void test_basic(id receiver)
 int main()
 {
   PUSH_POOL {
-    int i;
-
     id idval;
     long long llval;
     struct stret stretval;
@@ -1768,10 +2102,6 @@ int main()
 #if __x86_64__
     struct stret *stretptr;
 #endif
-
-    uint64_t startTime;
-    uint64_t totalTime;
-    uint64_t targetTime;
 
     Method idmethod;
     Method llmethod;
@@ -1800,6 +2130,7 @@ int main()
     [Sub class];
 #if OBJC_HAVE_TAGGED_POINTERS
     [TaggedSub class];
+    [ExtTaggedSub class];
 #endif
 
     ID_RESULT = [Super new];
@@ -1807,7 +2138,8 @@ int main()
     Sub *sub = [Sub new];
     Super *sup = [Super new];
 #if OBJC_HAVE_TAGGED_POINTERS
-    TaggedSub *tagged = objc_unretainedObject(_objc_makeTaggedPointer(OBJC_TAG_7, 999));
+    TaggedSub *tagged = (__bridge id)_objc_makeTaggedPointer(OBJC_TAG_1, 999);
+    ExtTaggedSub *exttagged = (__bridge id)_objc_makeTaggedPointer(OBJC_TAG_First52BitPayload, 999);
 #endif
 
     // Basic cached and uncached dispatch.
@@ -1817,6 +2149,8 @@ int main()
 #if OBJC_HAVE_TAGGED_POINTERS
     testprintf("basic tagged\n");
     test_basic(tagged);
+    testprintf("basic ext tagged\n");
+    test_basic(exttagged);
 #endif
 
     idmethod = class_getInstanceMethod([Super class], @selector(idret::::::::::::::::::::::::::::::::::::));
@@ -1838,113 +2172,6 @@ int main()
     fpfn = (double (*)(id, Method, vector_ulong2, vector_ulong2, vector_ulong2, vector_ulong2, vector_ulong2, vector_ulong2, vector_ulong2, vector_ulong2, int, int, int, int, int, int, int, int, int, int, int, int, int, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double)) method_invoke;
     lfpfn = (long double (*)(id, Method, vector_ulong2, vector_ulong2, vector_ulong2, vector_ulong2, vector_ulong2, vector_ulong2, vector_ulong2, vector_ulong2, int, int, int, int, int, int, int, int, int, int, int, int, int, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double)) method_invoke;
     vecfn = (vector_ulong2 (*)(id, Method, vector_ulong2, vector_ulong2, vector_ulong2, vector_ulong2, vector_ulong2, vector_ulong2, vector_ulong2, vector_ulong2, int, int, int, int, int, int, int, int, int, int, int, int, int, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double)) method_invoke;
-
-    // cached message performance
-    // catches failure to cache or (abi=2) failure to fixup (#5584187)
-    // fixme unless they all fail
-    // `.align 4` matches loop alignment to make -O0 work
-    // fill cache first
-    testprintf("time checks\n");
-
-    SELF = sub;
-    [sub voidret_nop];
-    [sub voidret_nop2];
-    [sub llret_nop];
-    [sub stret_nop];
-    [sub fpret_nop];
-    [sub lfpret_nop];
-    [sub vecret_nop];
-    [sub voidret_nop];
-    [sub voidret_nop2];
-    [sub llret_nop];
-    [sub stret_nop];
-    [sub fpret_nop];
-    [sub lfpret_nop];
-    [sub vecret_nop];
-    [sub voidret_nop];
-    [sub voidret_nop2];
-    [sub llret_nop];
-    [sub stret_nop];
-    [sub fpret_nop];
-    [sub lfpret_nop];
-    [sub vecret_nop];
-
-    // Some of these times have high variance on some compilers. 
-    // The errors we're trying to catch should be catastrophically slow, 
-    // so the margins here are generous to avoid false failures.
-
-    // Use voidret because id return is too slow for perf test with ARC.
-
-    // Pick smallest of voidret_nop and voidret_nop2 time
-    // in the hopes that one of them didn't collide in the method cache.
-
-#define COUNT 1000000
-
-    startTime = mach_absolute_time();
-    ALIGN_();
-    for (i = 0; i < COUNT; i++) {
-        [sub voidret_nop];
-    }
-    totalTime = mach_absolute_time() - startTime;
-    testprintf("time: voidret  %llu\n", totalTime);
-    targetTime = totalTime;
-
-    startTime = mach_absolute_time();
-    ALIGN_();
-    for (i = 0; i < COUNT; i++) {
-        [sub voidret_nop2];  
-    }
-    totalTime = mach_absolute_time() - startTime;
-    testprintf("time: voidret2  %llu\n", totalTime);
-    if (totalTime < targetTime) targetTime = totalTime;
-
-    startTime = mach_absolute_time();
-    ALIGN_();
-    for (i = 0; i < COUNT; i++) {
-        [sub llret_nop];
-    }
-    totalTime = mach_absolute_time() - startTime;
-    timecheck("llret ", totalTime, targetTime * 0.7, targetTime * 2.0);
-
-    startTime = mach_absolute_time();
-    ALIGN_();
-    for (i = 0; i < COUNT; i++) {
-        [sub stret_nop];
-    }
-    totalTime = mach_absolute_time() - startTime;
-    timecheck("stret ", totalTime, targetTime * 0.7, targetTime * 5.0);
-
-    startTime = mach_absolute_time();
-    ALIGN_();
-    for (i = 0; i < COUNT; i++) {        
-        [sub fpret_nop];
-    }
-    totalTime = mach_absolute_time() - startTime;
-    timecheck("fpret ", totalTime, targetTime * 0.7, targetTime * 4.0);
-
-    startTime = mach_absolute_time();
-    ALIGN_();
-    for (i = 0; i < COUNT; i++) {
-        [sub lfpret_nop];
-    }
-    totalTime = mach_absolute_time() - startTime;
-    timecheck("lfpret", totalTime, targetTime * 0.7, targetTime * 4.0);
-
-    startTime = mach_absolute_time();
-    ALIGN_();
-    for (i = 0; i < COUNT; i++) {
-        [sub vecret_nop];
-    }
-    totalTime = mach_absolute_time() - startTime;
-    timecheck("vecret", totalTime, targetTime * 0.7, targetTime * 4.0);
-
-#if __arm64__
-    // Removing this testwarn(), or changing voidret_nop to nop;ret, 
-    // changes the voidret_nop and stret_nop times above by a factor of 2.
-    testwarn("rdar://13896922 nop;ret is faster than ret?");
-#endif
-
-#undef COUNT
 
     // method_invoke 
     // method_invoke long long
@@ -2011,11 +2238,7 @@ int main()
     stretval = zero;
     stretval = [(id)NIL_RECEIVER stret :VEC1:VEC2:VEC3:VEC4:VEC5:VEC6:VEC7:VEC8:1:2:3:4:5:6:7:8:9:10:11:12:13:1.0:2.0:3.0:4.0:5.0:6.0:7.0:8.0:9.0:10.0:11.0:12.0:13.0:14.0:15.0];
     testassert(state == 0);
-#if __clang__
     testassert(0 == memcmp(&stretval, &zero, sizeof(stretval)));
-#else
-    // no stret result guarantee
-#endif
 
 #if __x86_64__
     // check stret return register
@@ -2025,7 +2248,7 @@ int main()
         (&stretval, nil, @selector(stret_nop));
     testassert(stretptr == &stretval);
     testassert(state == 0);
-    // no stret result guarantee for hand-written calls, even with clang
+    // no stret result guarantee for hand-written calls
 #endif
 
 #if __i386__
@@ -2093,7 +2316,6 @@ int main()
     TEST_NIL_STRUCT(d,9);
 
 
-#if __OBJC2__
     // message to nil noarg
     // explicitly call noarg messenger, even if compiler doesn't emit it
     state = 0;
@@ -2110,7 +2332,7 @@ int main()
 
     // no stret_noarg messenger
 
-# if !__i386__
+#if !__i386__
     state = 0;
     fpval = FP_RESULT;
     fpval = ((typeof(fpmsg0))objc_msgSend_noarg)(nil, @selector(fpret_noarg));
@@ -2122,18 +2344,16 @@ int main()
     vecval = ((typeof(vecmsg0))objc_msgSend_noarg)(nil, @selector(vecret_noarg));
     testassert(state == 0);
     testassert(vector_all(vecval == 0));
-# endif
-# if !__i386__ && !__x86_64__
+#endif
+#if !__i386__ && !__x86_64__
     state = 0;
     lfpval = LFP_RESULT;
     lfpval = ((typeof(lfpmsg0))objc_msgSend_noarg)(nil, @selector(lfpret_noarg));
     testassert(state == 0);
     testassert(lfpval == 0.0);
-# endif
 #endif
 
 
-#if __OBJC2__
     // rdar://8271364 objc_msgSendSuper2 must not change objc_super
     testprintf("super struct\n");
     struct objc_super sup_st = {
@@ -2158,9 +2378,8 @@ int main()
     testassert(stret_equal(stretval, STRET_RESULT));
     testassert(sup_st.receiver == sub);
     testassert(sup_st.super_class == object_getClass(sub));
-#endif
 
-#if __OBJC2__  &&  !__arm64__
+#if !__arm64__
     // Debug messengers.
     testprintf("debug messengers\n");
 
@@ -2222,57 +2441,233 @@ int main()
     // fixme fp2ret
 #endif
 
-// debug messengers
+    // debug messengers
 #endif
 
 
-#if !TEST_DWARF
-    testwarn("no unwind tables in this configuration");
+    // objc_msgLookup
+
+#if 1
+    // fixme objc_msgLookup test hack stopped working after a compiler update
+
+#elif __has_feature(objc_arc)
+    // ARC interferes with objc_msgLookup test hacks
+
+#elif __i386__ && TARGET_OS_SIMULATOR
+    testwarn("fixme msgLookup hack doesn't work");
+
 #else
-    // DWARF unwind tables
-    testprintf("unwind tables\n");
+    // fixme hack: call the looked-up method
+# if __arm64__
+#   define CALL_LOOKUP(ret) \
+        asm volatile ("blr x17 \n mov %x0, x0" : "=r" (ret))
+#   define CALL_LOOKUP_STRET(ret) \
+        asm volatile ("mov x8, %x1 \n blr x17 \n" : "=m" (ret) : "r" (&ret))
 
-    // install exception handler
-    struct sigaction act;
-    act.sa_sigaction = sigtrap;
-    act.sa_mask = 0;
-    act.sa_flags = SA_SIGINFO;
-    sigaction(SIGTRAP, &act, NULL);
+# elif __arm__
+#   define CALL_LOOKUP(ret) \
+        asm volatile ("blx r12 \n mov %0, r0" : "=r" (ret))
+#   define CALL_LOOKUP_STRET(ret) \
+        asm volatile ("mov r0, %1 \n blx r12 \n" : "=m" (ret) : "r" (&ret))
 
-    SubDW *dw = [[SubDW alloc] init];
+# elif __x86_64__
+#   define CALL_LOOKUP(ret) \
+        asm volatile ("call *%%r11 \n mov %%rax, %0" : "=r" (ret))
+#   define CALL_LOOKUP_STRET(ret) \
+        asm volatile ("mov %1, %%rdi \n call *%%r11 \n" : "=m" (ret) : "r" (&ret))
 
-    objc_setForwardHandler((void*)test_dw_forward, (void*)test_dw_forward_stret);
-
-# if __x86_64__
-    test_dw("objc_msgSend",             dw, tagged, false, 0);
-    test_dw("objc_msgSend_stret",       dw, tagged, true,  0);
-    test_dw("objc_msgSend_fpret",       dw, tagged, false, 0);
-    test_dw("objc_msgSend_fp2ret",      dw, tagged, false, 0);
-    test_dw("objc_msgSendSuper",        dw, tagged, false, 0);
-    test_dw("objc_msgSendSuper2",       dw, tagged, false, 0);
-    test_dw("objc_msgSendSuper_stret",  dw, tagged, true,  0);
-    test_dw("objc_msgSendSuper2_stret", dw, tagged, true,  0);
 # elif __i386__
-    test_dw("objc_msgSend",             dw, dw, false, 0);
-    test_dw("objc_msgSend_stret",       dw, dw, true,  0);
-    test_dw("objc_msgSend_fpret",       dw, dw, false, 0);
-    test_dw("objc_msgSendSuper",        dw, dw, false, 0);
-    test_dw("objc_msgSendSuper2",       dw, dw, false, 0);
-    test_dw("objc_msgSendSuper_stret",  dw, dw, true,  0);
-    test_dw("objc_msgSendSuper2_stret", dw, dw, true,  0);
-# elif __arm64__
-    test_dw("objc_msgSend",             dw, tagged, false, 1);
-    test_dw("objc_msgSendSuper",        dw, tagged, false, 1);
-    test_dw("objc_msgSendSuper2",       dw, tagged, false, 1);
+#   define CALL_LOOKUP(ret) \
+        asm volatile ("call *%%eax \n mov %%eax, %0" : "=r" (ret))
+#   define CALL_LOOKUP_STRET(ret) \
+        asm volatile ("add $4, %%esp \n mov %1, (%%esp) \n call *%%eax \n sub $4, %%esp \n" : "=m" (ret) : "d" (&ret))        
+
 # else
 #   error unknown architecture
 # endif
 
+    // msgLookup uncached 
+    // msgLookup uncached super
+    // msgLookup uncached stret
+    // msgLookup uncached super stret
+    // msgLookup uncached fpret
+    // msgLookup uncached fpret long double
+    // msgLookup cached 
+    // msgLookup cached stret
+    // msgLookup cached super
+    // msgLookup cached super stret
+    // msgLookup cached fpret
+    // msgLookup cached fpret long double
+    // fixme verify that uncached lookup didn't happen the 2nd time?
+    SELF = sub;
+    _objc_flush_caches(object_getClass(sub));
+    for (int i = 0; i < 5; i++) {
+        testprintf("objc_msgLookup\n");
+        state = 0;
+        idmsg = (typeof(idmsg))objc_msgLookup;
+        idval = nil;
+        (*idmsg)(sub, @selector(idret::::::::::::::::::::::::::::::::::::), VEC1, VEC2, VEC3, VEC4, VEC5, VEC6, VEC7, VEC8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0);
+        CALL_LOOKUP(idval);
+        testassert(state == 101);
+        testassert(idval == ID_RESULT);
+        
+        testprintf("objc_msgLookup_stret\n");
+        state = 0;
+        stretmsg = (typeof(stretmsg))objc_msgLookup_stret;
+        stretval = zero;
+        (*stretmsg)(sub, @selector(stret::::::::::::::::::::::::::::::::::::), VEC1, VEC2, VEC3, VEC4, VEC5, VEC6, VEC7, VEC8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0);
+        CALL_LOOKUP_STRET(stretval);
+        testassert(state == 103);
+        testassert(stret_equal(stretval, STRET_RESULT));
+        
+        testprintf("objc_msgLookupSuper2\n");
+        state = 100;
+        sup_st.receiver = sub;
+        sup_st.super_class = object_getClass(sub);
+        idmsgsuper = (typeof(idmsgsuper))objc_msgLookupSuper2;
+        idval = nil;
+        idval = (*idmsgsuper)(&sup_st, @selector(idret::::::::::::::::::::::::::::::::::::), VEC1, VEC2, VEC3, VEC4, VEC5, VEC6, VEC7, VEC8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0);
+        CALL_LOOKUP(idval);
+        testassert(state == 1);
+        testassert(idval == ID_RESULT);
+        
+        testprintf("objc_msgLookupSuper2_stret\n");
+        state = 100;
+        sup_st.receiver = sub;
+        sup_st.super_class = object_getClass(sub);
+        stretmsgsuper = (typeof(stretmsgsuper))objc_msgLookupSuper2_stret;
+        stretval = zero;
+        (*stretmsgsuper)(&sup_st, @selector(stret::::::::::::::::::::::::::::::::::::), VEC1, VEC2, VEC3, VEC4, VEC5, VEC6, VEC7, VEC8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0);
+        CALL_LOOKUP_STRET(stretval);
+        testassert(state == 3);
+        testassert(stret_equal(stretval, STRET_RESULT));
+        
+#if __i386__
+        // fixme fpret, can't test FP stack properly 
+#endif
+#if __x86_64__
+        // fixme fpret, can't test FP stack properly 
+        // fixme fp2ret, can't test FP stack properly 
+#endif
+
+    }
+
+    // msgLookup to nil
+    // msgLookup to nil stret
+    // fixme msgLookup to nil long long
+    // fixme msgLookup to nil fpret
+    // fixme msgLookup to nil fp2ret
+
+    testprintf("objc_msgLookup to nil\n");
+    state = 0;
+    idmsg = (typeof(idmsg))objc_msgLookup;
+    idval = nil;
+    (*idmsg)(NIL_RECEIVER, @selector(idret::::::::::::::::::::::::::::::::::::), VEC1, VEC2, VEC3, VEC4, VEC5, VEC6, VEC7, VEC8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0);
+    CALL_LOOKUP(idval);
+    testassert(state == 0);
+    testassert(idval == nil);
+    
+    testprintf("objc_msgLookup_stret to nil\n");
+    state = 0;
+    stretmsg = (typeof(stretmsg))objc_msgLookup_stret;
+    stretval = zero;
+    (*stretmsg)(NIL_RECEIVER, @selector(stret::::::::::::::::::::::::::::::::::::), VEC1, VEC2, VEC3, VEC4, VEC5, VEC6, VEC7, VEC8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0);
+    CALL_LOOKUP_STRET(stretval);
+    testassert(state == 0);
+    // no stret result guarantee
+    
+#if __i386__
+    // fixme fpret, can't test FP stack properly 
+#endif
+#if __x86_64__
+    // fixme fpret, can't test FP stack properly 
+    // fixme fp2ret, can't test FP stack properly 
+#endif
+
+    // objc_msgLookup
+#endif
+
+
+
+#if !TEST_DWARF
+    testwarn("no unwind tables in this configuration " NO_DWARF_REASON);
+#else
     // DWARF unwind tables
+    testprintf("unwind tables\n");
+
+    // Clear simulator-related environment variables.
+    // Disassembly will run llvm-objdump which is not a simulator executable.
+    unsetenv("DYLD_ROOT_PATH");
+    unsetenv("DYLD_FALLBACK_LIBRARY_PATH");
+    unsetenv("DYLD_FALLBACK_FRAMEWORK_PATH");
+
+    // Check mprotect() of objc_msgSend.
+    // It doesn't work when running on a device with no libobjc root.
+    // In that case we skip this part of the test without failing.
+    // fixme make this work
+    // fixme now it doesn't work even with a libobjc root in place?
+    int err1 = mprotect((void *)((uintptr_t)&objc_msgSend & ~(PAGE_MAX_SIZE-1)),
+                        PAGE_MAX_SIZE, PROT_READ | PROT_WRITE);
+    int errno1 = errno;
+    int err2 = mprotect((void *)((uintptr_t)&objc_msgSend & ~(PAGE_MAX_SIZE-1)),
+                        PAGE_MAX_SIZE, PROT_READ | PROT_EXEC);
+    int errno2 = errno;
+    if (err1 || err2) {
+        testwarn("can't mprotect() objc_msgSend (%d, %d). "
+                 "Skipping unwind table test.",
+                 err1, errno1, err2, errno2);
+    }
+    else {
+        // install exception handler
+        struct sigaction act;
+        act.sa_sigaction = break_handler;
+        act.sa_mask = 0;
+        act.sa_flags = SA_SIGINFO;
+        sigaction(BREAK_SIGNAL, &act, nil);
+#if defined(BREAK_SIGNAL2)
+        sigaction(BREAK_SIGNAL2, &act, nil);
+#endif
+
+        SubDW *dw = [[SubDW alloc] init];
+
+        objc_setForwardHandler((void*)test_dw_forward, (void*)test_dw_forward_stret);
+
+# if __x86_64__
+        test_dw("objc_msgSend",             dw, tagged, exttagged, false, 0);
+        test_dw("objc_msgSend_stret",       dw, tagged, exttagged, true,  0);
+        test_dw("objc_msgSend_fpret",       dw, tagged, exttagged, false, 0);
+        test_dw("objc_msgSend_fp2ret",      dw, tagged, exttagged, false, 0);
+        test_dw("objc_msgSendSuper",        dw, tagged, exttagged, false, 0);
+        test_dw("objc_msgSendSuper2",       dw, tagged, exttagged, false, 0);
+        test_dw("objc_msgSendSuper_stret",  dw, tagged, exttagged, true,  0);
+        test_dw("objc_msgSendSuper2_stret", dw, tagged, exttagged, true,  0);
+# elif __i386__
+        test_dw("objc_msgSend",             dw, dw, dw, false, 0);
+        test_dw("objc_msgSend_stret",       dw, dw, dw, true,  0);
+        test_dw("objc_msgSend_fpret",       dw, dw, dw, false, 0);
+        test_dw("objc_msgSendSuper",        dw, dw, dw, false, 0);
+        test_dw("objc_msgSendSuper2",       dw, dw, dw, false, 0);
+        test_dw("objc_msgSendSuper_stret",  dw, dw, dw, true,  0);
+        test_dw("objc_msgSendSuper2_stret", dw, dw, dw, true,  0);
+# elif __arm64__
+        test_dw("objc_msgSend",             dw, tagged, exttagged, false, 1);
+        test_dw("objc_msgSendSuper",        dw, tagged, exttagged, false, 1);
+        test_dw("objc_msgSendSuper2",       dw, tagged, exttagged, false, 1);
+# elif __arm__
+        test_dw("objc_msgSend",             dw, dw, dw, false, 0);
+        test_dw("objc_msgSend_stret",       dw, dw, dw, true,  0);
+        test_dw("objc_msgSendSuper",        dw, dw, dw, false, 0);
+        test_dw("objc_msgSendSuper2",       dw, dw, dw, false, 0);
+        test_dw("objc_msgSendSuper_stret",  dw, dw, dw, true,  0);
+        test_dw("objc_msgSendSuper2_stret", dw, dw, dw, true,  0);
+# else
+#   error unknown architecture
+# endif
+    }
+
+    // end DWARF unwind test
 #endif
 
   } POP_POOL;
     succeed(__FILE__);
 }
-
-#endif
