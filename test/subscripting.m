@@ -1,16 +1,4 @@
-// TEST_CONFIG MEM=arc,mrc CC=clang LANGUAGE=objc,objc++
 // TEST_CFLAGS -framework Foundation
-
-#if !__OBJC2__
-
-#include "test.h"
-
-int main()
-{
-    succeed(__FILE__);
-}
-
-#else
 
 #import <Foundation/Foundation.h>
 #import <Foundation/NSDictionary.h>
@@ -116,7 +104,7 @@ int main() {
             id object = testIndexed[i];
             testassert(object == objects[i]);
         }
-        if (getenv("VERBOSE")) {
+        if (testverbose()) {
             i = 0;
             for (id object in testIndexed) {
                 NSString *message = [NSString stringWithFormat:@"testIndexed[%zu] = %@\n", i++, object];
@@ -135,7 +123,7 @@ int main() {
             id object = testKeyed[key];
             testassert(object == objects[i]);
         }
-        if (getenv("VERBOSE")) {
+        if (testverbose()) {
             for (id key in testKeyed) {
                 NSString *message = [NSString stringWithFormat:@"testKeyed[@\"%@\"] = %@\n", key, testKeyed[key]];
                 testprintf([message UTF8String]);
@@ -149,6 +137,3 @@ int main() {
 
     return 0;
 }
-
-// __OBJC2__
-#endif

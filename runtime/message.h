@@ -198,9 +198,12 @@ objc_msgSend_fp2ret(void /* id self, SEL op, ... */ )
  *  you must use \c objc_msgSend_fpret for functions returning non-integral type. For \c float or 
  *  \c long \c double return types, cast the function to an appropriate function pointer type first.
  */
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wincompatible-library-redeclaration"
 OBJC_EXPORT double
 objc_msgSend_fpret(id _Nullable self, SEL _Nonnull op, ...)
     OBJC_AVAILABLE(10.4, 2.0, 9.0, 1.0, 2.0);
+#pragma clang diagnostic pop
 
 /* Use objc_msgSendSuper() for fp-returning messages to super. */
 /* See also objc_msgSendv_fpret() below. */

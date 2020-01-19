@@ -308,7 +308,7 @@ storeWeak(id *location, objc_object *newObj)
             !((objc_class *)cls)->isInitialized()) 
         {
             SideTable::unlockTwo<haveOld, haveNew>(oldTable, newTable);
-            _class_initialize(_class_getNonMetaClass(cls, (id)newObj));
+            class_initialize(cls, (id)newObj);
 
             // If this class is finished with +initialize then we're good.
             // If this class is still running +initialize on this thread 
@@ -506,7 +506,7 @@ objc_loadWeakRetained(id *location)
         }
         else {
             table->unlock();
-            _class_initialize(cls);
+            class_initialize(cls, obj);
             goto retry;
         }
     }
@@ -614,7 +614,12 @@ struct magic_t {
     }
 
     ~magic_t() {
-        m[0] = m[1] = m[2] = m[3] = 0;
+        // Clear magic before deallocation.
+        // This prevents some false positives in memory debugging tools.
+        // fixme semantically this should be memset_s(), but the
+        // compiler doesn't optimize that at all (rdar://44856676).
+        volatile uint64_t *p = (volatile uint64_t *)m;
+        p[0] = 0; p[1] = 0;
     }
 
     bool check() const {
@@ -1782,6 +1787,12 @@ objc_allocWithZone(Class cls)
     return callAlloc(cls, true/*checkNil*/, true/*allocWithZone*/);
 }
 
+// Calls [[cls alloc] init].
+id
+objc_alloc_init(Class cls)
+{
+    return [callAlloc(cls, true/*checkNil*/, false/*allocWithZone*/) init];
+}
 
 void
 _objc_rootDealloc(id obj)

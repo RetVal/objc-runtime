@@ -6,14 +6,16 @@
 #include <stdio.h>
 #include <sched.h>
 #include <unistd.h>
-#include <libkern/OSAtomic.h>
-extern int state;
+#include "test.h"
+extern atomic_int state;
 
 #define CLASS0(n,nn)                                                    \
     OBJC_ROOT_CLASS                                                     \
     @interface C_##n##_##nn @end                                        \
     @implementation C_##n##_##nn                                        \
-    +(void)load { OSAtomicIncrement32(&state); usleep(10); }            \
+    +(void)load {                                                       \
+        atomic_fetch_add_explicit(&state, 1, memory_order_relaxed);     \
+        usleep(10); }                                                   \
     @end
 
 #define CLASS(n,nn) CLASS0(n,nn)

@@ -3,7 +3,7 @@ TEST_BUILD
     $C{COMPILE} $DIR/cacheflush0.m -o cacheflush0.dylib -dynamiclib
     $C{COMPILE} $DIR/cacheflush2.m -x none cacheflush0.dylib -o cacheflush2.dylib -dynamiclib
     $C{COMPILE} $DIR/cacheflush3.m -x none cacheflush0.dylib -o cacheflush3.dylib -dynamiclib
-    $C{COMPILE} $DIR/cacheflush.m  -x none cacheflush0.dylib -o cacheflush.out
+    $C{COMPILE} $DIR/cacheflush.m  -x none cacheflush0.dylib -o cacheflush.exe
 END
 */
 

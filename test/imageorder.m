@@ -3,7 +3,7 @@ TEST_BUILD
     $C{COMPILE} $DIR/imageorder1.m -o imageorder1.dylib -dynamiclib
     $C{COMPILE} $DIR/imageorder2.m -x none imageorder1.dylib -o imageorder2.dylib -dynamiclib
     $C{COMPILE} $DIR/imageorder3.m -x none imageorder2.dylib imageorder1.dylib -o imageorder3.dylib -dynamiclib
-    $C{COMPILE} $DIR/imageorder.m  -x none imageorder3.dylib imageorder2.dylib imageorder1.dylib -o imageorder.out
+    $C{COMPILE} $DIR/imageorder.m  -x none imageorder3.dylib imageorder2.dylib imageorder1.dylib -o imageorder.exe
 END
 */
 

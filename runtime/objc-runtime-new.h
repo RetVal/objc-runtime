@@ -29,30 +29,53 @@ typedef uint32_t mask_t;  // x86_64 & arm64 asm are less efficient with 16-bits
 #else
 typedef uint16_t mask_t;
 #endif
-typedef uintptr_t cache_key_t;
+typedef uintptr_t SEL;
 
 struct swift_class_t;
 
+enum Atomicity { Atomic = true, NotAtomic = false };
 
 struct bucket_t {
 private:
     // IMP-first is better for arm64e ptrauth and no worse for arm64.
     // SEL-first is better for armv7* and i386 and x86_64.
 #if __arm64__
-    MethodCacheIMP _imp;
-    cache_key_t _key;
+    uintptr_t _imp;
+    SEL _sel;
 #else
-    cache_key_t _key;
-    MethodCacheIMP _imp;
+    SEL _sel;
+    uintptr_t _imp;
 #endif
 
-public:
-    inline cache_key_t key() const { return _key; }
-    inline IMP imp() const { return (IMP)_imp; }
-    inline void setKey(cache_key_t newKey) { _key = newKey; }
-    inline void setImp(IMP newImp) { _imp = newImp; }
+    // Compute the ptrauth signing modifier from &_imp and newSel
+    uintptr_t modifierForSEL(SEL newSel) const {
+        return (uintptr_t)&_imp ^ (uintptr_t)newSel;
+    }
 
-    void set(cache_key_t newKey, IMP newImp);
+    // Sign newImp, with &_imp and newSel as modifiers.
+    uintptr_t signIMP(IMP newImp, SEL newSel) const {
+        if (!newImp) return 0;
+        return (uintptr_t)
+            ptrauth_auth_and_resign(newImp,
+                                    ptrauth_key_function_pointer, 0,
+                                    ptrauth_key_process_dependent_code,
+                                    modifierForSEL(newSel));
+    }
+
+public:
+    inline SEL sel() const { return _sel; }
+
+    inline IMP imp() const {
+        if (!_imp) return nil;
+        return (IMP)
+            ptrauth_auth_and_resign((const void *)_imp,
+                                    ptrauth_key_process_dependent_code,
+                                    modifierForSEL(_sel),
+                                    ptrauth_key_function_pointer, 0);
+    }
+
+    template <Atomicity>
+    void set(SEL newSel, IMP newImp);
 };
 
 
@@ -78,7 +101,7 @@ public:
 
     void expand();
     void reallocate(mask_t oldCapacity, mask_t newCapacity);
-    struct bucket_t * find(cache_key_t key, id receiver);
+    struct bucket_t * find(SEL sel, id receiver);
 
     static void bad_cache(id receiver, SEL sel, Class isa) __attribute__((noreturn));
 };
@@ -402,14 +425,16 @@ struct locstamped_category_list_t {
 #define RO_HIDDEN             (1<<4)
 // class has attribute(objc_exception): OBJC_EHTYPE_$_ThisClass is non-weak
 #define RO_EXCEPTION          (1<<5)
-// this bit is available for reassignment
-// #define RO_REUSE_ME           (1<<6) 
+// class has ro field for Swift metadata initializer callback
+#define RO_HAS_SWIFT_INITIALIZER (1<<6)
 // class compiled with ARC
 #define RO_IS_ARC             (1<<7)
 // class has .cxx_destruct but no .cxx_construct (with RO_HAS_CXX_STRUCTORS)
 #define RO_HAS_CXX_DTOR_ONLY  (1<<8)
 // class is not ARC but has ARC-style weak ivar layout 
 #define RO_HAS_WEAK_WITHOUT_ARC (1<<9)
+// class does not allow associated objects on instances
+#define RO_FORBIDS_ASSOCIATED_OBJECTS (1<<10)
 
 // class is in an unloadable bundle - must never be set by compiler
 #define RO_FROM_BUNDLE        (1<<29)
@@ -445,8 +470,8 @@ struct locstamped_category_list_t {
 #endif
 // class has instance-specific GC layout
 #define RW_HAS_INSTANCE_SPECIFIC_LAYOUT (1 << 21)
-// available for use
-// #define RW_20       (1<<20)
+// class does not allow associated objects on its instances
+#define RW_FORBIDS_ASSOCIATED_OBJECTS       (1<<20)
 // class has started realizing but not yet completed it
 #define RW_REALIZING          (1<<19)
 
@@ -568,8 +593,32 @@ struct class_ro_t {
     const uint8_t * weakIvarLayout;
     property_list_t *baseProperties;
 
+    // This field exists only when RO_HAS_SWIFT_INITIALIZER is set.
+    _objc_swiftMetadataInitializer __ptrauth_objc_method_list_imp _swiftMetadataInitializer_NEVER_USE[0];
+
+    _objc_swiftMetadataInitializer swiftMetadataInitializer() const {
+        if (flags & RO_HAS_SWIFT_INITIALIZER) {
+            return _swiftMetadataInitializer_NEVER_USE[0];
+        } else {
+            return nil;
+        }
+    }
+
     method_list_t *baseMethods() const {
         return baseMethodList;
+    }
+
+    class_ro_t *duplicate() const {
+        if (flags & RO_HAS_SWIFT_INITIALIZER) {
+            size_t size = sizeof(*this) + sizeof(_swiftMetadataInitializer_NEVER_USE[0]);
+            class_ro_t *ro = (class_ro_t *)memdup(this, size);
+            ro->_swiftMetadataInitializer_NEVER_USE[0] = this->_swiftMetadataInitializer_NEVER_USE[0];
+            return ro;
+        } else {
+            size_t size = sizeof(*this);
+            class_ro_t *ro = (class_ro_t *)memdup(this, size);
+            return ro;
+        }
     }
 };
 
@@ -878,43 +927,47 @@ private:
     }
 
 #if FAST_ALLOC
-    static uintptr_t updateFastAlloc(uintptr_t oldBits, uintptr_t change)
+    // On entry, `newBits` is a bits value after setting and/or clearing
+    // the bits in `change`. Fix the fast-alloc parts of newBits if necessary
+    // and return the updated value.
+    static uintptr_t updateFastAlloc(uintptr_t newBits, uintptr_t change)
     {
         if (change & FAST_ALLOC_MASK) {
-            if (((oldBits & FAST_ALLOC_MASK) == FAST_ALLOC_VALUE)  &&  
-                ((oldBits >> FAST_SHIFTED_SIZE_SHIFT) != 0)) 
+            if (((newBits & FAST_ALLOC_MASK) == FAST_ALLOC_VALUE)  &&  
+                ((newBits >> FAST_SHIFTED_SIZE_SHIFT) != 0)) 
             {
-                oldBits |= FAST_ALLOC;
+                newBits |= FAST_ALLOC;
             } else {
-                oldBits &= ~FAST_ALLOC;
+                newBits &= ~FAST_ALLOC;
             }
         }
-        return oldBits;
+        return newBits;
     }
 #else
-    static uintptr_t updateFastAlloc(uintptr_t oldBits, uintptr_t change) {
-        return oldBits;
+    static uintptr_t updateFastAlloc(uintptr_t newBits, uintptr_t change) {
+        return newBits;
     }
 #endif
 
-    void setBits(uintptr_t set) 
+    // Atomically set the bits in `set` and clear the bits in `clear`.
+    // set and clear must not overlap.
+    void setAndClearBits(uintptr_t set, uintptr_t clear)
     {
+        assert((set & clear) == 0);
         uintptr_t oldBits;
         uintptr_t newBits;
         do {
             oldBits = LoadExclusive(&bits);
-            newBits = updateFastAlloc(oldBits | set, set);
+            newBits = updateFastAlloc((oldBits | set) & ~clear, set | clear);
         } while (!StoreReleaseExclusive(&bits, oldBits, newBits));
     }
 
-    void clearBits(uintptr_t clear) 
-    {
-        uintptr_t oldBits;
-        uintptr_t newBits;
-        do {
-            oldBits = LoadExclusive(&bits);
-            newBits = updateFastAlloc(oldBits & ~clear, clear);
-        } while (!StoreReleaseExclusive(&bits, oldBits, newBits));
+    void setBits(uintptr_t set) {
+        setAndClearBits(set, 0);
+    }
+
+    void clearBits(uintptr_t clear) {
+        setAndClearBits(0, clear);
     }
 
 public:
@@ -931,6 +984,20 @@ public:
         uintptr_t newBits = (bits & ~FAST_DATA_MASK) | (uintptr_t)newData;
         atomic_thread_fence(memory_order_release);
         bits = newBits;
+    }
+
+    // Get the class's ro data, even in the presence of concurrent realization.
+    // fixme this isn't really safe without a compiler barrier at least
+    // and probably a memory barrier when realizeClass changes the data field
+    const class_ro_t *safe_ro() {
+        class_rw_t *maybe_rw = data();
+        if (maybe_rw->flags & RW_REALIZED) {
+            // maybe_rw is rw
+            return maybe_rw->ro;
+        } else {
+            // maybe_rw is actually ro
+            return (class_ro_t *)maybe_rw;
+        }
     }
 
 #if FAST_HAS_DEFAULT_RR
@@ -1096,14 +1163,26 @@ public:
         return getBit(FAST_IS_SWIFT_STABLE);
     }
     void setIsSwiftStable() {
-        setBits(FAST_IS_SWIFT_STABLE);
+        setAndClearBits(FAST_IS_SWIFT_STABLE, FAST_IS_SWIFT_LEGACY);
     }
 
     bool isSwiftLegacy() {
         return getBit(FAST_IS_SWIFT_LEGACY);
     }
     void setIsSwiftLegacy() {
-        setBits(FAST_IS_SWIFT_LEGACY);
+        setAndClearBits(FAST_IS_SWIFT_LEGACY, FAST_IS_SWIFT_STABLE);
+    }
+
+    // fixme remove this once the Swift runtime uses the stable bits
+    bool isSwiftStable_ButAllowLegacyForNow() {
+        return isAnySwift();
+    }
+
+    _objc_swiftMetadataInitializer swiftMetadataInitializer() {
+        // This function is called on un-realized classes without
+        // holding any locks.
+        // Beware of races with other realizers.
+        return safe_ro()->swiftMetadataInitializer();
     }
 };
 
@@ -1205,6 +1284,40 @@ struct objc_class : objc_object {
         return bits.isAnySwift();
     }
 
+    bool isSwiftStable_ButAllowLegacyForNow() {
+        return bits.isSwiftStable_ButAllowLegacyForNow();
+    }
+
+    // Swift stable ABI built for old deployment targets looks weird.
+    // The is-legacy bit is set for compatibility with old libobjc.
+    // We are on a "new" deployment target so we need to rewrite that bit.
+    // These stable-with-legacy-bit classes are distinguished from real
+    // legacy classes using another bit in the Swift data
+    // (ClassFlags::IsSwiftPreStableABI)
+
+    bool isUnfixedBackwardDeployingStableSwift() {
+        // Only classes marked as Swift legacy need apply.
+        if (!bits.isSwiftLegacy()) return false;
+
+        // Check the true legacy vs stable distinguisher.
+        // The low bit of Swift's ClassFlags is SET for true legacy
+        // and UNSET for stable pretending to be legacy.
+        uint32_t swiftClassFlags = *(uint32_t *)(&bits + 1);
+        bool isActuallySwiftLegacy = bool(swiftClassFlags & 1);
+        return !isActuallySwiftLegacy;
+    }
+
+    void fixupBackwardDeployingStableSwift() {
+        if (isUnfixedBackwardDeployingStableSwift()) {
+            // Class really is stable Swift, pretending to be pre-stable.
+            // Fix its lie.
+            bits.setIsSwiftStable();
+        }
+    }
+
+    _objc_swiftMetadataInitializer swiftMetadataInitializer() {
+        return bits.swiftMetadataInitializer();
+    }
 
     // Return YES if the class's ivars are managed by ARC, 
     // or the class is MRC but has ARC-style weak ivars.
@@ -1217,6 +1330,10 @@ struct objc_class : objc_object {
         return data()->ro->flags & RO_IS_ARC;
     }
 
+
+    bool forbidsAssociatedObjects() {
+        return (data()->flags & RW_FORBIDS_ASSOCIATED_OBJECTS);
+    }
 
 #if SUPPORT_NONPOINTER_ISA
     // Tracked in non-pointer isas; not tracked otherwise
@@ -1281,6 +1398,11 @@ struct objc_class : objc_object {
         return data()->ro->flags & RO_META;
     }
 
+    // Like isMetaClass, but also valid on un-realized classes
+    bool isMetaClassMaybeUnrealized() {
+        return bits.safe_ro()->flags & RO_META;
+    }
+
     // NOT identical to this->ISA when this is a metaclass
     Class getMeta() {
         if (isMetaClass()) return (Class)this;
@@ -1305,7 +1427,7 @@ struct objc_class : objc_object {
         }
     }
     
-    const char *demangledName(bool realize = false);
+    const char *demangledName();
     const char *nameForLogging();
 
     // May be unaligned depending on class's ivars.

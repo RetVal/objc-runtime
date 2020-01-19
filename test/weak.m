@@ -140,12 +140,12 @@ static BOOL classInNameList(const char **names, const char *name)
 int main(int argc __unused, char **argv)
 {
     BOOL weakMissing;
-    if (strstr(argv[0], "-not-missing.out")) {
+    if (strstr(argv[0], "-not-missing.exe")) {
         weakMissing = NO;
-    } else if (strstr(argv[0], "-missing.out")) {
+    } else if (strstr(argv[0], "-missing.exe")) {
         weakMissing = YES;
     } else {
-        fail("executable name must be weak*-missing.out or weak*-not-missing.out");
+        fail("executable name must be weak*-missing.exe or weak*-not-missing.exe");
     }
 
     // class and category +load methods

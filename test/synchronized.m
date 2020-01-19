@@ -22,8 +22,6 @@ void *thread(void *arg __unused)
 {
     int err;
 
-    objc_registerThreadWithCollector();
-
     // non-blocking sync_enter
     err = objc_sync_enter(obj);
     testassert(err == OBJC_SYNC_SUCCESS);

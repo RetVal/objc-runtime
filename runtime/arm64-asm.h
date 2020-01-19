@@ -108,7 +108,8 @@
 .endmacro
 
 .macro TailCallCachedImp
-	// $0 = cached imp, $1 = address of cached imp
+	// $0 = cached imp, $1 = address of cached imp, $2 = SEL
+	eor	$1, $1, $2	// mix SEL into ptrauth modifier
 	brab	$0, $1
 .endmacro
 
@@ -123,8 +124,11 @@
 .endmacro
 
 .macro AuthAndResignAsIMP
-	// $0 = cached imp, $1 = address of cached imp
+	// $0 = cached imp, $1 = address of cached imp, $2 = SEL
+	// note: assumes the imp is not nil
+	eor	$1, $1, $2	// mix SEL into ptrauth modifier
 	autib	$0, $1		// authenticate cached imp
+	ldr	xzr, [$0]	// crash if authentication failed
 	paciza	$0		// resign cached imp as IMP
 .endmacro
 
@@ -138,7 +142,7 @@
 .endmacro
 
 .macro TailCallCachedImp
-	// $0 = cached imp, $1 = address of cached imp
+	// $0 = cached imp, $1 = address of cached imp, $2 = SEL
 	br	$0
 .endmacro
 
@@ -153,6 +157,7 @@
 .endmacro
 
 .macro AuthAndResignAsIMP
+	// $0 = cached imp, $1 = address of cached imp, $2 = SEL
 	// empty
 .endmacro	
 

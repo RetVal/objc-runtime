@@ -37,11 +37,6 @@ static const char *key = "key";
     supers++;
     SUPER_DEALLOC();
 }
--(void) finalize
-{
-    supers++;
-    [super finalize];
-}
 
 @end
 
@@ -50,11 +45,6 @@ static const char *key = "key";
 {
     subs++;
     SUPER_DEALLOC();
-}
--(void) finalize
-{
-    subs++;
-    [super finalize];
 }
 @end
 
@@ -77,11 +67,6 @@ static const char *key = "key";
     supers++;
     SUPER_DEALLOC();
 }
--(void) finalize
-{
-    supers++;
-    [super finalize];
-}
 
 @end
 
@@ -91,21 +76,12 @@ static const char *key = "key";
     subs++;
     SUPER_DEALLOC();
 }
--(void) finalize
-{
-    subs++;
-    [super finalize];
-}
 @end
 
 @implementation Value
 -(void) dealloc {
     values++;
     SUPER_DEALLOC();
-}
--(void) finalize {
-    values++;
-    [super finalize];
 }
 @end
 
@@ -140,6 +116,12 @@ int main()
     testassert(supers > 0);
     testassert(subs == 0);
     testassert(supers == values);
+    
+    // rdar://44094390 tolerate nil object and nil value
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wnonnull"
+    objc_setAssociatedObject(nil, &key, nil, 0);
+#pragma clang diagnostic pop
 
     succeed(__FILE__);
 }

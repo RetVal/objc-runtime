@@ -43,7 +43,7 @@ bool prepareOptimizedReturn(ReturnDisposition disposition);
 #if SUPPORT_TAGGED_POINTERS
 
 extern "C" { 
-    extern Class objc_debug_taggedpointer_classes[_OBJC_TAG_SLOT_COUNT*2];
+    extern Class objc_debug_taggedpointer_classes[_OBJC_TAG_SLOT_COUNT];
     extern Class objc_debug_taggedpointer_ext_classes[_OBJC_TAG_EXT_SLOT_COUNT];
 }
 #define objc_tag_classes objc_debug_taggedpointer_classes

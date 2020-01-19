@@ -4,37 +4,12 @@
 #include "test.h"
 #include "testroot.i"
 
-#if __i386__
-
-int main()
-{
-    // no optimization on i386 (neither Mac nor Simulator)
-    succeed(__FILE__);
-}
-
-#else
-
 #include <objc/objc-internal.h>
 #include <objc/objc-abi.h>
 #include <Foundation/Foundation.h>
 
 @interface TestObject : TestRoot @end
 @implementation TestObject @end
-
-
-#ifdef __arm__
-#   define MAGIC      asm volatile("mov r7, r7")
-#   define NOT_MAGIC  asm volatile("mov r6, r6")
-#elif __arm64__
-#   define MAGIC      asm volatile("mov x29, x29")
-#   define NOT_MAGIC  asm volatile("mov x28, x28")
-#elif __x86_64__
-#   define MAGIC      asm volatile("")
-#   define NOT_MAGIC  asm volatile("nop")
-#else
-#   error unknown architecture
-#endif
-
 
 @interface Tester : NSObject @end
 @implementation Tester {
@@ -55,14 +30,12 @@ int main()
 
 OBJC_EXPORT
 id
-objc_retainAutoreleasedReturnValue(id obj)
-    __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
+objc_retainAutoreleasedReturnValue(id obj);
 
 // Accept a value returned through a +0 autoreleasing convention for use at +0.
 OBJC_EXPORT
 id
-objc_unsafeClaimAutoreleasedReturnValue(id obj)
-    __OSX_AVAILABLE_STARTING(__MAC_10_11, __IPHONE_9_0);
+objc_unsafeClaimAutoreleasedReturnValue(id obj);
 
 
 int

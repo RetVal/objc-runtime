@@ -1,4 +1,10 @@
 /* 
+TEST_BUILD_OUTPUT
+.*runtime.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\](\n.* note: expanded from macro 'testassert')?
+.*runtime.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\](\n.* note: expanded from macro 'testassert')?
+.*runtime.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\](\n.* note: expanded from macro 'testassert')?
+END
+
 TEST_RUN_OUTPUT
 objc\[\d+\]: class `SwiftV1Class\' not linked into application
 objc\[\d+\]: class `DoesNotExist\' not linked into application
@@ -21,6 +27,11 @@ END
 
 int main()
 {
+    // provoke the same nullability warnings as the real test
+    objc_getClass(nil);
+    objc_getClass(nil);
+    objc_getClass(nil);
+    
     testwarn("rdar://11368528 confused by Foundation");
     fprintf(stderr, "confused by Foundation\n");
     succeed(__FILE__);
@@ -31,18 +42,11 @@ int main()
 @interface Sub : TestRoot @end
 @implementation Sub @end
 
-#if __OBJC2__
-#   define TEST_SWIFT 1
-#else
-#   define TEST_SWIFT 0
-#endif
-
 #define SwiftV1MangledName "_TtC6Module12SwiftV1Class"
 #define SwiftV1MangledName2 "_TtC2Sw13SwiftV1Class2"
-#define SwiftV1MangledName3 "_TtCSs13SwiftV1Class3"
+#define SwiftV1MangledName3 "_TtCs13SwiftV1Class3"
 #define SwiftV1MangledName4 "_TtC6Swiftt13SwiftV1Class4"
 
-#if TEST_SWIFT
 __attribute__((objc_runtime_name(SwiftV1MangledName)))
 @interface SwiftV1Class : TestRoot @end
 @implementation SwiftV1Class @end
@@ -58,7 +62,6 @@ __attribute__((objc_runtime_name(SwiftV1MangledName3)))
 __attribute__((objc_runtime_name(SwiftV1MangledName4)))
 @interface SwiftV1Class4 : TestRoot @end
 @implementation SwiftV1Class4 @end
-#endif
 
 
 int main()
@@ -74,6 +77,7 @@ int main()
     int foundSwiftV1class3;
     int foundSwiftV1class4;
     const char **names;
+    const char **namesFromHeader;
     Dl_info info;
 
     [TestRoot class];
@@ -82,11 +86,7 @@ int main()
     dladdr(&_mh_execute_header, &info);
     names = objc_copyClassNamesForImage(info.dli_fname, &count);
     testassert(names);
-#if TEST_SWIFT
     testassert(count == 6);
-#else
-    testassert(count == 2);
-#endif
     testassert(names[count] == NULL);
     foundTestRoot = 0;
     foundSub = 0;
@@ -104,12 +104,18 @@ int main()
     }
     testassert(foundTestRoot == 1);
     testassert(foundSub == 1);
-#if TEST_SWIFT
     testassert(foundSwiftV1 == 1);
     testassert(foundSwiftV1class2 == 1);
     testassert(foundSwiftV1class3 == 1);
     testassert(foundSwiftV1class4 == 1);
-#endif
+
+    // Getting the names using the header should give us the same list.
+    namesFromHeader = objc_copyClassNamesForImage(info.dli_fname, &count0);
+    testassert(namesFromHeader);
+    testassert(count == count0);
+    for (i = 0; i < count; i++) {
+        testassert(!strcmp(names[i], namesFromHeader[i]));
+    }
     
     
     // class Sub hasn't been touched - make sure it's in the class list too
@@ -146,16 +152,13 @@ int main()
     }
     testassert(foundTestRoot == 1);
     testassert(foundSub == 1);
-#if TEST_SWIFT
     testassert(foundSwiftV1 == 1);
     testassert(foundSwiftV1class2 == 1);
     testassert(foundSwiftV1class3 == 1);
     testassert(foundSwiftV1class4 == 1);
-#endif
 
     // fixme check class handler
     testassert(objc_getClass("TestRoot") == [TestRoot class]);
-#if TEST_SWIFT
     testassert(objc_getClass("Module.SwiftV1Class") == [SwiftV1Class class]);
     testassert(objc_getClass(SwiftV1MangledName) == [SwiftV1Class class]);
     testassert(objc_getClass("Sw.SwiftV1Class2") == [SwiftV1Class2 class]);
@@ -164,26 +167,21 @@ int main()
     testassert(objc_getClass(SwiftV1MangledName3) == [SwiftV1Class3 class]);
     testassert(objc_getClass("Swiftt.SwiftV1Class4") == [SwiftV1Class4 class]);
     testassert(objc_getClass(SwiftV1MangledName4) == [SwiftV1Class4 class]);
-#endif
     testassert(objc_getClass("SwiftV1Class") == nil);
     testassert(objc_getClass("DoesNotExist") == nil);
     testassert(objc_getClass(NULL) == nil);
 
     testassert(objc_getMetaClass("TestRoot") == object_getClass([TestRoot class]));
-#if TEST_SWIFT
     testassert(objc_getMetaClass("Module.SwiftV1Class") == object_getClass([SwiftV1Class class]));
     testassert(objc_getMetaClass(SwiftV1MangledName) == object_getClass([SwiftV1Class class]));
-#endif
     testassert(objc_getMetaClass("SwiftV1Class") == nil);
     testassert(objc_getMetaClass("DoesNotExist") == nil);
     testassert(objc_getMetaClass(NULL) == nil);
 
     // fixme check class no handler
     testassert(objc_lookUpClass("TestRoot") == [TestRoot class]);
-#if TEST_SWIFT
     testassert(objc_lookUpClass("Module.SwiftV1Class") == [SwiftV1Class class]);
     testassert(objc_lookUpClass(SwiftV1MangledName) == [SwiftV1Class class]);
-#endif
     testassert(objc_lookUpClass("SwiftV1Class") == nil);
     testassert(objc_lookUpClass("DoesNotExist") == nil);
     testassert(objc_lookUpClass(NULL) == nil);
@@ -194,10 +192,8 @@ int main()
     testassert(object_isClass(object_getClass([TestRoot class])));
     testassert(object_isClass([Sub class]));
     testassert(object_isClass(object_getClass([Sub class])));
-#if TEST_SWIFT
     testassert(object_isClass([SwiftV1Class class]));
     testassert(object_isClass(object_getClass([SwiftV1Class class])));
-#endif
 
     list2 = objc_copyClassList(&count2);
     testassert(count2 == count);

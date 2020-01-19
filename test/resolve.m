@@ -169,7 +169,7 @@ int main()
     Sub *s;
     id ret;
 
-    objc_setForwardHandler((void*)&forward_handler, NULL);
+    objc_setForwardHandler((void*)&forward_handler, (void*)&abort);
 
     // Be ready for ARC to retain the class object and call +initialize early
     state = 1;

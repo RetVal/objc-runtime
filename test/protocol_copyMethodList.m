@@ -1,6 +1,14 @@
 // TEST_CFLAGS -framework Foundation
 // need Foundation to get NSObject compatibility additions for class Protocol
 // because ARC calls [protocol retain]
+/*
+TEST_BUILD_OUTPUT
+.*protocol_copyMethodList.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\]
+.*protocol_copyMethodList.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\]
+.*protocol_copyMethodList.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\]
+.*protocol_copyMethodList.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\]
+END
+*/
 
 
 #include "test.h"

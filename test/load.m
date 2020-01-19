@@ -9,13 +9,6 @@ int deallocstate = 0;
 
 @interface Deallocator : TestRoot @end
 @implementation Deallocator
--(id)init {
-    self = [super init];
-    if (objc_collectingEnabled()) {
-        deallocstate = 1;
-    }
-    return self;
-}
 -(void)dealloc {
     deallocstate = 1;
     SUPER_DEALLOC();

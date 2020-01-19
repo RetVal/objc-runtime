@@ -1,4 +1,8 @@
-// TEST_CONFIG
+/*
+TEST_BUILD_OUTPUT
+.*sel.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\](\n.* note: expanded from macro 'testassert')?
+END
+*/
 
 #include "test.h"
 #include <string.h>
@@ -12,34 +16,6 @@ int main()
 
     // sel_getName recognizes the zero SEL
     testassert(0 == strcmp("<null selector>", sel_getName(0)));
-
-    // GC-ignored selectors.
-#if __has_feature(objc_arc)
-
-    // ARC dislikes `@selector(retain)`
-
-#else
-
-# if defined(__i386__)
-    // sel_getName recognizes GC-ignored SELs
-    if (objc_collectingEnabled()) {
-        testassert(0 == strcmp("<ignored selector>", 
-                               sel_getName(@selector(retain))));
-    } else {
-        testassert(0 == strcmp("retain", 
-                               sel_getName(@selector(retain))));
-    }
-
-    // _objc_search_builtins() shouldn't crash on GC-ignored SELs
-    union {
-        SEL sel;
-        const char *ptr;
-    } u;
-    u.sel = @selector(retain);
-    testassert(@selector(retain) == sel_registerName(u.ptr));
-# endif
-
-#endif
 
     succeed(__FILE__);
 }

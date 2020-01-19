@@ -42,7 +42,6 @@ static void disableTaggedPointers();
 static void detach_class(Class cls, bool isMeta);
 static void free_class(Class cls);
 static Class setSuperclass(Class cls, Class newSuper);
-static Class realizeClass(Class cls);
 static method_t *getMethodNoSuper_nolock(Class cls, SEL sel);
 static method_t *getMethod_nolock(Class cls, SEL sel);
 static IMP addMethod(Class cls, SEL name, IMP imp, const char *types, bool replace);
@@ -57,6 +56,8 @@ static void initializeTaggedPointerObfuscator(void);
 #if SUPPORT_FIXUP
 static void fixupMessageRef(message_ref_t *msg);
 #endif
+static Class realizeClassMaybeSwiftAndUnlock(Class cls, mutex_t& lock);
+static Class readClass(Class cls, bool headerIsBundle, bool headerIsPreoptimized);
 
 static bool MetaclassNSObjectAWZSwizzled;
 static bool ClassNSObjectRRSwizzled;
@@ -172,6 +173,12 @@ const uintptr_t objc_debug_isa_magic_value = 0;
 
 // not SUPPORT_PACKED_ISA
 #endif
+
+
+/***********************************************************************
+* Swift marker bits
+**********************************************************************/
+const uintptr_t objc_debug_swift_stable_abi_bit = FAST_IS_SWIFT_STABLE;
 
 
 /***********************************************************************
@@ -354,9 +361,7 @@ static class_ro_t *make_ro_writeable(class_rw_t *rw)
     if (rw->flags & RW_COPIED_RO) {
         // already writeable, do nothing
     } else {
-        class_ro_t *ro = (class_ro_t *)
-            memdup(rw->ro, sizeof(*rw->ro));
-        rw->ro = ro;
+        rw->ro = rw->ro->duplicate();
         rw->flags |= RW_COPIED_RO;
     }
     return (class_ro_t *)rw->ro;
@@ -930,7 +935,8 @@ static void remethodizeClass(Class cls)
 * Classes with no duplicates are not included.
 * Classes in the preoptimized named-class table are not included.
 * Classes whose duplicates are in the preoptimized table are not included.
-* Most code should use getNonMetaClass() instead of reading this table.
+* Most code should use getMaybeUnrealizedNonMetaClass() 
+* instead of reading this table.
 * Locking: runtimeLock must be read- or write-locked by the caller
 **********************************************************************/
 static NXMapTable *nonmeta_class_map = nil;
@@ -960,8 +966,8 @@ static void addNonMetaClass(Class cls)
     void *old;
     old = NXMapInsert(nonMetaClasses(), cls->ISA(), cls);
 
-    assert(!cls->isMetaClass());
-    assert(cls->ISA()->isMetaClass());
+    assert(!cls->isMetaClassMaybeUnrealized());
+    assert(cls->ISA()->isMetaClassMaybeUnrealized());
     assert(!old);
 }
 
@@ -1090,9 +1096,12 @@ static char *copySwiftV1MangledName(const char *string, bool isProtocol = false)
 
 
 /***********************************************************************
-* getClass
+* getClassExceptSomeSwift
 * Looks up a class by name. The class MIGHT NOT be realized.
 * Demangled Swift names are recognized.
+* Classes known to the Swift runtime but not yet used are NOT recognized.
+*   (such as subclasses of un-instantiated generics)
+* Use look_up_class() to find them as well.
 * Locking: runtimeLock must be read- or write-locked by the caller.
 **********************************************************************/
 
@@ -1115,7 +1124,7 @@ static Class getClass_impl(const char *name)
     return getPreoptimizedClass(name);
 }
 
-static Class getClass(const char *name)
+static Class getClassExceptSomeSwift(const char *name)
 {
     runtimeLock.assertLocked();
 
@@ -1144,11 +1153,12 @@ static void addNamedClass(Class cls, const char *name, Class replacing = nil)
 {
     runtimeLock.assertLocked();
     Class old;
-    if ((old = getClass(name))  &&  old != replacing) {
+    if ((old = getClassExceptSomeSwift(name))  &&  old != replacing) {
         inform_duplicate(name, old, cls);
 
-        // getNonMetaClass uses name lookups. Classes not found by name 
-        // lookup must be in the secondary meta->nonmeta table.
+        // getMaybeUnrealizedNonMetaClass uses name lookups.
+        // Classes not found by name lookup must be in the
+        // secondary meta->nonmeta table.
         addNonMetaClass(cls);
     } else {
         NXMapInsert(gdb_objc_realized_classes, name, cls);
@@ -1389,19 +1399,19 @@ static void remapClassRef(Class *clsref)
 
 
 /***********************************************************************
-* getNonMetaClass
+* getMaybeUnrealizedNonMetaClass
 * Return the ordinary class for this class or metaclass. 
 * `inst` is an instance of `cls` or a subclass thereof, or nil. 
 * Non-nil inst is faster.
+* The result may be unrealized.
 * Used by +initialize. 
 * Locking: runtimeLock must be read- or write-locked by the caller
 **********************************************************************/
-static Class getNonMetaClass(Class metacls, id inst)
+static Class getMaybeUnrealizedNonMetaClass(Class metacls, id inst)
 {
     static int total, named, secondary, sharedcache;
     runtimeLock.assertLocked();
-
-    realizeClass(metacls);
+    assert(metacls->isRealized());
 
     total++;
 
@@ -1409,6 +1419,7 @@ static Class getNonMetaClass(Class metacls, id inst)
     if (!metacls->isMetaClass()) return metacls;
 
     // metacls really is a metaclass
+    // which means inst (if any) is a class
 
     // special case for root metaclass
     // where inst == inst->ISA() == metacls is possible
@@ -1422,17 +1433,16 @@ static Class getNonMetaClass(Class metacls, id inst)
 
     // use inst if available
     if (inst) {
-        Class cls = (Class)inst;
-        realizeClass(cls);
+        Class cls = remapClass((Class)inst);
         // cls may be a subclass - find the real class for metacls
-        while (cls  &&  cls->ISA() != metacls) {
+        // fixme this probably stops working once Swift starts
+        // reallocating classes if cls is unrealized.
+        while (cls) {
+            if (cls->ISA() == metacls) {
+                assert(!cls->isMetaClassMaybeUnrealized());
+                return cls;
+            }
             cls = cls->superclass;
-            realizeClass(cls);
-        }
-        if (cls) {
-            assert(!cls->isMetaClass());
-            assert(cls->ISA() == metacls);
-            return cls;
         }
 #if DEBUG
         _objc_fatal("cls is not an instance of metacls");
@@ -1443,7 +1453,7 @@ static Class getNonMetaClass(Class metacls, id inst)
 
     // try name lookup
     {
-        Class cls = getClass(metacls->mangledName());
+        Class cls = getClassExceptSomeSwift(metacls->mangledName());
         if (cls->ISA() == metacls) {
             named++;
             if (PrintInitializing) {
@@ -1451,8 +1461,6 @@ static Class getNonMetaClass(Class metacls, id inst)
                              "successful by-name metaclass lookups",
                              named, total, named*100.0/total);
             }
-
-            realizeClass(cls);
             return cls;
         }
     }
@@ -1469,7 +1477,6 @@ static Class getNonMetaClass(Class metacls, id inst)
             }
 
             assert(cls->ISA() == metacls);            
-            realizeClass(cls);
             return cls;
         }
     }
@@ -1498,7 +1505,6 @@ static Class getNonMetaClass(Class metacls, id inst)
                              sharedcache, total, sharedcache*100.0/total);
             }
 
-            realizeClass(cls);
             return cls;
         }
     }
@@ -1508,17 +1514,64 @@ static Class getNonMetaClass(Class metacls, id inst)
 
 
 /***********************************************************************
-* _class_getNonMetaClass
-* Return the ordinary class for this class or metaclass. 
-* Used by +initialize. 
-* Locking: acquires runtimeLock
+* class_initialize.  Send the '+initialize' message on demand to any
+* uninitialized class. Force initialization of superclasses first.
+* inst is an instance of cls, or nil. Non-nil is better for performance.
+* Returns the class pointer. If the class was unrealized then 
+* it may be reallocated.
+* Locking: 
+*   runtimeLock must be held by the caller
+*   This function may drop the lock.
+*   On exit the lock is re-acquired or dropped as requested by leaveLocked.
 **********************************************************************/
-Class _class_getNonMetaClass(Class cls, id obj)
+static Class initializeAndMaybeRelock(Class cls, id inst,
+                                      mutex_t& lock, bool leaveLocked)
 {
-    mutex_locker_t lock(runtimeLock);
-    cls = getNonMetaClass(cls, obj);
+    lock.assertLocked();
     assert(cls->isRealized());
+
+    if (cls->isInitialized()) {
+        if (!leaveLocked) lock.unlock();
+        return cls;
+    }
+
+    // Find the non-meta class for cls, if it is not already one.
+    // The +initialize message is sent to the non-meta class object.
+    Class nonmeta = getMaybeUnrealizedNonMetaClass(cls, inst);
+
+    // Realize the non-meta class if necessary.
+    if (nonmeta->isRealized()) {
+        // nonmeta is cls, which was already realized
+        // OR nonmeta is distinct, but is already realized
+        // - nothing else to do
+        lock.unlock();
+    } else {
+        nonmeta = realizeClassMaybeSwiftAndUnlock(nonmeta, lock);
+        // runtimeLock is now unlocked
+        // fixme Swift can't relocate the class today,
+        // but someday it will:
+        cls = object_getClass(nonmeta);
+    }
+
+    // runtimeLock is now unlocked, for +initialize dispatch
+    assert(nonmeta->isRealized());
+    initializeNonMetaClass(nonmeta);
+
+    if (leaveLocked) runtimeLock.lock();
     return cls;
+}
+
+// Locking: acquires runtimeLock
+Class class_initialize(Class cls, id obj)
+{
+    runtimeLock.lock();
+    return initializeAndMaybeRelock(cls, obj, runtimeLock, false);
+}
+
+// Locking: caller must hold runtimeLock; this may drop and re-acquire it
+static Class initializeAndLeaveLocked(Class cls, id obj, mutex_t& lock)
+{
+    return initializeAndMaybeRelock(cls, obj, lock, true);
 }
 
 
@@ -1849,13 +1902,14 @@ static void reconcileInstanceVariables(Class cls, Class supercls, const class_ro
 
 
 /***********************************************************************
-* realizeClass
+* realizeClassWithoutSwift
 * Performs first-time initialization on class cls, 
 * including allocating its read-write data.
+* Does not perform any Swift-side initialization.
 * Returns the real class structure for the class. 
 * Locking: runtimeLock must be write-locked by the caller
 **********************************************************************/
-static Class realizeClass(Class cls)
+static Class realizeClassWithoutSwift(Class cls)
 {
     runtimeLock.assertLocked();
 
@@ -1895,16 +1949,22 @@ static Class realizeClass(Class cls)
     cls->chooseClassArrayIndex();
 
     if (PrintConnecting) {
-        _objc_inform("CLASS: realizing class '%s'%s %p %p #%u", 
+        _objc_inform("CLASS: realizing class '%s'%s %p %p #%u %s%s",
                      cls->nameForLogging(), isMeta ? " (meta)" : "", 
-                     (void*)cls, ro, cls->classArrayIndex());
+                     (void*)cls, ro, cls->classArrayIndex(),
+                     cls->isSwiftStable() ? "(swift)" : "",
+                     cls->isSwiftLegacy() ? "(pre-stable swift)" : "");
     }
 
     // Realize superclass and metaclass, if they aren't already.
     // This needs to be done after RW_REALIZED is set above, for root classes.
     // This needs to be done after class index is chosen, for root metaclasses.
-    supercls = realizeClass(remapClass(cls->superclass));
-    metacls = realizeClass(remapClass(cls->ISA()));
+    // This assumes that none of those classes have Swift contents,
+    //   or that Swift's initializers have already been called.
+    //   fixme that assumption will be wrong if we add support
+    //   for ObjC subclasses of Swift classes.
+    supercls = realizeClassWithoutSwift(remapClass(cls->superclass));
+    metacls = realizeClassWithoutSwift(remapClass(cls->ISA()));
 
 #if SUPPORT_NONPOINTER_ISA
     // Disable non-pointer isa for some classes and/or platforms.
@@ -1959,6 +2019,14 @@ static Class realizeClass(Class cls)
             cls->setHasCxxCtor();
         }
     }
+    
+    // Propagate the associated objects forbidden flag from ro or from
+    // the superclass.
+    if ((ro->flags & RO_FORBIDS_ASSOCIATED_OBJECTS) ||
+        (supercls && supercls->forbidsAssociatedObjects()))
+    {
+        rw->flags |= RW_FORBIDS_ASSOCIATED_OBJECTS;
+    }
 
     // Connect this class to its superclass's subclass lists
     if (supercls) {
@@ -1971,6 +2039,172 @@ static Class realizeClass(Class cls)
     methodizeClass(cls);
 
     return cls;
+}
+
+
+/***********************************************************************
+* _objc_realizeClassFromSwift
+* Called by Swift when it needs the ObjC part of a class to be realized.
+* There are four cases:
+* 1. cls != nil; previously == cls
+*    Class cls is being realized in place
+* 2. cls != nil; previously == nil
+*    Class cls is being constructed at runtime
+* 3. cls != nil; previously != cls
+*    The class that was at previously has been reallocated to cls
+* 4. cls == nil, previously != nil
+*    The class at previously is hereby disavowed
+*
+* Only variants #1 and #2 are supported today.
+*
+* Locking: acquires runtimeLock
+**********************************************************************/
+Class _objc_realizeClassFromSwift(Class cls, void *previously)
+{
+    if (cls) {
+        if (previously && previously != (void*)cls) {
+            // #3: relocation
+            // In the future this will mean remapping the old address
+            // to the new class, and installing dispatch forwarding
+            // machinery at the old address
+            _objc_fatal("Swift requested that class %p be reallocated, "
+                        "but libobjc does not support that.", previously);
+        } else {
+            // #1 and #2: realization in place, or new class
+            mutex_locker_t lock(runtimeLock);
+
+            if (!previously) {
+                // #2: new class
+                cls = readClass(cls, false/*bundle*/, false/*shared cache*/);
+            }
+
+            // #1 and #2: realization in place, or new class
+            // We ignore the Swift metadata initializer callback.
+            // We assume that's all handled since we're being called from Swift.
+            return realizeClassWithoutSwift(cls);
+        }
+    }
+    else {
+        // #4: disavowal
+        // In the future this will mean remapping the old address to nil
+        // and if necessary removing the old address from any other tables.
+        _objc_fatal("Swift requested that class %p be ignored, "
+                    "but libobjc does not support that.", previously);
+    }
+}
+
+/***********************************************************************
+* realizeSwiftClass
+* Performs first-time initialization on class cls, 
+* including allocating its read-write data, 
+* and any Swift-side initialization.
+* Returns the real class structure for the class. 
+* Locking: acquires runtimeLock indirectly
+**********************************************************************/
+static Class realizeSwiftClass(Class cls)
+{
+    runtimeLock.assertUnlocked();
+
+    // Some assumptions:
+    // * Metaclasses never have a Swift initializer.
+    // * Root classes never have a Swift initializer.
+    //   (These two together avoid initialization order problems at the root.)
+    // * Unrealized non-Swift classes have no Swift ancestry.
+    // * Unrealized Swift classes with no initializer have no ancestry that
+    //   does have the initializer.
+    //   (These two together mean we don't need to scan superclasses here
+    //   and we don't need to worry about Swift superclasses inside
+    //   realizeClassWithoutSwift()).
+
+    // fixme some of these assumptions will be wrong
+    // if we add support for ObjC sublasses of Swift classes.
+
+#if DEBUG
+    runtimeLock.lock();
+    assert(remapClass(cls) == cls);
+    assert(cls->isSwiftStable_ButAllowLegacyForNow());
+    assert(!cls->isMetaClassMaybeUnrealized());
+    assert(cls->superclass);
+    runtimeLock.unlock();
+#endif
+
+    // Look for a Swift metadata initialization function
+    // installed on the class. If it is present we call it.
+    // That function in turn initializes the Swift metadata,
+    // prepares the "compiler-generated" ObjC metadata if not
+    // already present, and calls _objc_realizeSwiftClass() to finish
+    // our own initialization.
+
+    if (auto init = cls->swiftMetadataInitializer()) {
+        if (PrintConnecting) {
+            _objc_inform("CLASS: calling Swift metadata initializer "
+                         "for class '%s' (%p)", cls->nameForLogging(), cls);
+        }
+
+        Class newcls = init(cls, nil);
+
+        // fixme someday Swift will need to relocate classes at this point,
+        // but we don't accept that yet.
+        if (cls != newcls) {
+            _objc_fatal("Swift metadata initializer moved a class "
+                        "from %p to %p, but libobjc does not yet allow that.",
+                        cls, newcls);
+        }
+
+        return newcls;
+    }
+    else {
+        // No Swift-side initialization callback.
+        // Perform our own realization directly.
+        mutex_locker_t lock(runtimeLock);
+        return realizeClassWithoutSwift(cls);
+    }
+}
+
+
+/***********************************************************************
+* realizeClassMaybeSwift (MaybeRelock / AndUnlock / AndLeaveLocked)
+* Realize a class that might be a Swift class.
+* Returns the real class structure for the class. 
+* Locking: 
+*   runtimeLock must be held on entry
+*   runtimeLock may be dropped during execution
+*   ...AndUnlock function leaves runtimeLock unlocked on exit
+*   ...AndLeaveLocked re-acquires runtimeLock if it was dropped
+* This complication avoids repeated lock transitions in some cases.
+**********************************************************************/
+static Class
+realizeClassMaybeSwiftMaybeRelock(Class cls, mutex_t& lock, bool leaveLocked)
+{
+    lock.assertLocked();
+
+    if (!cls->isSwiftStable_ButAllowLegacyForNow()) {
+        // Non-Swift class. Realize it now with the lock still held.
+        // fixme wrong in the future for objc subclasses of swift classes
+        realizeClassWithoutSwift(cls);
+        if (!leaveLocked) lock.unlock();
+    } else {
+        // Swift class. We need to drop locks and call the Swift
+        // runtime to initialize it.
+        lock.unlock();
+        cls = realizeSwiftClass(cls);
+        assert(cls->isRealized());    // callback must have provoked realization
+        if (leaveLocked) lock.lock();
+    }
+
+    return cls;
+}
+
+static Class
+realizeClassMaybeSwiftAndUnlock(Class cls, mutex_t& lock)
+{
+    return realizeClassMaybeSwiftMaybeRelock(cls, lock, false);
+}
+
+static Class
+realizeClassMaybeSwiftAndLeaveLocked(Class cls, mutex_t& lock)
+{
+    return realizeClassMaybeSwiftMaybeRelock(cls, lock, true);
 }
 
 
@@ -2002,6 +2236,7 @@ missingWeakSuperclass(Class cls)
 * realizeAllClassesInImage
 * Non-lazily realizes all unrealized classes in the given image.
 * Locking: runtimeLock must be held by the caller.
+* Locking: this function may drop and re-acquire the lock.
 **********************************************************************/
 static void realizeAllClassesInImage(header_info *hi)
 {
@@ -2015,7 +2250,10 @@ static void realizeAllClassesInImage(header_info *hi)
     classlist = _getObjc2ClassList(hi, &count);
 
     for (i = 0; i < count; i++) {
-        realizeClass(remapClass(classlist[i]));
+        Class cls = remapClass(classlist[i]);
+        if (cls) {
+            realizeClassMaybeSwiftAndLeaveLocked(cls, runtimeLock);
+        }
     }
 
     hi->setAllClassesRealized(YES);
@@ -2026,6 +2264,11 @@ static void realizeAllClassesInImage(header_info *hi)
 * realizeAllClasses
 * Non-lazily realizes all unrealized classes in all known images.
 * Locking: runtimeLock must be held by the caller.
+* Locking: this function may drop and re-acquire the lock.
+* Dropping the lock makes this function thread-unsafe with respect 
+*   to concurrent image unload, but the callers of this function 
+*   already ultimately do something that is also thread-unsafe with 
+*   respect to image unload (such as using the list of all classes).
 **********************************************************************/
 static void realizeAllClasses(void)
 {
@@ -2033,7 +2276,7 @@ static void realizeAllClasses(void)
 
     header_info *hi;
     for (hi = FirstHeader; hi; hi = hi->getNext()) {
-        realizeAllClassesInImage(hi);
+        realizeAllClassesInImage(hi);  // may drop and re-acquire runtimeLock
     }
 }
 
@@ -2242,6 +2485,20 @@ bool mustReadClasses(header_info *hi)
         goto readthem;
     }
 
+    // readClass() rewrites bits in backward-deploying Swift stable ABI code.
+    // The assumption here is there there are no such classes
+    // in the dyld shared cache.
+#if DEBUG
+    {
+        size_t count;
+        classref_t *classlist = _getObjc2ClassList(hi, &count);
+        for (size_t i = 0; i < count; i++) {
+            Class cls = remapClass(classlist[i]);
+            assert(!cls->isUnfixedBackwardDeployingStableSwift());
+        }
+    }
+#endif
+
     // readClass() does not need to do anything.
     return NO;
 
@@ -2300,6 +2557,8 @@ Class readClass(Class cls, bool headerIsBundle, bool headerIsPreoptimized)
     if (cls->ISA()->cache._occupied) cls->ISA()->cache._occupied = 0;
 #endif
 
+    cls->fixupBackwardDeployingStableSwift();
+
     Class replacing = nil;
     if (Class newCls = popFutureNamedClass(mangledName)) {
         // This name was previously allocated as a future class.
@@ -2330,7 +2589,7 @@ Class readClass(Class cls, bool headerIsBundle, bool headerIsPreoptimized)
         // class list built in shared cache
         // fixme strict assert doesn't work because of duplicates
         // assert(cls == getClass(name));
-        assert(getClass(mangledName));
+        assert(getClassExceptSomeSwift(mangledName));
     } else {
         addNamedClass(cls, mangledName, replacing);
         addClassTableEntry(cls);
@@ -2473,7 +2732,7 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
         // Disable nonpointer isa if any image contains old Swift code
         for (EACH_HEADER) {
             if (hi->info()->containsSwift()  &&
-                hi->info()->swiftVersion() < objc_image_info::SwiftVersion3)
+                hi->info()->swiftUnstableVersion() < objc_image_info::SwiftVersion3)
             {
                 DisableNonpointerIsa = true;
                 if (PrintRawIsa) {
@@ -2683,7 +2942,18 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
 #endif
             
             addClassTableEntry(cls);
-            realizeClass(cls);
+
+            if (cls->isSwiftStable()) {
+                if (cls->swiftMetadataInitializer()) {
+                    _objc_fatal("Swift class %s with a metadata initializer "
+                                "is not allowed to be non-lazy",
+                                cls->nameForLogging());
+                }
+                // fixme also disallow relocatable classes
+                // We can't disallow all Swift classes because of
+                // classes like Swift.__EmptyArrayStorage
+            }
+            realizeClassWithoutSwift(cls);
         }
     }
 
@@ -2692,8 +2962,12 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
     // Realize newly-resolved future classes, in case CF manipulates them
     if (resolvedFutureClasses) {
         for (i = 0; i < resolvedFutureClassCount; i++) {
-            realizeClass(resolvedFutureClasses[i]);
-            resolvedFutureClasses[i]->setInstancesRequireRawIsa(false/*inherited*/);
+            Class cls = resolvedFutureClasses[i];
+            if (cls->isSwiftStable()) {
+                _objc_fatal("Swift class is not allowed to be future");
+            }
+            realizeClassWithoutSwift(cls);
+            cls->setInstancesRequireRawIsa(false/*inherited*/);
         }
         free(resolvedFutureClasses);
     }    
@@ -2880,7 +3154,11 @@ void prepare_load_methods(const headerType *mhdr)
         category_t *cat = categorylist[i];
         Class cls = remapClass(cat->cls);
         if (!cls) continue;  // category for ignored weak-linked class
-        realizeClass(cls);
+        if (cls->isSwiftStable()) {
+            _objc_fatal("Swift class extensions and categories on Swift "
+                        "classes are not allowed to have +load methods");
+        }
+        realizeClassWithoutSwift(cls);
         assert(cls->ISA()->isRealized());
         add_category_to_loadable_list(cat);
     }
@@ -4418,7 +4696,7 @@ copyClassNamesForImage_nolock(header_info *hi, unsigned int *outCount)
     for (size_t i = 0; i < count; i++) {
         Class cls = remapClass(classlist[i]);
         if (cls) {
-            names[i-shift] = cls->demangledName(true/*realize*/);
+            names[i-shift] = cls->demangledName();
         } else {
             shift++;  // ignored weak-linked class
         }
@@ -4554,12 +4832,12 @@ objc_class::nameForLogging()
 /***********************************************************************
 * objc_class::demangledName
 * If realize=false, the class must already be realized or future.
-* Locking: If realize=true, runtimeLock must be held by the caller.
+* Locking: runtimeLock may or may not be held by the caller.
 **********************************************************************/
 mutex_t DemangleCacheLock;
 static NXHashTable *DemangleCache;
 const char *
-objc_class::demangledName(bool realize)
+objc_class::demangledName()
 {
     // Return previously demangled name if available.
     if (isRealized()  ||  isFuture()) {
@@ -4587,33 +4865,30 @@ objc_class::demangledName(bool realize)
         return mangled;
     }
 
-    // Class is not yet realized and name is mangled. Realize the class.
+    // Class is not yet realized and name is mangled.
+    // Allocate the name but don't save it in the class.
+    // Save the name in a side cache instead to prevent leaks.
+    // When the class is actually realized we may allocate a second
+    // copy of the name, but we don't care.
+    // (Previously we would try to realize the class now and save the
+    // name there, but realization is more complicated for Swift classes.)
+
     // Only objc_copyClassNamesForImage() should get here.
-    
     // fixme lldb's calls to class_getName() can also get here when
     // interrogating the dyld shared cache. (rdar://27258517)
     // fixme runtimeLock.assertLocked();
     // fixme assert(realize);
-    
-    if (realize) {
-        runtimeLock.assertLocked();
-        realizeClass((Class)this);
-        data()->demangledName = de;
-        return de;
-    }
-    else {
-        // Save the string to avoid leaks.
-        char *cached;
-        {
-            mutex_locker_t lock(DemangleCacheLock);
-            if (!DemangleCache) {
-                DemangleCache = NXCreateHashTable(NXStrPrototype, 0, nil);
-            }
-            cached = (char *)NXHashInsertIfAbsent(DemangleCache, de);
+
+    char *cached;
+    {
+        mutex_locker_t lock(DemangleCacheLock);
+        if (!DemangleCache) {
+            DemangleCache = NXCreateHashTable(NXStrPrototype, 0, nil);
         }
-        if (cached != de) free(de);
-        return cached;
+        cached = (char *)NXHashInsertIfAbsent(DemangleCache, de);
     }
+    if (cached != de) free(de);
+    return cached;
 }
 
 
@@ -4811,6 +5086,135 @@ Method class_getInstanceMethod(Class cls, SEL sel)
 
 
 /***********************************************************************
+* resolveClassMethod
+* Call +resolveClassMethod, looking for a method to be added to class cls.
+* cls should be a metaclass.
+* Does not check if the method already exists.
+**********************************************************************/
+static void resolveClassMethod(Class cls, SEL sel, id inst)
+{
+    runtimeLock.assertUnlocked();
+    assert(cls->isRealized());
+    assert(cls->isMetaClass());
+
+    if (! lookUpImpOrNil(cls, SEL_resolveClassMethod, inst, 
+                         NO/*initialize*/, YES/*cache*/, NO/*resolver*/)) 
+    {
+        // Resolver not implemented.
+        return;
+    }
+
+    Class nonmeta;
+    {
+        mutex_locker_t lock(runtimeLock);
+        nonmeta = getMaybeUnrealizedNonMetaClass(cls, inst);
+        // +initialize path should have realized nonmeta already
+        if (!nonmeta->isRealized()) {
+            _objc_fatal("nonmeta class %s (%p) unexpectedly not realized",
+                        nonmeta->nameForLogging(), nonmeta);
+        }
+    }
+    BOOL (*msg)(Class, SEL, SEL) = (typeof(msg))objc_msgSend;
+    bool resolved = msg(nonmeta, SEL_resolveClassMethod, sel);
+
+    // Cache the result (good or bad) so the resolver doesn't fire next time.
+    // +resolveClassMethod adds to self->ISA() a.k.a. cls
+    IMP imp = lookUpImpOrNil(cls, sel, inst, 
+                             NO/*initialize*/, YES/*cache*/, NO/*resolver*/);
+
+    if (resolved  &&  PrintResolving) {
+        if (imp) {
+            _objc_inform("RESOLVE: method %c[%s %s] "
+                         "dynamically resolved to %p", 
+                         cls->isMetaClass() ? '+' : '-', 
+                         cls->nameForLogging(), sel_getName(sel), imp);
+        }
+        else {
+            // Method resolver didn't add anything?
+            _objc_inform("RESOLVE: +[%s resolveClassMethod:%s] returned YES"
+                         ", but no new implementation of %c[%s %s] was found",
+                         cls->nameForLogging(), sel_getName(sel), 
+                         cls->isMetaClass() ? '+' : '-', 
+                         cls->nameForLogging(), sel_getName(sel));
+        }
+    }
+}
+
+
+/***********************************************************************
+* resolveInstanceMethod
+* Call +resolveInstanceMethod, looking for a method to be added to class cls.
+* cls may be a metaclass or a non-meta class.
+* Does not check if the method already exists.
+**********************************************************************/
+static void resolveInstanceMethod(Class cls, SEL sel, id inst)
+{
+    runtimeLock.assertUnlocked();
+    assert(cls->isRealized());
+
+    if (! lookUpImpOrNil(cls->ISA(), SEL_resolveInstanceMethod, cls, 
+                         NO/*initialize*/, YES/*cache*/, NO/*resolver*/)) 
+    {
+        // Resolver not implemented.
+        return;
+    }
+
+    BOOL (*msg)(Class, SEL, SEL) = (typeof(msg))objc_msgSend;
+    bool resolved = msg(cls, SEL_resolveInstanceMethod, sel);
+
+    // Cache the result (good or bad) so the resolver doesn't fire next time.
+    // +resolveInstanceMethod adds to self a.k.a. cls
+    IMP imp = lookUpImpOrNil(cls, sel, inst, 
+                             NO/*initialize*/, YES/*cache*/, NO/*resolver*/);
+
+    if (resolved  &&  PrintResolving) {
+        if (imp) {
+            _objc_inform("RESOLVE: method %c[%s %s] "
+                         "dynamically resolved to %p", 
+                         cls->isMetaClass() ? '+' : '-', 
+                         cls->nameForLogging(), sel_getName(sel), imp);
+        }
+        else {
+            // Method resolver didn't add anything?
+            _objc_inform("RESOLVE: +[%s resolveInstanceMethod:%s] returned YES"
+                         ", but no new implementation of %c[%s %s] was found",
+                         cls->nameForLogging(), sel_getName(sel), 
+                         cls->isMetaClass() ? '+' : '-', 
+                         cls->nameForLogging(), sel_getName(sel));
+        }
+    }
+}
+
+
+/***********************************************************************
+* resolveMethod
+* Call +resolveClassMethod or +resolveInstanceMethod.
+* Returns nothing; any result would be potentially out-of-date already.
+* Does not check if the method already exists.
+**********************************************************************/
+static void resolveMethod(Class cls, SEL sel, id inst)
+{
+    runtimeLock.assertUnlocked();
+    assert(cls->isRealized());
+
+    if (! cls->isMetaClass()) {
+        // try [cls resolveInstanceMethod:sel]
+        resolveInstanceMethod(cls, sel, inst);
+    } 
+    else {
+        // try [nonMetaClass resolveClassMethod:sel]
+        // and [cls resolveInstanceMethod:sel]
+        resolveClassMethod(cls, sel, inst);
+        if (!lookUpImpOrNil(cls, sel, inst, 
+                            NO/*initialize*/, YES/*cache*/, NO/*resolver*/)) 
+        {
+            resolveInstanceMethod(cls, sel, inst);
+        }
+    }
+}
+
+
+/***********************************************************************
 * log_and_fill_cache
 * Log this method call. If the logger permits it, fill the method cache.
 * cls is the method whose cache should be filled. 
@@ -4884,20 +5288,21 @@ IMP lookUpImpOrForward(Class cls, SEL sel, id inst,
     checkIsKnownClass(cls);
 
     if (!cls->isRealized()) {
-        realizeClass(cls);
+        cls = realizeClassMaybeSwiftAndLeaveLocked(cls, runtimeLock);
+        // runtimeLock may have been dropped but is now locked again
     }
 
-    if (initialize  &&  !cls->isInitialized()) {
-        runtimeLock.unlock();
-        _class_initialize (_class_getNonMetaClass(cls, inst));
-        runtimeLock.lock();
-        // If sel == initialize, _class_initialize will send +initialize and 
+    if (initialize && !cls->isInitialized()) {
+        cls = initializeAndLeaveLocked(cls, inst, runtimeLock);
+        // runtimeLock may have been dropped but is now locked again
+
+        // If sel == initialize, class_initialize will send +initialize and 
         // then the messenger will send +initialize again after this 
         // procedure finishes. Of course, if this is not being called 
         // from the messenger then it won't happen. 2778172
     }
 
-    
+
  retry:    
     runtimeLock.assertLocked();
 
@@ -4958,7 +5363,7 @@ IMP lookUpImpOrForward(Class cls, SEL sel, id inst,
 
     if (resolver  &&  !triedResolver) {
         runtimeLock.unlock();
-        _class_resolveMethod(cls, sel, inst);
+        resolveMethod(cls, sel, inst);
         runtimeLock.lock();
         // Don't cache the result; we don't hold the lock so it may have 
         // changed already. Re-do the search from scratch instead.
@@ -6016,6 +6421,20 @@ class_replaceProperty(Class cls, const char *name,
 * Look up a class by name, and realize it.
 * Locking: acquires runtimeLock
 **********************************************************************/
+static BOOL empty_getClass(const char *name, Class *outClass)
+{
+    *outClass = nil;
+    return NO;
+}
+
+static ChainedHookFunction<objc_hook_getClass> GetClassHook{empty_getClass};
+
+void objc_setHook_getClass(objc_hook_getClass newValue,
+                           objc_hook_getClass *outOldValue)
+{
+    GetClassHook.set(newValue, outOldValue);
+}
+
 Class 
 look_up_class(const char *name, 
               bool includeUnconnected __attribute__((unused)), 
@@ -6026,14 +6445,58 @@ look_up_class(const char *name,
     Class result;
     bool unrealized;
     {
-        mutex_locker_t lock(runtimeLock);
-        result = getClass(name);
+        runtimeLock.lock();
+        result = getClassExceptSomeSwift(name);
         unrealized = result  &&  !result->isRealized();
+        if (unrealized) {
+            result = realizeClassMaybeSwiftAndUnlock(result, runtimeLock);
+            // runtimeLock is now unlocked
+        } else {
+            runtimeLock.unlock();
+        }
     }
-    if (unrealized) {
-        mutex_locker_t lock(runtimeLock);
-        realizeClass(result);
+
+    if (!result) {
+        // Ask Swift about its un-instantiated classes.
+
+        // We use thread-local storage to prevent infinite recursion
+        // if the hook function provokes another lookup of the same name
+        // (for example, if the hook calls objc_allocateClassPair)
+
+        auto *tls = _objc_fetch_pthread_data(true);
+
+        // Stop if this thread is already looking up this name.
+        for (unsigned i = 0; i < tls->classNameLookupsUsed; i++) {
+            if (0 == strcmp(name, tls->classNameLookups[i])) {
+                return nil;
+            }
+        }
+
+        // Save this lookup in tls.
+        if (tls->classNameLookupsUsed == tls->classNameLookupsAllocated) {
+            tls->classNameLookupsAllocated =
+                (tls->classNameLookupsAllocated * 2 ?: 1);
+            size_t size = tls->classNameLookupsAllocated *
+                sizeof(tls->classNameLookups[0]);
+            tls->classNameLookups = (const char **)
+                realloc(tls->classNameLookups, size);
+        }
+        tls->classNameLookups[tls->classNameLookupsUsed++] = name;
+
+        // Call the hook.
+        Class swiftcls = nil;
+        if (GetClassHook.get()(name, &swiftcls)) {
+            assert(swiftcls->isRealized());
+            result = swiftcls;
+        }
+
+        // Erase the name from tls.
+        unsigned slot = --tls->classNameLookupsUsed;
+        assert(slot >= 0  &&  slot < tls->classNameLookupsAllocated);
+        assert(name == tls->classNameLookups[slot]);
+        tls->classNameLookups[slot] = nil;
     }
+
     return result;
 }
 
@@ -6072,8 +6535,7 @@ objc_duplicateClass(Class original, const char *name,
     duplicate->bits = original->bits;
     duplicate->setData(rw);
 
-    rw->ro = (class_ro_t *)
-        memdup(original->data()->ro, sizeof(*original->data()->ro));
+    rw->ro = original->data()->ro->duplicate();
     *(char **)&rw->ro->name = strdupIfMutable(name);
 
     rw->methods = original->data()->methods.duplicate();
@@ -6142,6 +6604,8 @@ static void objc_initializeClassPair_internal(Class superclass, const char *name
         meta_ro_w->flags |= RO_ROOT;
     }
     if (superclass) {
+        uint32_t flagsToCopy = RW_FORBIDS_ASSOCIATED_OBJECTS;
+        cls->data()->flags |= superclass->data()->flags & flagsToCopy;
         cls_ro_w->instanceStart = superclass->unalignedInstanceSize();
         meta_ro_w->instanceStart = superclass->ISA()->unalignedInstanceSize();
         cls->setInstanceSize(cls_ro_w->instanceStart);
@@ -6215,11 +6679,16 @@ verifySuperclass(Class superclass, bool rootOK)
 **********************************************************************/
 Class objc_initializeClassPair(Class superclass, const char *name, Class cls, Class meta)
 {
+    // Fail if the class name is in use.
+    if (look_up_class(name, NO, NO)) return nil;
+
     mutex_locker_t lock(runtimeLock);
 
     // Fail if the class name is in use.
     // Fail if the superclass isn't kosher.
-    if (getClass(name)  ||  !verifySuperclass(superclass, true/*rootOK*/)) {
+    if (getClassExceptSomeSwift(name)  ||
+        !verifySuperclass(superclass, true/*rootOK*/))
+    {
         return nil;
     }
 
@@ -6239,11 +6708,16 @@ Class objc_allocateClassPair(Class superclass, const char *name,
 {
     Class cls, meta;
 
+    // Fail if the class name is in use.
+    if (look_up_class(name, NO, NO)) return nil;
+
     mutex_locker_t lock(runtimeLock);
 
     // Fail if the class name is in use.
     // Fail if the superclass isn't kosher.
-    if (getClass(name)  ||  !verifySuperclass(superclass, true/*rootOK*/)) {
+    if (getClassExceptSomeSwift(name)  ||
+        !verifySuperclass(superclass, true/*rootOK*/))
+    {
         return nil;
     }
 
@@ -6327,7 +6801,11 @@ Class objc_readClassPair(Class bits, const struct objc_image_info *info)
         _objc_fatal("objc_readClassPair for class %s changed %p to %p", 
                     cls->nameForLogging(), bits, cls);
     }
-    realizeClass(cls);
+
+    // The only client of this function is old Swift.
+    // Stable Swift won't use it.
+    // fixme once Swift in the OS settles we can assert(!cls->isSwiftStable()).
+    cls = realizeClassWithoutSwift(cls);
 
     return cls;
 }

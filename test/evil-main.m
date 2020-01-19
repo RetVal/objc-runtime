@@ -6,7 +6,7 @@ int main(int argc __unused, char **argv)
 {
     fn();
 
-#if TARGET_OS_EMBEDDED && !defined(NOT_EVIL)
+#if TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR && !defined(NOT_EVIL)
 #pragma unused (argv)
     fail("All that is necessary for the triumph of evil is that good men do nothing.");
 #else

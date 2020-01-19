@@ -1,9 +1,14 @@
-// TEST_ENV OBJC_DISABLE_TAGGED_POINTERS=YES
-// TEST_CRASHES
-/* 
+/*
+TEST_ENV OBJC_DISABLE_TAGGED_POINTERS=YES
+TEST_CRASHES
+
+TEST_BUILD_OUTPUT
+.*taggedPointersDisabled.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\]
+END
+
 TEST_RUN_OUTPUT
 objc\[\d+\]: tagged pointers are disabled
-CRASHED: SIG(ILL|TRAP)
+objc\[\d+\]: HALTED
 OR
 OK: taggedPointersDisabled.m
 END
@@ -16,6 +21,9 @@ END
 
 int main()
 {
+    // provoke the same nullability warning as the real test
+    objc_getClass(nil);
+
     succeed(__FILE__);
 }
 

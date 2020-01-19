@@ -1,7 +1,7 @@
 /*
 TEST_CRASHES
 TEST_RUN_OUTPUT
-objc1
+arm
 OK: badCache.m
 OR
 crash now
@@ -10,19 +10,22 @@ objc\[\d+\]: .*
 objc\[\d+\]: .*
 objc\[\d+\]: .*
 objc\[\d+\]: .*
-objc\[\d+\]: Method cache corrupted\.
-CRASHED: SIG(ILL|TRAP)
+objc\[\d+\]: Method cache corrupted.*
+objc\[\d+\]: HALTED
 END
 */
 
 
 #include "test.h"
 
-#if !__OBJC2__  ||  __arm__
+// Test objc_msgSend's detection of infinite loops during cache scan.
+
+#if __arm__
 
 int main()
 {
-    fprintf(stderr, "objc1\n");
+    testwarn("objc_msgSend on arm doesn't detect infinite loops");
+    fprintf(stderr, "arm\n");
     succeed(__FILE__);
 }
 
@@ -65,7 +68,7 @@ int main()
     struct cache_t *cache = &((__bridge struct class_t *)cls)->cache;
 
 #   define COUNT 4
-    struct bucket_t *buckets = calloc(sizeof(struct bucket_t), COUNT+1);
+    struct bucket_t *buckets = (struct bucket_t *)calloc(sizeof(struct bucket_t), COUNT+1);
     for (int i = 0; i < COUNT; i++) {
         buckets[i].sel = ~0;
         buckets[i].imp = ~0;

@@ -1,10 +1,10 @@
-// for OBJC2 mac only
-/* TEST_CONFIG OS=macosx ARCH=x86_64
+/* TEST_CONFIG OS=macosx
    TEST_CRASHES
 
 TEST_RUN_OUTPUT
 objc\[\d+\]: objc_removeExceptionHandler\(\) called with unknown alt handler; this is probably a bug in multithreaded AppKit use. Set environment variable OBJC_DEBUG_ALT_HANDLERS=YES or break in objc_alt_handler_error\(\) to debug.
-CRASHED: SIGILL
+objc\[\d+\]: objc_removeExceptionHandler\(\) called with unknown alt handler; this is probably a bug in multithreaded AppKit use. 
+objc\[\d+\]: HALTED
 END
 */
 

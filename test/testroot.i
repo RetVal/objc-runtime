@@ -6,27 +6,26 @@
 #include <dlfcn.h>
 #include <objc/objc-internal.h>
 
-int TestRootLoad = 0;
-int TestRootInitialize = 0;
-int TestRootAlloc = 0;
-int TestRootAllocWithZone = 0;
-int TestRootCopy = 0;
-int TestRootCopyWithZone = 0;
-int TestRootMutableCopy = 0;
-int TestRootMutableCopyWithZone = 0;
-int TestRootInit = 0;
-int TestRootDealloc = 0;
-int TestRootFinalize = 0;
-int TestRootRetain = 0;
-int TestRootRelease = 0;
-int TestRootAutorelease = 0;
-int TestRootRetainCount = 0;
-int TestRootTryRetain = 0;
-int TestRootIsDeallocating = 0;
-int TestRootPlusRetain = 0;
-int TestRootPlusRelease = 0;
-int TestRootPlusAutorelease = 0;
-int TestRootPlusRetainCount = 0;
+atomic_int TestRootLoad;
+atomic_int TestRootInitialize;
+atomic_int TestRootAlloc;
+atomic_int TestRootAllocWithZone;
+atomic_int TestRootCopy;
+atomic_int TestRootCopyWithZone;
+atomic_int TestRootMutableCopy;
+atomic_int TestRootMutableCopyWithZone;
+atomic_int TestRootInit;
+atomic_int TestRootDealloc;
+atomic_int TestRootRetain;
+atomic_int TestRootRelease;
+atomic_int TestRootAutorelease;
+atomic_int TestRootRetainCount;
+atomic_int TestRootTryRetain;
+atomic_int TestRootIsDeallocating;
+atomic_int TestRootPlusRetain;
+atomic_int TestRootPlusRelease;
+atomic_int TestRootPlusAutorelease;
+atomic_int TestRootPlusRetainCount;
 
 
 @implementation TestRoot
@@ -35,66 +34,67 @@ int TestRootPlusRetainCount = 0;
 
 static void *
 retain_fn(void *self, SEL _cmd __unused) {
-    OSAtomicIncrement32(&TestRootRetain);
+    atomic_fetch_add_explicit(&TestRootRetain, 1, memory_order_relaxed);
     void * (*fn)(void *) = (typeof(fn))_objc_rootRetain;
     return fn(self); 
 }
 
 static void 
 release_fn(void *self, SEL _cmd __unused) {
-    OSAtomicIncrement32(&TestRootRelease);
+    atomic_fetch_add_explicit(&TestRootRelease, 1, memory_order_relaxed);
     void (*fn)(void *) = (typeof(fn))_objc_rootRelease;
     fn(self); 
 }
 
 static void *
 autorelease_fn(void *self, SEL _cmd __unused) { 
-    OSAtomicIncrement32(&TestRootAutorelease);
+    atomic_fetch_add_explicit(&TestRootAutorelease, 1, memory_order_relaxed);
     void * (*fn)(void *) = (typeof(fn))_objc_rootAutorelease;
     return fn(self); 
 }
 
 static unsigned long 
 retaincount_fn(void *self, SEL _cmd __unused) { 
-    OSAtomicIncrement32(&TestRootRetainCount);
+    atomic_fetch_add_explicit(&TestRootRetainCount, 1, memory_order_relaxed);
     unsigned long (*fn)(void *) = (typeof(fn))_objc_rootRetainCount;
     return fn(self); 
 }
 
 static void *
 copywithzone_fn(void *self, SEL _cmd __unused, void *zone) { 
-    OSAtomicIncrement32(&TestRootCopyWithZone);
-    void * (*fn)(void *, void *) = (typeof(fn))dlsym(RTLD_DEFAULT, "object_copy");
+    atomic_fetch_add_explicit(&TestRootCopyWithZone, 1, memory_order_relaxed);
+    void * (*fn)(void *, void *) =
+        (typeof(fn))dlsym(RTLD_DEFAULT, "object_copy");
     return fn(self, zone); 
 }
 
 static void *
 plusretain_fn(void *self __unused, SEL _cmd __unused) {
-    OSAtomicIncrement32(&TestRootPlusRetain);
+    atomic_fetch_add_explicit(&TestRootPlusRetain, 1, memory_order_relaxed);
     return self;
 }
 
 static void 
 plusrelease_fn(void *self __unused, SEL _cmd __unused) {
-    OSAtomicIncrement32(&TestRootPlusRelease);
+    atomic_fetch_add_explicit(&TestRootPlusRelease, 1, memory_order_relaxed);
 }
 
 static void * 
 plusautorelease_fn(void *self, SEL _cmd __unused) { 
-    OSAtomicIncrement32(&TestRootPlusAutorelease);
+    atomic_fetch_add_explicit(&TestRootPlusAutorelease, 1, memory_order_relaxed);
     return self;
 }
 
 static unsigned long 
 plusretaincount_fn(void *self __unused, SEL _cmd __unused) { 
-    OSAtomicIncrement32(&TestRootPlusRetainCount);
+    atomic_fetch_add_explicit(&TestRootPlusRetainCount, 1, memory_order_relaxed);
     return ULONG_MAX;
 }
 
 +(void) load {
-    OSAtomicIncrement32(&TestRootLoad);
+    atomic_fetch_add_explicit(&TestRootLoad, 1, memory_order_relaxed);
     
-    // install methods that ARR refuses to compile
+    // install methods that ARC refuses to compile
     class_addMethod(self, sel_registerName("retain"), (IMP)retain_fn, "");
     class_addMethod(self, sel_registerName("release"), (IMP)release_fn, "");
     class_addMethod(self, sel_registerName("autorelease"), (IMP)autorelease_fn, "");
@@ -109,7 +109,7 @@ plusretaincount_fn(void *self __unused, SEL _cmd __unused) {
 
 
 +(void) initialize {
-    OSAtomicIncrement32(&TestRootInitialize);
+    atomic_fetch_add_explicit(&TestRootInitialize, 1, memory_order_relaxed);
 }
 
 -(id) self {
@@ -137,15 +137,15 @@ plusretaincount_fn(void *self __unused, SEL _cmd __unused) {
 }
 
 +(id) alloc {
-    OSAtomicIncrement32(&TestRootAlloc);
+    atomic_fetch_add_explicit(&TestRootAlloc, 1, memory_order_relaxed);
     void * (*fn)(id __unsafe_unretained) = (typeof(fn))_objc_rootAlloc;
-    return objc_retainedObject(fn(self));
+    return (__bridge_transfer id)(fn(self));
 }
 
 +(id) allocWithZone:(void *)zone {
-    OSAtomicIncrement32(&TestRootAllocWithZone);
+    atomic_fetch_add_explicit(&TestRootAllocWithZone, 1, memory_order_relaxed);
     void * (*fn)(id __unsafe_unretained, void *) = (typeof(fn))_objc_rootAllocWithZone;
-    return objc_retainedObject(fn(self, zone));
+    return (__bridge_transfer id)(fn(self, zone));
 }
 
 +(id) copy {
@@ -157,7 +157,7 @@ plusretaincount_fn(void *self __unused, SEL _cmd __unused) {
 }
 
 -(id) copy {
-    OSAtomicIncrement32(&TestRootCopy);
+    atomic_fetch_add_explicit(&TestRootCopy, 1, memory_order_relaxed);
     return [self copyWithZone:NULL];
 }
 
@@ -166,18 +166,18 @@ plusretaincount_fn(void *self __unused, SEL _cmd __unused) {
 }
 
 -(id) mutableCopy {
-    OSAtomicIncrement32(&TestRootMutableCopy);
+    atomic_fetch_add_explicit(&TestRootMutableCopy, 1, memory_order_relaxed);
     return [self mutableCopyWithZone:NULL];
 }
 
 -(id) mutableCopyWithZone:(void *) __unused zone {
-    OSAtomicIncrement32(&TestRootMutableCopyWithZone);
+    atomic_fetch_add_explicit(&TestRootMutableCopyWithZone, 1, memory_order_relaxed);
     void * (*fn)(id __unsafe_unretained) = (typeof(fn))_objc_rootAlloc;
-    return objc_retainedObject(fn(object_getClass(self)));
+    return (__bridge_transfer id)(fn(object_getClass(self)));
 }
 
 -(id) init {
-    OSAtomicIncrement32(&TestRootInit);
+    atomic_fetch_add_explicit(&TestRootInit, 1, memory_order_relaxed);
     return _objc_rootInit(self);
 }
 
@@ -186,17 +186,8 @@ plusretaincount_fn(void *self __unused, SEL _cmd __unused) {
 }
 
 -(void) dealloc {
-    OSAtomicIncrement32(&TestRootDealloc);
+    atomic_fetch_add_explicit(&TestRootDealloc, 1, memory_order_relaxed);
     _objc_rootDealloc(self);
-}
-
-+(void) finalize {
-    fail("+finalize called");
-}
-
--(void) finalize {
-    OSAtomicIncrement32(&TestRootFinalize);
-    _objc_rootFinalize(self);
 }
 
 +(BOOL) _tryRetain {
@@ -204,7 +195,7 @@ plusretaincount_fn(void *self __unused, SEL _cmd __unused) {
 }
 
 -(BOOL) _tryRetain {
-    OSAtomicIncrement32(&TestRootTryRetain);
+    atomic_fetch_add_explicit(&TestRootTryRetain, 1, memory_order_relaxed);
     return _objc_rootTryRetain(self);
 }
 
@@ -213,7 +204,7 @@ plusretaincount_fn(void *self __unused, SEL _cmd __unused) {
 }
 
 -(BOOL) _isDeallocating {
-    OSAtomicIncrement32(&TestRootIsDeallocating);
+    atomic_fetch_add_explicit(&TestRootIsDeallocating, 1, memory_order_relaxed);
     return _objc_rootIsDeallocating(self);
 }
 

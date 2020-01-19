@@ -36,6 +36,7 @@
 static Method _class_getMethod(Class cls, SEL sel);
 static Method _class_getMethodNoSuper(Class cls, SEL sel);
 static Method _class_getMethodNoSuper_nolock(Class cls, SEL sel);
+static Class _class_getNonMetaClass(Class cls, id obj);
 static void flush_caches(Class cls, bool flush_meta);
 
 
@@ -325,6 +326,118 @@ static void _freedHandler(id obj, SEL sel)
 
 
 /***********************************************************************
+* _class_resolveClassMethod
+* Call +resolveClassMethod, looking for a method to be added to class cls.
+* cls should be a metaclass.
+* Does not check if the method already exists.
+**********************************************************************/
+static void _class_resolveClassMethod(Class cls, SEL sel, id inst)
+{
+    assert(cls->isMetaClass());
+
+    if (! lookUpImpOrNil(cls, SEL_resolveClassMethod, inst, 
+                         NO/*initialize*/, YES/*cache*/, NO/*resolver*/)) 
+    {
+        // Resolver not implemented.
+        return;
+    }
+
+    BOOL (*msg)(Class, SEL, SEL) = (typeof(msg))objc_msgSend;
+    bool resolved = msg(_class_getNonMetaClass(cls, inst), 
+                        SEL_resolveClassMethod, sel);
+
+    // Cache the result (good or bad) so the resolver doesn't fire next time.
+    // +resolveClassMethod adds to self->ISA() a.k.a. cls
+    IMP imp = lookUpImpOrNil(cls, sel, inst, 
+                             NO/*initialize*/, YES/*cache*/, NO/*resolver*/);
+
+    if (resolved  &&  PrintResolving) {
+        if (imp) {
+            _objc_inform("RESOLVE: method %c[%s %s] "
+                         "dynamically resolved to %p", 
+                         cls->isMetaClass() ? '+' : '-', 
+                         cls->nameForLogging(), sel_getName(sel), imp);
+        }
+        else {
+            // Method resolver didn't add anything?
+            _objc_inform("RESOLVE: +[%s resolveClassMethod:%s] returned YES"
+                         ", but no new implementation of %c[%s %s] was found",
+                         cls->nameForLogging(), sel_getName(sel), 
+                         cls->isMetaClass() ? '+' : '-', 
+                         cls->nameForLogging(), sel_getName(sel));
+        }
+    }
+}
+
+
+/***********************************************************************
+* _class_resolveInstanceMethod
+* Call +resolveInstanceMethod, looking for a method to be added to class cls.
+* cls may be a metaclass or a non-meta class.
+* Does not check if the method already exists.
+**********************************************************************/
+static void _class_resolveInstanceMethod(Class cls, SEL sel, id inst)
+{
+    if (! lookUpImpOrNil(cls->ISA(), SEL_resolveInstanceMethod, cls, 
+                         NO/*initialize*/, YES/*cache*/, NO/*resolver*/)) 
+    {
+        // Resolver not implemented.
+        return;
+    }
+
+    BOOL (*msg)(Class, SEL, SEL) = (typeof(msg))objc_msgSend;
+    bool resolved = msg(cls, SEL_resolveInstanceMethod, sel);
+
+    // Cache the result (good or bad) so the resolver doesn't fire next time.
+    // +resolveInstanceMethod adds to self a.k.a. cls
+    IMP imp = lookUpImpOrNil(cls, sel, inst, 
+                             NO/*initialize*/, YES/*cache*/, NO/*resolver*/);
+
+    if (resolved  &&  PrintResolving) {
+        if (imp) {
+            _objc_inform("RESOLVE: method %c[%s %s] "
+                         "dynamically resolved to %p", 
+                         cls->isMetaClass() ? '+' : '-', 
+                         cls->nameForLogging(), sel_getName(sel), imp);
+        }
+        else {
+            // Method resolver didn't add anything?
+            _objc_inform("RESOLVE: +[%s resolveInstanceMethod:%s] returned YES"
+                         ", but no new implementation of %c[%s %s] was found",
+                         cls->nameForLogging(), sel_getName(sel), 
+                         cls->isMetaClass() ? '+' : '-', 
+                         cls->nameForLogging(), sel_getName(sel));
+        }
+    }
+}
+
+
+/***********************************************************************
+* _class_resolveMethod
+* Call +resolveClassMethod or +resolveInstanceMethod.
+* Returns nothing; any result would be potentially out-of-date already.
+* Does not check if the method already exists.
+**********************************************************************/
+void _class_resolveMethod(Class cls, SEL sel, id inst)
+{
+    if (! cls->isMetaClass()) {
+        // try [cls resolveInstanceMethod:sel]
+        _class_resolveInstanceMethod(cls, sel, inst);
+    } 
+    else {
+        // try [nonMetaClass resolveClassMethod:sel]
+        // and [cls resolveInstanceMethod:sel]
+        _class_resolveClassMethod(cls, sel, inst);
+        if (!lookUpImpOrNil(cls, sel, inst, 
+                            NO/*initialize*/, YES/*cache*/, NO/*resolver*/)) 
+        {
+            _class_resolveInstanceMethod(cls, sel, inst);
+        }
+    }
+}
+
+
+/***********************************************************************
 * log_and_fill_cache
 * Log this method call. If the logger permits it, fill the method cache.
 * cls is the method whose cache should be filled. 
@@ -393,9 +506,9 @@ IMP lookUpImpOrForward(Class cls, SEL sel, id inst,
 
     // Check for +initialize
     if (initialize  &&  !cls->isInitialized()) {
-        _class_initialize (_class_getNonMetaClass(cls, inst));
-        // If sel == initialize, _class_initialize will send +initialize and 
-        // then the messenger will send +initialize again after this 
+        initializeNonMetaClass (_class_getNonMetaClass(cls, inst));
+        // If sel == initialize, initializeNonMetaClass will send +initialize 
+        // and then the messenger will send +initialize again after this 
         // procedure finishes. Of course, if this is not being called 
         // from the messenger then it won't happen. 2778172
     }
@@ -734,7 +847,7 @@ const char *class_getName(Class cls)
 * Return the ordinary class for this class or metaclass. 
 * Used by +initialize. 
 **********************************************************************/
-Class _class_getNonMetaClass(Class cls, id obj)
+static Class _class_getNonMetaClass(Class cls, id obj)
 {
     // fixme ick
     if (cls->isMetaClass()) {
@@ -755,6 +868,14 @@ Class _class_getNonMetaClass(Class cls, id obj)
         assert(cls);
     }
 
+    return cls;
+}
+
+
+Class class_initialize(Class cls, id inst) {
+    if (!cls->isInitialized()) {
+        initializeNonMetaClass (_class_getNonMetaClass(cls, inst));
+    }
     return cls;
 }
 

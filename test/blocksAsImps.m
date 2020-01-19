@@ -10,17 +10,11 @@
 #   define __bridge
 #endif
 
-#if !__clang__
-    // gcc and llvm-gcc will never support struct-return marking
-#   define STRET_OK 0
-#   define STRET_SPECIAL 0
-#elif __arm64__
+#if __arm64__
     // stret supported, but is identical to non-stret
-#   define STRET_OK 1
 #   define STRET_SPECIAL 0
 #else
     // stret supported and distinct from non-stret
-#   define STRET_OK 1
 #   define STRET_SPECIAL 1
 #endif
 
@@ -106,21 +100,18 @@ int main () {
     aMode = _argumentModeForBlock(registerReturn);
     testassert(aMode == ReturnValueInRegisterArgumentMode);
 
-#if STRET_OK
-    BigStruct (^stackReturn)() = ^() { BigStruct k; return k; };
+    BigStruct (^stackReturn)() = ^() { BigStruct k = {{0}}; return k; };
     aMode = _argumentModeForBlock(stackReturn);
-# if STRET_SPECIAL
+#if STRET_SPECIAL
     testassert(aMode == ReturnValueOnStackArgumentMode);
-# else
+#else
     testassert(aMode == ReturnValueInRegisterArgumentMode);
-# endif
 #endif
 
-#define TEST_QUANTITY 100000
-    static FuncPtr funcArray[TEST_QUANTITY];
+    uintptr_t TEST_QUANTITY = is_guardmalloc() ? 1000 : 100000;
+    FuncPtr funcArray[TEST_QUANTITY];
 
-    uintptr_t i;
-    for(i = 0; i<TEST_QUANTITY; i++) {
+    for(uintptr_t i = 0; i < TEST_QUANTITY; i++) {
         uintptr_t (^block)(void *self) = ^uintptr_t(void *self) {
             testassert(i == (uintptr_t)self);
             return i;
@@ -137,18 +128,18 @@ int main () {
         _Block_release((__bridge void *)block);
     }
     
-    for(i = 0; i<TEST_QUANTITY; i++) {
+    for(uintptr_t i = 0; i < TEST_QUANTITY; i++) {
         uintptr_t result = funcArray[i]((void *)i, 0);
         testassert(i == result);
     }
     
-    for(i = 0; i < TEST_QUANTITY; i= i + 3) {
+    for(uintptr_t i = 0; i < TEST_QUANTITY; i = i + 3) {
 	imp_removeBlock((IMP)funcArray[i]);
 	id shouldBeNull = imp_getBlock((IMP)funcArray[i]);
 	testassert(shouldBeNull == NULL);
     }
     
-    for(i = 0; i < TEST_QUANTITY; i= i + 3) {
+    for(uintptr_t i = 0; i < TEST_QUANTITY; i = i + 3) {
         uintptr_t j = i * i;
         
         uintptr_t (^block)(void *) = ^uintptr_t(void *self) {
@@ -161,7 +152,7 @@ int main () {
         testassert(funcArray[i]((void *)j, 0) == j);
     }
     
-    for(i = 0; i < TEST_QUANTITY; i= i + 3) {
+    for(uintptr_t i = 0; i < TEST_QUANTITY; i = i + 3) {
         uintptr_t j = i * i;
         uintptr_t result = funcArray[i]((void *)j, 0);
         testassert(j == result);
@@ -188,10 +179,10 @@ int main () {
         testassert(x == 42);
         testassert([f boo: -42] == 42);
         
-#if STRET_OK
         BigStruct a;
-        for(i=0; i<200; i++)
+        for (uintptr_t i = 0; i < 200; i++) {
             a.datums[i] = i;    
+        }
         
         // slightly more straightforward here
         __block unsigned int state = 0;
@@ -233,8 +224,6 @@ int main () {
         b = [f structThatIsBig: a];
         testassert(!memcmp(&a, &b, sizeof(BigStruct)));
         testassert(state==3);
-        // STRET_OK
-#endif
         
         
         IMP floatIMP = imp_implementationWithBlock(^float (id self __attribute__((unused)), float aFloat ) {

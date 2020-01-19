@@ -1,6 +1,13 @@
 // TEST_CONFIG
 
 // Verify that all headers can be included in any language.
+// See also test/include-warnings.c which checks for warnings in these headers.
+// See also test/includes-objc2.c which checks for safety even if 
+// the client is C code that defined __OBJC2__.
+
+#ifndef NAME
+#define NAME "includes.c"
+#endif
 
 #include <objc/objc.h>
 
@@ -20,19 +27,21 @@
 #include <objc/runtime.h>
 
 #include <objc/objc-abi.h>
-#include <objc/objc-auto-dump.h>
 #include <objc/objc-gdb.h>
 #include <objc/objc-internal.h>
 
-#if !TARGET_OS_IPHONE
+#if TARGET_OS_OSX
 #include <objc/hashtable.h>
 #include <objc/hashtable2.h>
 #include <objc/maptable.h>
 #endif
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Weverything"
 #include "test.h"
+#pragma clang diagnostic pop
 
 int main()
 {
-    succeed(__FILE__);
+    succeed(NAME);
 }

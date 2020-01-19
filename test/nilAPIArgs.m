@@ -1,4 +1,9 @@
-// TEST_CONFIG
+/*
+TEST_BUILD_OUTPUT
+.*nilAPIArgs.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\]
+.*nilAPIArgs.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\]
+END
+*/
 
 #include "test.h"
 

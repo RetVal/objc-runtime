@@ -1,6 +1,6 @@
 /*
 TEST_BUILD
-    $C{COMPILE} $DIR/ivarSlide1.m $DIR/ivarSlide.m -o ivarSlide.out
+    $C{COMPILE} -fobjc-weak $DIR/ivarSlide1.m $DIR/ivarSlide.m -o ivarSlide.exe
 END
 */
 
@@ -10,14 +10,13 @@ END
 #include <objc/objc-runtime.h>
 #include <objc/objc-auto.h>
 
+// fixme should check ARC layout handling
+// current test checks GC layout handling which is dead
+#define FIXME_CHECK_ARC_LAYOUTS 0
+
 // ARC doesn't like __strong void* or __weak void*
-#if __OBJC_GC__
-#   define gc_weak __weak
-#   define gc_strong __strong
-#else
-#   define gc_weak
-#   define gc_strong
-#endif
+#define gc_weak
+#define gc_strong
 
 #define OLD 1
 #include "ivarSlide.h"
@@ -110,8 +109,6 @@ uintptr_t CXX::count;
 
 int main(int argc __attribute__((unused)), char **argv)
 {
-#if __OBJC2__
-
 #if __has_feature(objc_arc)
     testwarn("fixme check ARC layouts too");
 #endif
@@ -143,7 +140,7 @@ int main(int argc __attribute__((unused)), char **argv)
 
     testassert(class_getInstanceSize([Bitfields class]) == 7*sizeof(void*));
 
-    if (objc_collectingEnabled()) {
+    if (FIXME_CHECK_ARC_LAYOUTS) {
         const uint8_t *bitfieldlayout;
         bitfieldlayout = class_getIvarLayout([Bitfields class]);
         testassert(0 == ustrcmp(bitfieldlayout, "\x01\x21\x21"));
@@ -178,23 +175,19 @@ int main(int argc __attribute__((unused)), char **argv)
     static Sub * volatile sub;
     sub = [Sub new];
     sub->subIvar = 10;
-    testassert(((uintptr_t *)objc_unretainedPointer(sub))[2] == 10);
+    uintptr_t *subwords = (uintptr_t *)(__bridge void*)sub;
+    testassert(subwords[2] == 10);
 
 #ifdef __cplusplus
-    testassert(((uintptr_t *)objc_unretainedPointer(sub))[5] == 1);
+    testassert(subwords[5] == 1);
     testassert(sub->cxx.magic == 1);
     sub->cxx.magic++;
-    testassert(((uintptr_t *)objc_unretainedPointer(sub))[5] == 2);
+    testassert(subwords[5] == 2);
     testassert(sub->cxx.magic == 2);
 # if __has_feature(objc_arc)
     sub = nil;
 # else
-    if (! objc_collectingEnabled()) {
-        [sub dealloc];
-    } else {
-        // hack - can't get collector to reliably delete the object
-        object_dispose(sub);
-    }
+    [sub dealloc];
 # endif
     testassert(CXX::count == 2);
 #endif
@@ -205,14 +198,13 @@ int main(int argc __attribute__((unused)), char **argv)
     testassert(ivar);
     testassert(2*sizeof(void*) == (size_t)ivar_getOffset(ivar));
     testassert(0 == strcmp(ivar_getName(ivar), "subIvar"));
-    // rdar://7466570 clang miscompiles assert(#if __LP64__ ... #endif)
+    testassert(0 == strcmp(ivar_getTypeEncoding(ivar), 
 #if __LP64__  
-    testassert(0 == strcmp(ivar_getTypeEncoding(ivar), "Q"));
-#elif __clang__
-    testassert(0 == strcmp(ivar_getTypeEncoding(ivar), "L"));
+                           "Q"
 #else
-    testassert(0 == strcmp(ivar_getTypeEncoding(ivar), "I"));
+                           "L"
 #endif
+                           ));
 
 #ifdef __cplusplus
     ivar = class_getInstanceVariable([Sub class], "cxx");
@@ -228,7 +220,7 @@ int main(int argc __attribute__((unused)), char **argv)
     ivar = class_getInstanceVariable([Super class], "subIvar");
     testassert(!ivar);
 
-    if (objc_collectingEnabled()) {
+    if (FIXME_CHECK_ARC_LAYOUTS) {
         const uint8_t *superlayout;
         const uint8_t *sublayout;
         superlayout = class_getIvarLayout([Super class]);
@@ -262,8 +254,9 @@ int main(int argc __attribute__((unused)), char **argv)
     */
 
     Sub2 *sub2 = [Sub2 new];
+    uintptr_t *sub2words = (uintptr_t *)(__bridge void*)sub2;
     sub2->subIvar = (void *)10;
-    testassert(((uintptr_t *)objc_unretainedPointer(sub2))[11] == 10);
+    testassert(sub2words[11] == 10);
 
     testassert(class_getInstanceSize([Sub2 class]) == 13*sizeof(void*));
 
@@ -275,7 +268,7 @@ int main(int argc __attribute__((unused)), char **argv)
     ivar = class_getInstanceVariable([ShrinkingSuper class], "superIvar");
     testassert(!ivar);
 
-    if (objc_collectingEnabled()) {
+    if (FIXME_CHECK_ARC_LAYOUTS) {
         const uint8_t *superlayout;
         const uint8_t *sublayout;
         superlayout = class_getIvarLayout([ShrinkingSuper class]);
@@ -311,7 +304,7 @@ int main(int argc __attribute__((unused)), char **argv)
          [1 skip] d
          [2 skip] superc1, superc2, subc3
     */
-    if (objc_collectingEnabled()) {
+    if (FIXME_CHECK_ARC_LAYOUTS) {
         Ivar ivar1 = class_getInstanceVariable([NoGCChangeSub class], "superc1");
         testassert(ivar1);
         Ivar ivar2 = class_getInstanceVariable([NoGCChangeSub class], "superc2");
@@ -326,7 +319,7 @@ int main(int argc __attribute__((unused)), char **argv)
     /* Ivar layout includes runs of 15 words.
        rdar://6859875 this would generate a truncated GC layout.
     */
-    if (objc_collectingEnabled()) {
+    if (FIXME_CHECK_ARC_LAYOUTS) {
         const uint8_t *layout =
             class_getIvarLayout(objc_getClass("RunsOf15Sub"));
         testassert(layout);
@@ -341,9 +334,6 @@ int main(int argc __attribute__((unused)), char **argv)
         testassert(totalSkip >= 30);
         testassert(totalScan >= 30);
     }
-
-// __OBJC2__
-#endif
 
 
     /* 
@@ -362,7 +352,7 @@ int main(int argc __attribute__((unused)), char **argv)
          [2 scan] subIvar
     */
     testassert(class_getInstanceSize([MoreStrongSub class]) == 3*sizeof(void*));
-    if (objc_collectingEnabled()) {
+    if (FIXME_CHECK_ARC_LAYOUTS) {
         const uint8_t *layout;
         layout = class_getIvarLayout([MoreStrongSub class]);
         testassert(layout == NULL);
@@ -388,23 +378,13 @@ int main(int argc __attribute__((unused)), char **argv)
          [2 scan] subIvar
     */
     testassert(class_getInstanceSize([MoreWeakSub class]) == 3*sizeof(void*));
-    if (objc_collectingEnabled()) {
+    if (FIXME_CHECK_ARC_LAYOUTS) {
         const uint8_t *layout;
         layout = class_getIvarLayout([MoreWeakSub class]);
-#if __OBJC2__
-        // fixed version: scan / weak / scan
         testassert(0 == ustrcmp(layout, "\x01\x11"));
-#else
-        // unfixed version: scan / scan / scan
-        testassert(layout == NULL  ||  0 == ustrcmp(layout, "\x03"));
-#endif
 
         layout = class_getWeakIvarLayout([MoreWeakSub class]);
-#if __OBJC2__
         testassert(0 == ustrcmp(layout, "\x11\x10"));
-#else
-        testassert(layout == NULL);
-#endif
     }
 
 
@@ -424,18 +404,14 @@ int main(int argc __attribute__((unused)), char **argv)
          [2 scan] subIvar
     */
     testassert(class_getInstanceSize([MoreWeak2Sub class]) == 3*sizeof(void*));
-    if (objc_collectingEnabled()) {
+    if (FIXME_CHECK_ARC_LAYOUTS) {
         const uint8_t *layout;
         layout = class_getIvarLayout([MoreWeak2Sub class]);
         testassert(0 == ustrcmp(layout, "\x01\x11")  ||
                    0 == ustrcmp(layout, "\x01\x10\x01"));
 
         layout = class_getWeakIvarLayout([MoreWeak2Sub class]);
-#if __OBJC2__
         testassert(0 == ustrcmp(layout, "\x11\x10"));
-#else
-        testassert(layout == NULL);
-#endif
     }
 
 
@@ -455,16 +431,10 @@ int main(int argc __attribute__((unused)), char **argv)
          [2 scan] subIvar
     */
     testassert(class_getInstanceSize([LessStrongSub class]) == 3*sizeof(void*));
-    if (objc_collectingEnabled()) {
+    if (FIXME_CHECK_ARC_LAYOUTS) {
         const uint8_t *layout;
         layout = class_getIvarLayout([LessStrongSub class]);
-#if __OBJC2__
-        // fixed version: scan / skip / scan
         testassert(0 == ustrcmp(layout, "\x01\x11"));
-#else
-        // unfixed version: scan / scan / scan
-        testassert(layout == NULL  ||  0 == ustrcmp(layout, "\x03"));
-#endif
 
         layout = class_getWeakIvarLayout([LessStrongSub class]);
         testassert(layout == NULL);
@@ -487,7 +457,7 @@ int main(int argc __attribute__((unused)), char **argv)
          [2 scan] subIvar
     */
     testassert(class_getInstanceSize([LessWeakSub class]) == 3*sizeof(void*));
-    if (objc_collectingEnabled()) {
+    if (FIXME_CHECK_ARC_LAYOUTS) {
         const uint8_t *layout;
         layout = class_getIvarLayout([LessWeakSub class]);
         testassert(layout == NULL);
@@ -513,18 +483,14 @@ int main(int argc __attribute__((unused)), char **argv)
          [2 scan] subIvar
     */
     testassert(class_getInstanceSize([LessWeak2Sub class]) == 3*sizeof(void*));
-    if (objc_collectingEnabled()) {
+    if (FIXME_CHECK_ARC_LAYOUTS) {
         const uint8_t *layout;
         layout = class_getIvarLayout([LessWeak2Sub class]);
         testassert(0 == ustrcmp(layout, "\x01\x11")  ||
                    0 == ustrcmp(layout, "\x01\x10\x01"));
 
         layout = class_getWeakIvarLayout([LessWeak2Sub class]);
-#if __OBJC2__
         testassert(layout == NULL);
-#else
-        testassert(0 == ustrcmp(layout, "\x11\x10"));
-#endif
     }
 
 

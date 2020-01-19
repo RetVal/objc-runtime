@@ -100,6 +100,7 @@ typedef struct objc_image_info {
 #if __cplusplus >= 201103L
   private:
     enum : uint32_t {
+        // 1 byte assorted flags
         IsReplacement       = 1<<0,  // used for Fix&Continue, now ignored
         SupportsGC          = 1<<1,  // image supports GC
         RequiresGC          = 1<<2,  // image requires GC
@@ -107,17 +108,28 @@ typedef struct objc_image_info {
         CorrectedSynthesize = 1<<4,  // used for an old workaround, now ignored
         IsSimulated         = 1<<5,  // image compiled for a simulator platform
         HasCategoryClassProperties  = 1<<6,  // class properties in category_t
+        // not yet used = 1<<7
 
-        SwiftVersionMaskShift = 8,
-        SwiftVersionMask    = 0xff << SwiftVersionMaskShift  // Swift ABI version
+        // 1 byte Swift unstable ABI version number
+        SwiftUnstableVersionMaskShift = 8,
+        SwiftUnstableVersionMask = 0xff << SwiftUnstableVersionMaskShift,
 
+        // 2 byte Swift stable ABI version number
+        SwiftStableVersionMaskShift = 16,
+        SwiftStableVersionMask = 0xffffUL << SwiftStableVersionMaskShift
     };
-   public:
+  public:
     enum : uint32_t {
+        // Values for SwiftUnstableVersion
+        // All stable ABIs store SwiftVersion5 here.
         SwiftVersion1   = 1,
         SwiftVersion1_2 = 2,
         SwiftVersion2   = 3,
-        SwiftVersion3   = 4
+        SwiftVersion3   = 4,
+        SwiftVersion4   = 5,
+        SwiftVersion4_1 = 6,
+        SwiftVersion4_2 = 6,  // [sic]
+        SwiftVersion5   = 7
     };
 
   public:
@@ -126,8 +138,8 @@ typedef struct objc_image_info {
     bool requiresGC()      const { return flags & RequiresGC; }
     bool optimizedByDyld() const { return flags & OptimizedByDyld; }
     bool hasCategoryClassProperties() const { return flags & HasCategoryClassProperties; }
-    bool containsSwift()   const { return (flags & SwiftVersionMask) != 0; }
-    uint32_t swiftVersion() const { return (flags & SwiftVersionMask) >> SwiftVersionMaskShift; }
+    bool containsSwift()   const { return (flags & SwiftUnstableVersionMask) != 0; }
+    uint32_t swiftUnstableVersion() const { return (flags & SwiftUnstableVersionMask) >> SwiftUnstableVersionMaskShift; }
 #endif
 } objc_image_info;
 

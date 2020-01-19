@@ -1,20 +1,6 @@
 /*
 need exception-safe ARC for exception deallocation tests 
-need F/CF for testonthread() in GC mode
 TEST_CFLAGS -fobjc-arc-exceptions -framework Foundation
-
-llvm-gcc unavoidably warns about our deliberately out-of-order handlers
-
-TEST_BUILD_OUTPUT
-.*exc.m: In function .*
-.*exc.m:\d+: warning: exception of type .* will be caught
-.*exc.m:\d+: warning:    by earlier handler for .*
-.*exc.m:\d+: warning: exception of type .* will be caught
-.*exc.m:\d+: warning:    by earlier handler for .*
-.*exc.m:\d+: warning: exception of type .* will be caught
-.*exc.m:\d+: warning:    by earlier handler for .*
-OR
-END
 */
 
 #include "test.h"
@@ -36,7 +22,6 @@ static volatile int dealloced = 0;
 -(void)check { state++; }
 +(void)check { testassert(!"caught class object, not instance"); }
 -(void)dealloc { dealloced++; SUPER_DEALLOC(); }
--(void)finalize { dealloced++; [super finalize]; }
 @end
 
 #define FILENAME "nsexc.m"
@@ -49,7 +34,6 @@ static volatile int dealloced = 0;
 -(void)check { state++; }
 +(void)check { testassert(!"caught class object, not instance"); }
 -(void)dealloc { dealloced++; SUPER_DEALLOC(); }
--(void)finalize { dealloced++; [super finalize]; }
 @end
 
 #define FILENAME "exc.m"
@@ -61,7 +45,7 @@ static volatile int dealloced = 0;
 @end
 
 
-#if __OBJC2__  &&  !TARGET_OS_EMBEDDED  &&  !TARGET_OS_IPHONE
+#if TARGET_OS_OSX
 void altHandlerFail(id unused __unused, void *context __unused)
 {
     fail("altHandlerFail called");
@@ -84,7 +68,7 @@ ALT_HANDLER(6)
 ALT_HANDLER(7)
 
 
-static void throwWithAltHandler(void) __attribute__((noinline));
+static void throwWithAltHandler(void) __attribute__((noinline, used));
 static void throwWithAltHandler(void)
 {
     @try {
@@ -102,7 +86,7 @@ static void throwWithAltHandler(void)
 }
 
 
-static void throwWithAltHandlerAndRethrow(void) __attribute__((noinline));
+static void throwWithAltHandlerAndRethrow(void) __attribute__((noinline, used));
 static void throwWithAltHandlerAndRethrow(void)
 {
     @try {
@@ -123,7 +107,7 @@ static void throwWithAltHandlerAndRethrow(void)
 
 #endif
 
-#if __cplusplus  &&  __OBJC2__
+#if __cplusplus
 #include <exception>
 void terminator() {
     succeed(FILENAME);    
@@ -219,7 +203,6 @@ int main()
     testassert(dealloced == 1);
 
 
-#if __OBJC2__
     testprintf("try-finally, with autorelease pool pop during unwind\n");
     // Popping an autorelease pool during unwind used to deallocate the 
     // exception object, but now we retain them while in flight.
@@ -256,7 +239,6 @@ int main()
     });
     testassert(state == 5);
     testassert(dealloced == 1);
-#endif
 
     
     testprintf("try-catch-finally, no exception\n");
@@ -587,7 +569,7 @@ int main()
     testassert(dealloced == 1);
     
     
-#if __cplusplus  &&  __OBJC2__
+#if __cplusplus
     testprintf("C++ try/catch, Objective-C exception superclass\n");
     
     TEST({
@@ -672,9 +654,8 @@ int main()
 #endif        
         
         
-#if !__OBJC2__  ||  TARGET_OS_EMBEDDED  ||  TARGET_OS_IPHONE
-        // alt handlers for modern Mac OS only
-
+#if !TARGET_OS_OSX
+        // alt handlers are for macOS only
 #else
     {
         // alt handlers
@@ -740,7 +721,14 @@ int main()
         
         
         testprintf("alt handler, nested\n");
-        
+#if 1
+        testwarn("fixme compiler no longer cooperative for local nested?");
+        // Nested alt handlers inside the same function require that each
+        // catch group have its own landing pad descriptor. The compiler is
+        // probably not doing that anymore. For now we assume that the
+        // combination of nested exception handlers and alt handlers is
+        // rare enough that nobody cares.
+#else
         TEST({
             dealloced = 0;
             for (int i = 0; i < ALT_HANDLER_REPEAT; i++) {
@@ -773,10 +761,13 @@ int main()
             }
         });
         testassert(dealloced == ALT_HANDLER_REPEAT);
-        
+#endif
         
         testprintf("alt handler, nested, rethrows in between\n");
-        
+#if 1
+        testwarn("fixme compiler no longer cooperative for local nested?");
+        // See above.
+#else
         TEST({
             dealloced = 0;
             for (int i = 0; i < ALT_HANDLER_REPEAT; i++) {
@@ -811,7 +802,7 @@ int main()
             }
         });
         testassert(dealloced == ALT_HANDLER_REPEAT);
-        
+#endif
         
         testprintf("alt handler, exception thrown and caught inside\n");
         
@@ -877,7 +868,7 @@ int main()
 // alt handlers
 #endif
 
-#if __cplusplus  &&  __OBJC2__
+#if __cplusplus
     std::set_terminate(terminator);
     objc_terminate();
     fail("should not have returned from objc_terminate()");

@@ -1,16 +1,6 @@
 // TEST_CFLAGS -Wno-deprecated-declarations
 
 #include "test.h"
-
-#if TARGET_OS_IPHONE
-
-int main()
-{
-    succeed(__FILE__);
-}
-
-#else
-
 #include "testroot.i"
 #include <objc/objc-gdb.h>
 #include <objc/runtime.h>
@@ -18,8 +8,6 @@ int main()
 int main()
 {
     // Class hashes
-#if __OBJC2__
-
     Class result;
 
     // Class should not be realized yet
@@ -30,30 +18,17 @@ int main()
     [TestRoot class];
     // Now class should be realized
 
-    result = (Class)objc_unretainedObject(NXMapGet(gdb_objc_realized_classes, "TestRoot"));
+    result = (__bridge Class)(NXMapGet(gdb_objc_realized_classes, "TestRoot"));
     testassert(result);
     testassert(result == [TestRoot class]);
 
-    result = (Class)objc_unretainedObject(NXMapGet(gdb_objc_realized_classes, "DoesNotExist"));
+    result = (__bridge Class)(NXMapGet(gdb_objc_realized_classes, "DoesNotExist"));
     testassert(!result);
 
-#else
-
-    struct objc_class query;
-    Class result;
-
-    query.name = "TestRoot";
-    result = (Class)NXHashGet(_objc_debug_class_hash, &query);
-    testassert(result);
-    testassert((id)result == [TestRoot class]);
-
-    query.name = "DoesNotExist";
-    result = (Class)NXHashGet(_objc_debug_class_hash, &query);
-    testassert(!result);
-
-#endif
+    // Class structure decoding
+    
+    uintptr_t *maskp = (uintptr_t *)dlsym(RTLD_DEFAULT, "objc_debug_class_rw_data_mask");
+    testassert(maskp);
 
     succeed(__FILE__);
 }
-
-#endif

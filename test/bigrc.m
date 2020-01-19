@@ -57,6 +57,12 @@ static size_t LOTS;
 
 @end
 
+size_t clz(uintptr_t isa) {
+    if (sizeof(uintptr_t) == 4)
+        return __builtin_clzl(isa);
+    testassert(sizeof(uintptr_t) == 8);
+    return __builtin_clzll(isa);
+}
 
 int main()
 {
@@ -68,7 +74,7 @@ int main()
     uintptr_t isa = *(uintptr_t *)o;
     if (isa & 1) {
         // Assume refcount in high bits.
-        LOTS = 1 << (4 + __builtin_clzll(isa));
+        LOTS = 1 << (4 + clz(isa));
         testprintf("LOTS %zu via cntlzw\n", LOTS);
     } else {
         LOTS = 0x1000000;

@@ -9,6 +9,5 @@
 int main()
 {
     [NSBundle class];
-    testassert(!objc_collectingEnabled());
     succeed(__FILE__);
 }

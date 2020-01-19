@@ -5,11 +5,11 @@ TEST_CONFIG OS=iphoneos
 TEST_CRASHES
 
 TEST_BUILD
-    $C{COMPILE} $DIR/evil-class-00.m $DIR/evil-main.m -o evil-class-00.out
+    $C{COMPILE} $DIR/evil-class-00.m $DIR/evil-main.m -o evil-class-00.exe
 END
 
 TEST_RUN_OUTPUT
-CRASHED: SIGSEGV
+CRASHED: SIGABRT
 END
 */
 

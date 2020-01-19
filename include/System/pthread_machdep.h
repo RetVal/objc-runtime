@@ -71,14 +71,14 @@
 #define _PTHREAD_TSD_SLOT_DYLD_1		1
 #define _PTHREAD_TSD_SLOT_DYLD_2		2
 #define _PTHREAD_TSD_SLOT_DYLD_3		3
-#define _PTHREAD_TSD_RESERVED_SLOT_COUNT	4
+//#define _PTHREAD_TSD_RESERVED_SLOT_COUNT	4
 /* To mirror the usage by dyld for Unwind_SjLj */
 #define _PTHREAD_TSD_SLOT_DYLD_8		8
 
 /* Keys 10 - 29 are for Libc/Libsystem internal ussage */
 /* used as __pthread_tsd_first + Num  */
 #define __PTK_LIBC_LOCALE_KEY		10
-#define __PTK_LIBC_TTYNAME_KEY		11
+//#define __PTK_LIBC_TTYNAME_KEY		11
 #define __PTK_LIBC_LOCALTIME_KEY	12
 #define __PTK_LIBC_GMTIME_KEY		13
 #define __PTK_LIBC_GDTOA_BIGINT_KEY	14
@@ -297,8 +297,8 @@ extern "C" {
 
 #endif
 
-#define LOCK_INIT(l)	((l) = 0)
-#define LOCK_INITIALIZER 0
+//#define LOCK_INIT(l)	((l) = 0)
+//#define LOCK_INITIALIZER 0
 
 #endif /* ! __ASSEMBLER__ */
 #endif /* _POSIX_PTHREAD_MACHDEP_H */

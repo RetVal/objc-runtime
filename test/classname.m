@@ -11,7 +11,7 @@
 int main()
 {
     TestRoot *obj = [TestRoot new];
-    Class __unsafe_unretained * buf = (Class *)objc_unretainedPointer(obj);
+    Class __unsafe_unretained * buf = (Class *)(__bridge void *)(obj);
     *buf = [Fake class];
 
     testassert(object_getClass(obj) == [Fake class]);

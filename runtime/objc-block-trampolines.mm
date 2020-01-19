@@ -163,7 +163,8 @@ public:
         void *dylib = dlopen("/usr/lib/libobjc-trampolines.dylib",
                              RTLD_NOW | RTLD_LOCAL | RTLD_FIRST);
         if (!dylib) {
-            _objc_fatal("couldn't dlopen libobjc-trampolines.dylib");
+            _objc_fatal("couldn't dlopen libobjc-trampolines.dylib: %s",
+                        dlerror());
         }
 
         auto t = new TrampolinePointers(dylib);
@@ -177,6 +178,9 @@ public:
     uintptr_t textSegment() { return get()->textSegment; }
     uintptr_t textSegmentSize() { return get()->textSegmentSize; }
 
+    // See comments below about PAGE_SIZE and PAGE_MAX_SIZE.
+    uintptr_t dataSize() { return PAGE_MAX_SIZE; }
+
     uintptr_t impl() { return get()->impl.address(); }
     uintptr_t start() { return get()->start.address(); }
 };
@@ -184,6 +188,8 @@ public:
 static TrampolinePointerWrapper Trampolines;
 
 // argument mode identifier
+// Some calculations assume that these modes are sequential starting from 0.
+// This order must match the order of the trampoline's assembly code.
 typedef enum {
     ReturnValueInRegisterArgumentMode,
 #if SUPPORT_STRET
@@ -211,8 +217,17 @@ struct TrampolineBlockPageGroup
 {
     TrampolineBlockPageGroup *nextPageGroup; // linked list of all pages
     TrampolineBlockPageGroup *nextAvailablePage; // linked list of pages with available slots
-    
+
     uintptr_t nextAvailable; // index of next available slot, endIndex() if no more available
+
+    const void * TrampolinePtrauth const text;  // text VM region; stored only for the benefit of the leaks tool
+
+    TrampolineBlockPageGroup()
+        : nextPageGroup(nil)
+        , nextAvailablePage(nil)
+        , nextAvailable(startIndex())
+        , text((const void *)((uintptr_t)this + Trampolines.dataSize()))
+    { }
     
     // Payload data: block pointers and free list.
     // Bytes parallel with trampoline header code are the fields above or unused
@@ -249,7 +264,7 @@ struct TrampolineBlockPageGroup
     }
 
     static uintptr_t endIndex() {
-        return (uintptr_t)PAGE_MAX_SIZE / slotSize();
+        return (uintptr_t)Trampolines.dataSize() / slotSize();
     }
 
     static bool validIndex(uintptr_t index) {
@@ -262,8 +277,10 @@ struct TrampolineBlockPageGroup
     }
 
     uintptr_t trampolinesForMode(int aMode) {
-        // Skip over data page and Mach-O page.
-        return (uintptr_t)this + PAGE_MAX_SIZE * (2 + aMode);
+        // Skip over the data area, one page of Mach-O headers,
+        // and one text page for each mode before this one.
+        return (uintptr_t)this + Trampolines.dataSize() +
+            PAGE_MAX_SIZE * (1 + aMode);
     }
     
     IMP trampoline(int aMode, uintptr_t index) {
@@ -334,7 +351,7 @@ static TrampolineBlockPageGroup *_allocateTrampolinesAndData()
 
     auto textSource = Trampolines.textSegment();
     auto textSourceSize = Trampolines.textSegmentSize();
-    auto dataSize = PAGE_MAX_SIZE;
+    auto dataSize = Trampolines.dataSize();
 
     // Allocate a single contiguous region big enough to hold data+text.
     kern_return_t result;
@@ -358,10 +375,7 @@ static TrampolineBlockPageGroup *_allocateTrampolinesAndData()
         _objc_fatal("vm_remap trampolines failed (%d)", result);
     }
 
-    TrampolineBlockPageGroup *pageGroup = (TrampolineBlockPageGroup *) dataAddress;
-    pageGroup->nextAvailable = pageGroup->startIndex();
-    pageGroup->nextPageGroup = nil;
-    pageGroup->nextAvailablePage = nil;
+    auto *pageGroup = new ((void*)dataAddress) TrampolineBlockPageGroup;
     
     if (HeadPageGroup) {
         TrampolineBlockPageGroup *lastPageGroup = HeadPageGroup;

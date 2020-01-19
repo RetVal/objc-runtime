@@ -2,7 +2,7 @@
 TEST_BUILD
     $C{COMPILE} $DIR/future0.m -o future0.dylib -dynamiclib
     $C{COMPILE} $DIR/future2.m -x none future0.dylib -o future2.dylib -dynamiclib
-    $C{COMPILE} $DIR/future.m -x none future0.dylib -o future.out
+    $C{COMPILE} $DIR/future.m -x none future0.dylib -o future.exe
 END
 */
 
@@ -54,7 +54,7 @@ int main()
     // objc_getFutureClass with missing class
     oldSub1 = objc_getFutureClass("Sub1");
     testassert(oldSub1);
-    testassert(malloc_size(objc_unretainedPointer(oldSub1)) > 0);
+    testassert(malloc_size((__bridge void*)oldSub1) > 0);
     testassert(objc_getClass("Sub1") == Nil);
     testassert(_class_isFutureClass(oldSub1));
     testassert(0 == strcmp(class_getName(oldSub1), "Sub1"));

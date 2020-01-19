@@ -1,4 +1,3 @@
-// TEST_CONFIG MEM=arc,mrc CC=clang LANGUAGE=objc,objc++
 // TEST_CFLAGS -framework Foundation
 
 #import <Foundation/Foundation.h>

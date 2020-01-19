@@ -1,4 +1,4 @@
-// TEST_CFLAGS -Wno-deprecated-declarations
+// TEST_CONFIG
 
 #include "test.h"
 #include "testroot.i"

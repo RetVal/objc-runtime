@@ -8,5 +8,6 @@
 
 #define FOUNDATION 0
 #define NAME "rr-autorelease-stacklogging"
+#define DEBUG_POOL_ALLOCATION 1
 
 #include "rr-autorelease2.m"

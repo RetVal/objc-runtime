@@ -1,18 +1,8 @@
-// TEST_CONFIG CC=clang MEM=mrc
+// TEST_CONFIG MEM=mrc
 // TEST_CFLAGS -Os
 
 #include "test.h"
 #include "testroot.i"
-
-#if __i386__
-
-int main()
-{
-    // no optimization on i386 (neither Mac nor Simulator)
-    succeed(__FILE__);
-}
-
-#else
 
 #include <objc/objc-internal.h>
 #include <objc/objc-abi.h>
@@ -22,17 +12,77 @@ int main()
 @implementation TestObject @end
 
 
-#ifdef __arm__
-#   define MAGIC      asm volatile("mov r7, r7")
-#   define NOT_MAGIC  asm volatile("mov r6, r6")
+// MAGIC and NOT_MAGIC each call two functions 
+// with or without the magic instruction sequence, respectively.
+// 
+// tmp = first(obj);
+// magic, or not;
+// tmp = second(tmp);
+
+#if __arm__
+
+#define NOT_MAGIC(first, second)                \
+    tmp = first(obj);                           \
+    asm volatile("mov r8, r8");                 \
+    tmp = second(tmp);
+
+#define MAGIC(first, second)                    \
+    tmp = first(obj);                           \
+    asm volatile("mov r7, r7");                 \
+    tmp = second(tmp);
+
+// arm
 #elif __arm64__
-#   define MAGIC      asm volatile("mov x29, x29")
-#   define NOT_MAGIC  asm volatile("mov x28, x28")
+
+#define NOT_MAGIC(first, second)                \
+    tmp = first(obj);                           \
+    asm volatile("mov x28, x28");               \
+    tmp = second(tmp);
+
+#define MAGIC(first, second)                    \
+    tmp = first(obj);                           \
+    asm volatile("mov x29, x29");               \
+    tmp = second(tmp);
+
+// arm64
 #elif __x86_64__
-#   define MAGIC      asm volatile("")
-#   define NOT_MAGIC  asm volatile("nop")
+
+#define NOT_MAGIC(first, second) \
+    tmp = first(obj);            \
+    asm volatile("nop");         \
+    tmp = second(tmp);
+
+#define MAGIC(first, second) \
+    tmp = first(obj);        \
+    tmp = second(tmp);
+
+// x86_64
+#elif __i386__
+
+#define NOT_MAGIC(first, second) \
+    tmp = first(obj);            \
+    tmp = second(tmp);
+
+#define MAGIC(first, second)                             \
+    asm volatile("\n subl $16, %%esp"                    \
+                 "\n movl %[obj], (%%esp)"               \
+                 "\n call _" #first                      \
+                 "\n"                                    \
+                 "\n movl %%ebp, %%ebp"                  \
+                 "\n"                                    \
+                 "\n movl %%eax, (%%esp)"                \
+                 "\n call _" #second                     \
+                 "\n movl %%eax, %[tmp]"                 \
+                 "\n addl $16, %%esp"                    \
+                 : [tmp] "=r" (tmp)                      \
+                 : [obj] "r" (obj)                       \
+                 : "eax", "edx", "ecx", "cc", "memory")
+
+// i386
 #else
-#   error unknown architecture
+
+#error unknown architecture
+
 #endif
 
 
@@ -64,9 +114,8 @@ main()
         TestRootAutorelease = 0;
         TestRootDealloc = 0;
 
-        tmp = objc_autoreleaseReturnValue(obj);
-        MAGIC;
-        tmp = objc_retainAutoreleasedReturnValue(tmp);
+        MAGIC(objc_autoreleaseReturnValue, 
+              objc_retainAutoreleasedReturnValue);
 
         testassert(TestRootDealloc == 0);
         testassert(TestRootRetain == 0);
@@ -92,9 +141,8 @@ main()
         TestRootAutorelease = 0;
         TestRootDealloc = 0;
 
-        tmp = objc_autoreleaseReturnValue(obj);
-        NOT_MAGIC;
-        tmp = objc_retainAutoreleasedReturnValue(tmp);
+        NOT_MAGIC(objc_autoreleaseReturnValue, 
+                  objc_retainAutoreleasedReturnValue);
 
         testassert(TestRootDealloc == 0);
         testassert(TestRootRetain == 1);
@@ -125,9 +173,8 @@ main()
         TestRootAutorelease = 0;
         TestRootDealloc = 0;
 
-        tmp = objc_retainAutoreleaseReturnValue(obj);
-        MAGIC;
-        tmp = objc_retainAutoreleasedReturnValue(tmp);
+        MAGIC(objc_retainAutoreleaseReturnValue, 
+              objc_retainAutoreleasedReturnValue);
 
         testassert(TestRootDealloc == 0);
         testassert(TestRootRetain == 1);
@@ -159,9 +206,8 @@ main()
         TestRootAutorelease = 0;
         TestRootDealloc = 0;
 
-        tmp = objc_retainAutoreleaseReturnValue(obj);
-        NOT_MAGIC;
-        tmp = objc_retainAutoreleasedReturnValue(tmp);
+        NOT_MAGIC(objc_retainAutoreleaseReturnValue, 
+                  objc_retainAutoreleasedReturnValue);
 
         testassert(TestRootDealloc == 0);
         testassert(TestRootRetain == 2);
@@ -198,9 +244,8 @@ main()
         TestRootAutorelease = 0;
         TestRootDealloc = 0;
 
-        tmp = objc_autoreleaseReturnValue(obj);
-        MAGIC;
-        tmp = objc_unsafeClaimAutoreleasedReturnValue(tmp);
+        MAGIC(objc_autoreleaseReturnValue, 
+              objc_unsafeClaimAutoreleasedReturnValue);
 
         testassert(TestRootDealloc == 0);
         testassert(TestRootRetain == 0);
@@ -226,9 +271,8 @@ main()
         TestRootAutorelease = 0;
         TestRootDealloc = 0;
 
-        tmp = objc_autoreleaseReturnValue(obj);
-        NOT_MAGIC;
-        tmp = objc_unsafeClaimAutoreleasedReturnValue(tmp);
+        NOT_MAGIC(objc_autoreleaseReturnValue, 
+                  objc_unsafeClaimAutoreleasedReturnValue);
 
         testassert(TestRootDealloc == 0);
         testassert(TestRootRetain == 0);
@@ -259,9 +303,8 @@ main()
         TestRootAutorelease = 0;
         TestRootDealloc = 0;
 
-        tmp = objc_retainAutoreleaseReturnValue(obj);
-        MAGIC;
-        tmp = objc_unsafeClaimAutoreleasedReturnValue(tmp);
+        MAGIC(objc_retainAutoreleaseReturnValue, 
+              objc_unsafeClaimAutoreleasedReturnValue);
 
         testassert(TestRootDealloc == 0);
         testassert(TestRootRetain == 0);
@@ -287,9 +330,8 @@ main()
         TestRootAutorelease = 0;
         TestRootDealloc = 0;
 
-        tmp = objc_retainAutoreleaseReturnValue(obj);
-        NOT_MAGIC;
-        tmp = objc_unsafeClaimAutoreleasedReturnValue(tmp);
+        NOT_MAGIC(objc_retainAutoreleaseReturnValue, 
+                  objc_unsafeClaimAutoreleasedReturnValue);
 
         testassert(TestRootDealloc == 0);
         testassert(TestRootRetain == 1);
@@ -313,5 +355,3 @@ main()
     return 0;
 }
 
-
-#endif

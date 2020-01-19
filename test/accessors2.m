@@ -1,4 +1,4 @@
-// TEST_CONFIG MEM=mrc,arc
+// TEST_CONFIG
 
 #include "test.h"
 #include <objc/runtime.h>

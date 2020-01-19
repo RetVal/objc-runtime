@@ -1,4 +1,11 @@
-// TEST_CONFIG
+/*
+TEST_BUILD_OUTPUT
+.*getMethod.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\](\n.* note: expanded from macro 'testassert')?
+.*getMethod.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\](\n.* note: expanded from macro 'testassert')?
+.*getMethod.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\](\n.* note: expanded from macro 'testassert')?
+.*getMethod.m:\d+:\d+: warning: null passed to a callee that requires a non-null argument \[-Wnonnull\](\n.* note: expanded from macro 'testassert')?
+END
+*/
 
 #include "test.h"
 #include "testroot.i"
@@ -31,6 +38,8 @@ int main()
     SEL sel;
     IMP imp;
 
+    id bufobj = (__bridge_transfer id)(void*)buf;
+    
     // don't use [Super class] to check laziness handing
     Super_cls = objc_getClass("Super");
     Sub_cls = objc_getClass("Sub");
@@ -75,9 +84,9 @@ int main()
     imp = method_getImplementation(m);
     testassert(imp == class_getMethodImplementation(Super_cls, sel));
     buf[0] = Super_cls;
-    testassert(imp == object_getMethodImplementation(objc_unretainedObject(buf), sel));
+    testassert(imp == object_getMethodImplementation(bufobj, sel));
     state = 0;
-    (*(imp_t)imp)(objc_unretainedObject(buf), sel);
+    (*(imp_t)imp)(bufobj, sel);
     testassert(state == 4);
 
     sel = sel_registerName("instanceMethod");
@@ -87,9 +96,9 @@ int main()
     imp = method_getImplementation(m);
     testassert(imp == class_getMethodImplementation(Sub_cls, sel));
     buf[0] = Sub_cls;
-    testassert(imp == object_getMethodImplementation(objc_unretainedObject(buf), sel));
+    testassert(imp == object_getMethodImplementation(bufobj, sel));
     state = 0;
-    (*(imp_t)imp)(objc_unretainedObject(buf), sel);
+    (*(imp_t)imp)(bufobj, sel);
     testassert(state == 5);
 
     sel = sel_registerName("instanceMethodSuperOnly");
@@ -99,9 +108,9 @@ int main()
     imp = method_getImplementation(m);
     testassert(imp == class_getMethodImplementation(Sub_cls, sel));
     buf[0] = Sub_cls;
-    testassert(imp == object_getMethodImplementation(objc_unretainedObject(buf), sel));
+    testassert(imp == object_getMethodImplementation(bufobj, sel));
     state = 0;
-    (*(imp_t)imp)(objc_unretainedObject(buf), sel);
+    (*(imp_t)imp)(bufobj, sel);
     testassert(state == 6);
 
     // check class_getClassMethod(cls) == class_getInstanceMethod(cls->isa)
@@ -113,10 +122,10 @@ int main()
     testassert(! class_getClassMethod(Sub_cls, sel));
     testassert(class_getMethodImplementation(Sub_cls, sel) == (IMP)&_objc_msgForward);
     buf[0] = Sub_cls;
-    testassert(object_getMethodImplementation(objc_unretainedObject(buf), sel) == (IMP)&_objc_msgForward);
+    testassert(object_getMethodImplementation(bufobj, sel) == (IMP)&_objc_msgForward);
 #if !__arm64__
     testassert(class_getMethodImplementation_stret(Sub_cls, sel) == (IMP)&_objc_msgForward_stret);
-    testassert(object_getMethodImplementation_stret(objc_unretainedObject(buf), sel) == (IMP)&_objc_msgForward_stret);
+    testassert(object_getMethodImplementation_stret(bufobj, sel) == (IMP)&_objc_msgForward_stret);
 #endif
 
     testassert(! class_getInstanceMethod(NULL, NULL));

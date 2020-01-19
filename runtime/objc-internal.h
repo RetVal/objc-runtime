@@ -57,6 +57,11 @@
 
 __BEGIN_DECLS
 
+// This symbol is exported only from debug builds of libobjc itself.
+#if defined(OBJC_IS_DEBUG_BUILD)
+OBJC_EXPORT void _objc_isDebugBuild(void);
+#endif
+
 // In-place construction of an Objective-C class.
 // cls and metacls must each be OBJC_MAX_CLASS_SIZE bytes.
 // Returns nil if a class with the same name already exists.
@@ -658,6 +663,14 @@ objc_alloc(Class _Nullable cls)
 OBJC_EXPORT id _Nullable
 objc_allocWithZone(Class _Nullable cls)
     OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0, 2.0);
+
+OBJC_EXPORT id _Nullable
+objc_alloc_init(Class _Nullable cls)
+    OBJC_AVAILABLE(10.14, 12.0, 12.0, 5.0, 3.0);
+// rdar://44986431 fixme correct availability for objc_alloc_init()
+
+OBJC_EXPORT Class _Nullable
+objc_opt_class(id _Nullable obj) OBJC_AVAILABLE(10.14, 12.0, 12.0, 5.0, 3.0);
 
 OBJC_EXPORT id _Nullable
 objc_retain(id _Nullable obj)

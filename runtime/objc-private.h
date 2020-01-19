@@ -462,6 +462,7 @@ extern IMP lookUpImpOrForward(Class, SEL, id obj, bool initialize, bool cache, b
 
 extern IMP lookupMethodInClassAndLoadCache(Class cls, SEL sel);
 extern bool class_respondsToSelector_inst(Class cls, SEL sel, id inst);
+extern Class class_initialize(Class cls, id inst);
 
 extern bool objcMsgLogEnabled;
 extern bool logMessageSend(bool isClassMethod,
@@ -551,6 +552,9 @@ typedef struct {
     struct SyncCache *syncCache;  // for @synchronize
     struct alt_handler_list *handlerList;  // for exception alt handlers
     char *printableNames[4];  // temporary demangled names for logging
+    const char **classNameLookups;  // for objc_getClass() hooks
+    unsigned classNameLookupsAllocated;
+    unsigned classNameLookupsUsed;
 
     // If you add new fields here, don't forget to update 
     // _objc_pthread_destroyspecific()
@@ -618,7 +622,6 @@ extern void _unload_image(header_info *hi);
 extern const header_info *_headerForClass(Class cls);
 
 extern Class _class_remap(Class cls);
-extern Class _class_getNonMetaClass(Class cls, id obj);
 extern Ivar _class_getVariable(Class cls, const char *name);
 
 extern unsigned _class_createInstancesFromZone(Class cls, size_t extraBytes, void *zone, id *results, unsigned num_requested);
@@ -631,8 +634,6 @@ extern IMP _category_getLoadMethod(Category cat);
 
 extern id object_cxxConstructFromClass(id obj, Class cls);
 extern void object_cxxDestruct(id obj);
-
-extern void _class_resolveMethod(Class cls, SEL sel, id inst);
 
 extern void fixupCopiedIvars(id newObject, id oldObject);
 extern Class _class_getClassForIvar(Class cls, Ivar ivar);
