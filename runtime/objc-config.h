@@ -65,7 +65,7 @@
 #endif
 
 // Define SUPPORT_PREOPT=1 to enable dyld shared cache optimizations
-#if TARGET_OS_WIN32  ||  TARGET_OS_SIMULATOR
+#if TARGET_OS_WIN32
 #   define SUPPORT_PREOPT 0
 #else
 #   define SUPPORT_PREOPT 1
@@ -162,6 +162,14 @@
 #   define SUPPORT_MESSAGE_LOGGING 1
 #endif
 
+// Define HAVE_TASK_RESTARTABLE_RANGES to enable usage of
+// task_restartable_ranges_synchronize()
+#if TARGET_OS_SIMULATOR || defined(__i386__) || defined(__arm__) || !TARGET_OS_MAC
+#   define HAVE_TASK_RESTARTABLE_RANGES 0
+#else
+#   define HAVE_TASK_RESTARTABLE_RANGES 1
+#endif
+
 // OBJC_INSTRUMENTED controls whether message dispatching is dynamically
 // monitored.  Monitoring introduces substantial overhead.
 // NOTE: To define this condition, do so in the build command, NOT by
@@ -169,5 +177,44 @@
 // condition, but objc-class.h can not #include this file (objc-config.h)
 // because objc-class.h is public and objc-config.h is not.
 //#define OBJC_INSTRUMENTED
+
+// In __OBJC2__, the runtimeLock is a mutex always held
+// hence the cache lock is redundant and can be elided.
+//
+// If the runtime lock ever becomes a rwlock again,
+// the cache lock would need to be used again
+#if __OBJC2__
+#define CONFIG_USE_CACHE_LOCK 0
+#else
+#define CONFIG_USE_CACHE_LOCK 1
+#endif
+
+// Determine how the method cache stores IMPs.
+#define CACHE_IMP_ENCODING_NONE 1 // Method cache contains raw IMP.
+#define CACHE_IMP_ENCODING_ISA_XOR 2 // Method cache contains ISA ^ IMP.
+#define CACHE_IMP_ENCODING_PTRAUTH 3 // Method cache contains ptrauth'd IMP.
+
+#if __PTRAUTH_INTRINSICS__
+// Always use ptrauth when it's supported.
+#define CACHE_IMP_ENCODING CACHE_IMP_ENCODING_PTRAUTH
+#elif defined(__arm__)
+// 32-bit ARM uses no encoding.
+#define CACHE_IMP_ENCODING CACHE_IMP_ENCODING_NONE
+#else
+// Everything else uses ISA ^ IMP.
+#define CACHE_IMP_ENCODING CACHE_IMP_ENCODING_ISA_XOR
+#endif
+
+#define CACHE_MASK_STORAGE_OUTLINED 1
+#define CACHE_MASK_STORAGE_HIGH_16 2
+#define CACHE_MASK_STORAGE_LOW_4 3
+
+#if defined(__arm64__) && __LP64__
+#define CACHE_MASK_STORAGE CACHE_MASK_STORAGE_HIGH_16
+#elif defined(__arm64__) && !__LP64__
+#define CACHE_MASK_STORAGE CACHE_MASK_STORAGE_LOW_4
+#else
+#define CACHE_MASK_STORAGE CACHE_MASK_STORAGE_OUTLINED
+#endif
 
 #endif

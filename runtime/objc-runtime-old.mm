@@ -365,7 +365,7 @@ objc_copyProtocolList(unsigned int *outCount)
     }
     
     result[i++] = nil;
-    assert(i == count+1);
+    ASSERT(i == count+1);
 
     if (outCount) *outCount = count;
     return result;
@@ -879,7 +879,7 @@ static void really_connect_class(Class cls,
         
         // No duplicate classes allowed. 
         // Duplicates should have been rejected by _objc_read_classes_from_image
-        assert(!oldCls);
+        ASSERT(!oldCls);
     }        
  
     // Fix up pended class refs to this class, if any
@@ -1780,7 +1780,7 @@ Protocol *
 objc_allocateProtocol(const char *name)
 {
     Class cls = objc_getClass("__IncompleteProtocol");
-    assert(cls);
+    ASSERT(cls);
 
     mutex_locker_t lock(classLock);
 
@@ -2196,6 +2196,11 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
 
     // Parts of this order are important for correctness or performance.
 
+    // Fix up selector refs from all images.
+    for (i = 0; i < hCount; i++) {
+        _objc_fixup_selector_refs(hList[i]);
+    }
+
     // Read classes from all images.
     for (i = 0; i < hCount; i++) {
         _objc_read_classes_from_image(hList[i]);
@@ -2218,10 +2223,9 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
         _objc_connect_classes_from_image(hList[i]);
     }
 
-    // Fix up class refs, selector refs, and protocol objects from all images.
+    // Fix up class refs, and protocol objects from all images.
     for (i = 0; i < hCount; i++) {
         _objc_map_class_refs_for_image(hList[i]);
-        _objc_fixup_selector_refs(hList[i]);
         _objc_fixup_protocol_objects_for_image(hList[i]);
     }
 
@@ -3153,7 +3157,10 @@ const char **objc_copyImageNames(unsigned int *outCount)
 {
     header_info *hi;
     int count = 0;
-    int max = HeaderCount;
+    int max = 0;
+    for (hi = FirstHeader; hi != nil; hi = hi->getNext()) {
+        max++;
+    }
 #if TARGET_OS_WIN32
     const TCHAR **names = (const TCHAR **)calloc(max+1, sizeof(TCHAR *));
 #else
@@ -3328,7 +3335,7 @@ mutex_t methodListLock;
 mutex_t cacheUpdateLock;
 recursive_mutex_t loadMethodLock;
 
-void lock_init(void)
+void runtime_init(void)
 {
 }
 

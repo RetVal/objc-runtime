@@ -133,8 +133,8 @@ typedef struct _threadChain {
 static ThreadChainLink_t ThreadChainLink;
 
 static ThreadChainLink_t *getChainLink() {
-    // follow links until thread_self() found (someday) XXX
-    objc_thread_t self = thread_self();
+    // follow links until objc_thread_self() found (someday) XXX
+    objc_thread_t self = objc_thread_self();
     ThreadChainLink_t *walker = &ThreadChainLink;
     while (walker->perThreadID != self) {
         if (walker->next != nil) {
@@ -322,27 +322,35 @@ struct objc_exception {
     struct objc_typeinfo tinfo;
 };
 
+extern "C" {
 
-extern "C" void _objc_exception_noop(void) { } 
-extern "C" bool _objc_exception_false(void) { return 0; } 
-// extern "C" bool _objc_exception_true(void) { return 1; } 
-extern "C" void _objc_exception_abort1(void) { 
-    _objc_fatal("unexpected call into objc exception typeinfo vtable %d", 1); 
-} 
-extern "C" void _objc_exception_abort2(void) { 
-    _objc_fatal("unexpected call into objc exception typeinfo vtable %d", 2); 
-} 
-extern "C" void _objc_exception_abort3(void) { 
-    _objc_fatal("unexpected call into objc exception typeinfo vtable %d", 3); 
-} 
-extern "C" void _objc_exception_abort4(void) { 
-    _objc_fatal("unexpected call into objc exception typeinfo vtable %d", 4); 
-} 
-
-extern "C" bool _objc_exception_do_catch(struct objc_typeinfo *catch_tinfo, 
-                                         struct objc_typeinfo *throw_tinfo, 
-                                         void **throw_obj_p, 
-                                         unsigned outer);
+__attribute__((used))
+void _objc_exception_noop(void) { }
+__attribute__((used))
+bool _objc_exception_false(void) { return 0; }
+// bool _objc_exception_true(void) { return 1; }
+__attribute__((used))
+void _objc_exception_abort1(void) {
+    _objc_fatal("unexpected call into objc exception typeinfo vtable %d", 1);
+}
+__attribute__((used))
+void _objc_exception_abort2(void) {
+    _objc_fatal("unexpected call into objc exception typeinfo vtable %d", 2);
+}
+__attribute__((used))
+void _objc_exception_abort3(void) {
+    _objc_fatal("unexpected call into objc exception typeinfo vtable %d", 3);
+}
+__attribute__((used))
+void _objc_exception_abort4(void) {
+    _objc_fatal("unexpected call into objc exception typeinfo vtable %d", 4);
+}
+__attribute__((used))
+bool _objc_exception_do_catch(struct objc_typeinfo *catch_tinfo,
+                              struct objc_typeinfo *throw_tinfo,
+                              void **throw_obj_p,
+                              unsigned outer);
+}
 
 // C++ pointers to vtables are signed with no extra data.
 // C++ vtable entries are signed with a number derived from the function name.
@@ -1207,9 +1215,9 @@ uintptr_t objc_addExceptionHandler(objc_exception_handler fn, void *context)
             bzero(data->debug, sizeof(*data->debug));
         }
 
-        pthread_getname_np(pthread_self(), data->debug->thread, THREADNAME_COUNT);
-        strlcpy(data->debug->queue, 
-                dispatch_queue_get_label(dispatch_get_current_queue()), 
+        pthread_getname_np(objc_thread_self(), data->debug->thread, THREADNAME_COUNT);
+        strlcpy(data->debug->queue,
+                dispatch_queue_get_label(DISPATCH_CURRENT_QUEUE_LABEL),
                 THREADNAME_COUNT);
         data->debug->backtraceSize = 
             backtrace(data->debug->backtrace, BACKTRACE_COUNT);

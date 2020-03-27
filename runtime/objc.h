@@ -67,7 +67,7 @@ typedef id _Nullable (*IMP)(id _Nonnull, SEL _Nonnull, ...);
 #   endif
 #else
     // __OBJC_BOOL_IS_BOOL not set.
-#   if TARGET_OS_OSX || TARGET_OS_IOSMAC || (TARGET_OS_IOS && !__LP64__ && !__ARM_ARCH_7K)
+#   if TARGET_OS_OSX || TARGET_OS_IOSMAC || ((TARGET_OS_IOS || TARGET_OS_BRIDGE) && !__LP64__ && !__ARM_ARCH_7K)
 #      define OBJC_BOOL_IS_BOOL 0
 #   else
 #      define OBJC_BOOL_IS_BOOL 1

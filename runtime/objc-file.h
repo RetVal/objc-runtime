@@ -30,15 +30,19 @@
 
 // classref_t is not fixed up at launch; use remapClass() to convert
 
+// classlist and catlist and protolist sections are marked const here
+// because those sections may be in read-only __DATA_CONST segments.
+
 extern SEL *_getObjc2SelectorRefs(const header_info *hi, size_t *count);
 extern message_ref_t *_getObjc2MessageRefs(const header_info *hi, size_t *count);
 extern Class*_getObjc2ClassRefs(const header_info *hi, size_t *count);
 extern Class*_getObjc2SuperRefs(const header_info *hi, size_t *count);
-extern classref_t *_getObjc2ClassList(const header_info *hi, size_t *count);
-extern classref_t *_getObjc2NonlazyClassList(const header_info *hi, size_t *count);
-extern category_t **_getObjc2CategoryList(const header_info *hi, size_t *count);
-extern category_t **_getObjc2NonlazyCategoryList(const header_info *hi, size_t *count);
-extern protocol_t **_getObjc2ProtocolList(const header_info *hi, size_t *count);
+extern classref_t const *_getObjc2ClassList(const header_info *hi, size_t *count);
+extern classref_t const *_getObjc2NonlazyClassList(const header_info *hi, size_t *count);
+extern category_t * const *_getObjc2CategoryList(const header_info *hi, size_t *count);
+extern category_t * const *_getObjc2CategoryList2(const header_info *hi, size_t *count);
+extern category_t * const *_getObjc2NonlazyCategoryList(const header_info *hi, size_t *count);
+extern protocol_t * const *_getObjc2ProtocolList(const header_info *hi, size_t *count);
 extern protocol_t **_getObjc2ProtocolRefs(const header_info *hi, size_t *count);
 
 // FIXME: rdar://29241917&33734254 clang doesn't sign static initializers.
@@ -57,8 +61,8 @@ public:
 
 extern UnsignedInitializer *getLibobjcInitializers(const header_info *hi, size_t *count);
 
-extern classref_t *_getObjc2NonlazyClassList(const headerType *mhdr, size_t *count);
-extern category_t **_getObjc2NonlazyCategoryList(const headerType *mhdr, size_t *count);
+extern classref_t const *_getObjc2NonlazyClassList(const headerType *mhdr, size_t *count);
+extern category_t * const *_getObjc2NonlazyCategoryList(const headerType *mhdr, size_t *count);
 extern UnsignedInitializer *getLibobjcInitializers(const headerType *mhdr, size_t *count);
 
 static inline void

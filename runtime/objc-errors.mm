@@ -160,7 +160,7 @@ static void _objc_syslog(const char *message)
 #if !__OBJC2__
 // used by ExceptionHandling.framework
 #endif
-__attribute__((noreturn))
+__attribute__((noreturn, cold))
 void _objc_error(id self, const char *fmt, va_list ap) 
 { 
     char *buf;
@@ -183,7 +183,7 @@ void __objc_error(id rcv, const char *fmt, ...)
     va_end(vp);
 }
 
-static __attribute__((noreturn))
+static __attribute__((noreturn, cold))
 void _objc_fatalv(uint64_t reason, uint64_t flags, const char *fmt, va_list ap)
 {
     char *buf1;
@@ -200,6 +200,7 @@ void _objc_fatalv(uint64_t reason, uint64_t flags, const char *fmt, va_list ap)
         _Exit(1);
     }
     else {
+        _objc_crashlog(buf1);
         abort_with_reason(OS_REASON_OBJC, reason, buf1, flags);
     }
 }

@@ -693,8 +693,14 @@ static uintptr_t _get_pc_for_thread(thread_t thread)
 * reading function is in progress because it might still be using 
 * the garbage memory.
 **********************************************************************/
-extern "C" uintptr_t objc_entryPoints[];
-extern "C" uintptr_t objc_exitPoints[];
+typedef struct {
+    uint64_t          location;
+    unsigned short    length;
+    unsigned short    recovery_offs;
+    unsigned int      flags;
+} task_restartable_range_t;
+
+extern "C" task_restartable_range_t objc_restartableRanges[];
 
 static int _collecting_in_critical(void)
 {
@@ -707,7 +713,7 @@ static int _collecting_in_critical(void)
     kern_return_t ret;
     int result;
 
-    mach_port_t mythread = pthread_mach_thread_np(pthread_self());
+    mach_port_t mythread = pthread_mach_thread_np(objc_thread_self());
 
     // Get a list of all the threads in the current task
     ret = task_threads (mach_task_self (), &threads, &number);
@@ -738,10 +744,11 @@ static int _collecting_in_critical(void)
         }
         
         // Check whether it is in the cache lookup code
-        for (region = 0; objc_entryPoints[region] != 0; region++)
+        for (region = 0; objc_restartableRanges[region].location != 0; region++)
         {
-            if ((pc >= objc_entryPoints[region]) &&
-                (pc <= objc_exitPoints[region])) 
+            uint32_t loc = (uint32_t)objc_restartableRanges[region].location;
+            if ((pc > loc) &&
+                (pc - loc) < objc_restartableRanges[region].length)
             {
                 result = TRUE;
                 goto done;
@@ -1788,6 +1795,9 @@ void _class_printMethodCacheStatistics(void)
 
 #endif
 
+void cache_init()
+{
+}
 
 // !__OBJC2__
 #endif

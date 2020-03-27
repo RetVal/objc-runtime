@@ -45,22 +45,20 @@
 // by CF, so __IncompleteProtocol would be left without an R/R implementation 
 // otherwise, which would break ARC.
 
-@interface __IncompleteProtocol : NSObject @end
-@implementation __IncompleteProtocol 
+@interface __IncompleteProtocol : NSObject
+@end
+
 #if __OBJC2__
-// fixme hack - make __IncompleteProtocol a non-lazy class
-+ (void) load { } 
+__attribute__((objc_nonlazy_class))
 #endif
+@implementation __IncompleteProtocol
 @end
 
 
-@implementation Protocol 
-
 #if __OBJC2__
-// fixme hack - make Protocol a non-lazy class
-+ (void) load { } 
+__attribute__((objc_nonlazy_class))
 #endif
-
+@implementation Protocol
 
 - (BOOL) conformsTo: (Protocol *)aProtocolObj
 {

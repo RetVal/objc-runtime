@@ -230,22 +230,6 @@ typedef enum _os_atomic_memory_order {
 #define os_atomic_rmw_loop_give_up(expr) \
 		os_atomic_rmw_loop_give_up_with_fence(relaxed, expr)
 
-#define os_atomic_tsx_xacq_cmpxchgv(p, e, v, g) \
-		os_atomic_cmpxchgv((p), (e), (v), (g), acquire)
-#define os_atomic_tsx_xrel_store(p, v) \
-		os_atomic_store(p, v, release)
-#define os_atomic_tsx_xacq_cmpxchgv2o(p, f, e, v, g) \
-		os_atomic_tsx_xacq_cmpxchgv(&(p)->f, (e), (v), (g))
-#define os_atomic_tsx_xrel_store2o(p, f, v) \
-		os_atomic_tsx_xrel_store(&(p)->f, (v))
-
-#if defined(__x86_64__) || defined(__i386__)
-#pragma mark -
-#pragma mark x86
-
-
-#endif
-
 
 #endif // __OS_EXPOSE_INTERNALS_INDIRECT__
 

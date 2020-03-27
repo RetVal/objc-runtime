@@ -76,7 +76,7 @@ __attribute__((noinline, used))
 static void grow_refs_and_insert(weak_entry_t *entry, 
                                  objc_object **new_referrer)
 {
-    assert(entry->out_of_line());
+    ASSERT(entry->out_of_line());
 
     size_t old_size = TABLE_SIZE(entry);
     size_t new_size = old_size ? old_size * 2 : 8;
@@ -135,7 +135,7 @@ static void append_referrer(weak_entry_t *entry, objc_object **new_referrer)
         entry->max_hash_displacement = 0;
     }
 
-    assert(entry->out_of_line());
+    ASSERT(entry->out_of_line());
 
     if (entry->num_refs >= TABLE_SIZE(entry) * 3/4) {
         return grow_refs_and_insert(entry, new_referrer);
@@ -211,7 +211,7 @@ static void remove_referrer(weak_entry_t *entry, objc_object **old_referrer)
 static void weak_entry_insert(weak_table_t *weak_table, weak_entry_t *new_entry)
 {
     weak_entry_t *weak_entries = weak_table->weak_entries;
-    assert(weak_entries != nil);
+    ASSERT(weak_entries != nil);
 
     size_t begin = hash_pointer(new_entry->referent) & (weak_table->mask);
     size_t index = begin;
@@ -308,7 +308,7 @@ static void weak_entry_remove(weak_table_t *weak_table, weak_entry_t *entry)
 static weak_entry_t *
 weak_entry_for_referent(weak_table_t *weak_table, objc_object *referent)
 {
-    assert(referent);
+    ASSERT(referent);
 
     weak_entry_t *weak_entries = weak_table->weak_entries;
 
@@ -405,12 +405,12 @@ weak_register_no_lock(weak_table_t *weak_table, id referent_id,
         BOOL (*allowsWeakReference)(objc_object *, SEL) = 
             (BOOL(*)(objc_object *, SEL))
             object_getMethodImplementation((id)referent, 
-                                           SEL_allowsWeakReference);
+                                           @selector(allowsWeakReference));
         if ((IMP)allowsWeakReference == _objc_msgForward) {
             return nil;
         }
         deallocating =
-            ! (*allowsWeakReference)(referent, SEL_allowsWeakReference);
+            ! (*allowsWeakReference)(referent, @selector(allowsWeakReference));
     }
 
     if (deallocating) {

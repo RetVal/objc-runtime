@@ -201,7 +201,7 @@ static void call_class_loads(void)
         if (PrintLoading) {
             _objc_inform("LOAD: +[%s load]\n", cls->nameForLogging());
         }
-        (*load_method)(cls, SEL_load);
+        (*load_method)(cls, @selector(load));
     }
     
     // Destroy the detached list.
@@ -248,7 +248,7 @@ static bool call_category_loads(void)
                              cls->nameForLogging(), 
                              _category_getName(cat));
             }
-            (*load_method)(cls, SEL_load);
+            (*load_method)(cls, @selector(load));
             cats[i].cat = nil;
         }
     }

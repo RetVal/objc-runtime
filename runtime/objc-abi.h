@@ -108,7 +108,7 @@ typedef struct objc_image_info {
         CorrectedSynthesize = 1<<4,  // used for an old workaround, now ignored
         IsSimulated         = 1<<5,  // image compiled for a simulator platform
         HasCategoryClassProperties  = 1<<6,  // class properties in category_t
-        // not yet used = 1<<7
+        OptimizedByDyldClosure = 1 << 7, // dyld (not the shared cache) optimized this.
 
         // 1 byte Swift unstable ABI version number
         SwiftUnstableVersionMaskShift = 8,
@@ -138,6 +138,7 @@ typedef struct objc_image_info {
     bool requiresGC()      const { return flags & RequiresGC; }
     bool optimizedByDyld() const { return flags & OptimizedByDyld; }
     bool hasCategoryClassProperties() const { return flags & HasCategoryClassProperties; }
+    bool optimizedByDyldClosure() const { return flags & OptimizedByDyldClosure; }
     bool containsSwift()   const { return (flags & SwiftUnstableVersionMask) != 0; }
     uint32_t swiftUnstableVersion() const { return (flags & SwiftUnstableVersionMask) >> SwiftUnstableVersionMaskShift; }
 #endif
@@ -458,7 +459,10 @@ OBJC_EXPORT const struct { char c; } objc_absolute_indexed_isa_index_shift
 #if !defined(OBJC_DECLARE_SYMBOLS)
 __OSX_AVAILABLE(10.0)
 __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
-__WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE
+__WATCHOS_UNAVAILABLE
+#   ifndef __APPLE_BLEACH_SDK__
+__BRIDGEOS_UNAVAILABLE
+#   endif
 #endif
 OBJC_ROOT_CLASS
 @interface Object {

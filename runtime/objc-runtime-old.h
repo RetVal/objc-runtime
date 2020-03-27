@@ -205,7 +205,7 @@ struct objc_class : objc_object {
 
     // set and clear must not overlap
     void changeInfo(uint32_t set, uint32_t clear) {
-        assert((set & clear) == 0);
+        ASSERT((set & clear) == 0);
 
         uint32_t oldf, newf;
         do {
@@ -234,19 +234,13 @@ struct objc_class : objc_object {
         return info & CLS_IS_ARC;
     }
 
-    bool hasCustomRR() { 
+    bool hasCustomRR() {
         return true;
     }
-    void setHasCustomRR(bool = false) { }
-    void setHasDefaultRR() { }
-    void printCustomRR(bool) { }
 
-    bool hasCustomAWZ() { 
+    bool hasCustomAWZ() {
         return true;
     }
-    void setHasCustomAWZ(bool = false) { }
-    void setHasDefaultAWZ() { }
-    void printCustomAWZ(bool) { }
 
     bool forbidsAssociatedObjects() {
         // Old runtime doesn't support forbidding associated objects.

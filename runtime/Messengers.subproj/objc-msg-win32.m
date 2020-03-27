@@ -175,10 +175,11 @@ MISS:
         mov eax, isa[edx]
 
         // MethodTableLookup WORD_RETURN, MSG_SEND
+        push $3
         push eax
         push ecx
         push edx
-        call _class_lookupMethodAndLoadCache3
+        call lookUpImpOrFoward
 
         mov edx, kFwdMsgSend
         leave
@@ -244,10 +245,11 @@ MISS:
         mov eax, isa[edx]
 
         // MethodTableLookup WORD_RETURN, MSG_SEND
+        push $3
         push eax
         push ecx
         push edx
-        call _class_lookupMethodAndLoadCache3
+        call lookUpImpOrFoward
 
         mov edx, kFwdMsgSend
         leave
@@ -313,10 +315,11 @@ MISS:
         mov eax, super_class[eax]
 
         // MethodTableLookup WORD_RETURN, MSG_SENDSUPER
+        push $3
         push eax
         push ecx
         push edx
-        call _class_lookupMethodAndLoadCache3
+        call lookUpImpOrFoward
 
         mov edx, kFwdMsgSend
         leave
@@ -375,10 +378,11 @@ MISS:
         mov eax, isa[edx]
 
         // MethodTableLookup WORD_RETURN, MSG_SEND
+        push $3
         push eax
         push ecx
         push edx
-        call _class_lookupMethodAndLoadCache3
+        call lookUpImpOrFoward
 
         mov edx, kFwdMsgSendStret
         leave
@@ -445,10 +449,11 @@ MISS:
         mov eax, super_class[eax]
 
         // MethodTableLookup WORD_RETURN, MSG_SENDSUPER
+        push $3
         push eax
         push ecx
         push edx
-        call _class_lookupMethodAndLoadCache3
+        call lookUpImpOrFoward
 
         mov edx, kFwdMsgSendStret
         leave

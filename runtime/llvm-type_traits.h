@@ -1,23 +1,21 @@
 //===- llvm/Support/type_traits.h - Simplfied type traits -------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
-// This file provides a template class that determines if a type is a class or
-// not. The basic mechanism, based on using the pointer to member function of
-// a zero argument to a function was "boosted" from the boost type_traits
-// library. See http://www.boost.org/ for all the gory details.
+// This file provides useful additions to the standard type_traits library.
 //
 //===----------------------------------------------------------------------===//
 
-// Taken from llvmCore-3425.0.31.
+// Taken from clang-1100.247.11.10.9
 
 #ifndef LLVM_SUPPORT_TYPE_TRAITS_H
 #define LLVM_SUPPORT_TYPE_TRAITS_H
+
+#define HAVE_STD_IS_TRIVIALLY_COPYABLE 1
 
 #include <cstddef>
 #include <utility>
@@ -27,195 +25,180 @@
 #define __has_feature(x) 0
 #endif
 
-// This is actually the conforming implementation which works with abstract
-// classes.  However, enough compilers have trouble with it that most will use
-// the one in boost/type_traits/object_traits.hpp. This implementation actually
-// works with VC7.0, but other interactions seem to fail when we use it.
-
 namespace objc {
-  
-namespace dont_use
-{
-    // These two functions should never be used. They are helpers to
-    // the is_class template below. They cannot be located inside
-    // is_class because doing so causes at least GCC to think that
-    // the value of the "value" enumerator is not constant. Placing
-    // them out here (for some strange reason) allows the sizeof
-    // operator against them to magically be constant. This is
-    // important to make the is_class<T>::value idiom zero cost. it
-    // evaluates to a constant 1 or 0 depending on whether the
-    // parameter T is a class or not (respectively).
-    template<typename T> char is_class_helper(void(T::*)());
-    template<typename T> double is_class_helper(...);
-}
 
-template <typename T>
-struct is_class
-{
-  // is_class<> metafunction due to Paul Mensonides (leavings@attbi.com). For
-  // more details:
-  // http://groups.google.com/groups?hl=en&selm=000001c1cc83%24e154d5e0%247772e50c%40c161550a&rnum=1
+
+/// Metafunction that determines whether the given type is either an
+/// integral type or an enumeration type, including enum classes.
+///
+/// Note that this accepts potentially more integral types than is_integral
+/// because it is based on being implicitly convertible to an integral type.
+/// Also note that enum classes aren't implicitly convertible to integral types,
+/// the value may therefore need to be explicitly converted before being used.
+template <typename T> class is_integral_or_enum {
+  using UnderlyingT = typename std::remove_reference<T>::type;
+
 public:
   static const bool value =
-      sizeof(char) == sizeof(dont_use::is_class_helper<T>(0));
+      !std::is_class<UnderlyingT>::value && // Filter conversion operators.
+      !std::is_pointer<UnderlyingT>::value &&
+      !std::is_floating_point<UnderlyingT>::value &&
+      (std::is_enum<UnderlyingT>::value ||
+       std::is_convertible<UnderlyingT, unsigned long long>::value);
 };
-  
-  
-/// isPodLike - This is a type trait that is used to determine whether a given
-/// type can be copied around with memcpy instead of running ctors etc.
+
+/// If T is a pointer, just return it. If it is not, return T&.
+template<typename T, typename Enable = void>
+struct add_lvalue_reference_if_not_pointer { using type = T &; };
+
 template <typename T>
-struct isPodLike {
-#if __has_feature(is_trivially_copyable)
-  // If the compiler supports the is_trivially_copyable trait use it, as it
-  // matches the definition of isPodLike closely.
-  static const bool value = __is_trivially_copyable(T);
-#else
-  // If we don't know anything else, we can (at least) assume that all non-class
-  // types are PODs.
-  static const bool value = !is_class<T>::value;
+struct add_lvalue_reference_if_not_pointer<
+    T, typename std::enable_if<std::is_pointer<T>::value>::type> {
+  using type = T;
+};
+
+/// If T is a pointer to X, return a pointer to const X. If it is not,
+/// return const T.
+template<typename T, typename Enable = void>
+struct add_const_past_pointer { using type = const T; };
+
+template <typename T>
+struct add_const_past_pointer<
+    T, typename std::enable_if<std::is_pointer<T>::value>::type> {
+  using type = const typename std::remove_pointer<T>::type *;
+};
+
+template <typename T, typename Enable = void>
+struct const_pointer_or_const_ref {
+  using type = const T &;
+};
+template <typename T>
+struct const_pointer_or_const_ref<
+    T, typename std::enable_if<std::is_pointer<T>::value>::type> {
+  using type = typename add_const_past_pointer<T>::type;
+};
+
+namespace detail {
+/// Internal utility to detect trivial copy construction.
+template<typename T> union copy_construction_triviality_helper {
+    T t;
+    copy_construction_triviality_helper() = default;
+    copy_construction_triviality_helper(const copy_construction_triviality_helper&) = default;
+    ~copy_construction_triviality_helper() = default;
+};
+/// Internal utility to detect trivial move construction.
+template<typename T> union move_construction_triviality_helper {
+    T t;
+    move_construction_triviality_helper() = default;
+    move_construction_triviality_helper(move_construction_triviality_helper&&) = default;
+    ~move_construction_triviality_helper() = default;
+};
+
+template<class T>
+union trivial_helper {
+    T t;
+};
+
+} // end namespace detail
+
+/// An implementation of `std::is_trivially_copy_constructible` since we have
+/// users with STLs that don't yet include it.
+template <typename T>
+struct is_trivially_copy_constructible
+    : std::is_copy_constructible<
+          ::objc::detail::copy_construction_triviality_helper<T>> {};
+template <typename T>
+struct is_trivially_copy_constructible<T &> : std::true_type {};
+template <typename T>
+struct is_trivially_copy_constructible<T &&> : std::false_type {};
+
+/// An implementation of `std::is_trivially_move_constructible` since we have
+/// users with STLs that don't yet include it.
+template <typename T>
+struct is_trivially_move_constructible
+    : std::is_move_constructible<
+          ::objc::detail::move_construction_triviality_helper<T>> {};
+template <typename T>
+struct is_trivially_move_constructible<T &> : std::true_type {};
+template <typename T>
+struct is_trivially_move_constructible<T &&> : std::true_type {};
+
+
+template <typename T>
+struct is_copy_assignable {
+  template<class F>
+    static auto get(F*) -> decltype(std::declval<F &>() = std::declval<const F &>(), std::true_type{});
+    static std::false_type get(...);
+    static constexpr bool value = decltype(get((T*)nullptr))::value;
+};
+
+template <typename T>
+struct is_move_assignable {
+  template<class F>
+    static auto get(F*) -> decltype(std::declval<F &>() = std::declval<F &&>(), std::true_type{});
+    static std::false_type get(...);
+    static constexpr bool value = decltype(get((T*)nullptr))::value;
+};
+
+
+// An implementation of `std::is_trivially_copyable` since STL version
+// is not equally supported by all compilers, especially GCC 4.9.
+// Uniform implementation of this trait is important for ABI compatibility
+// as it has an impact on SmallVector's ABI (among others).
+template <typename T>
+class is_trivially_copyable {
+
+  // copy constructors
+  static constexpr bool has_trivial_copy_constructor =
+      std::is_copy_constructible<detail::trivial_helper<T>>::value;
+  static constexpr bool has_deleted_copy_constructor =
+      !std::is_copy_constructible<T>::value;
+
+  // move constructors
+  static constexpr bool has_trivial_move_constructor =
+      std::is_move_constructible<detail::trivial_helper<T>>::value;
+  static constexpr bool has_deleted_move_constructor =
+      !std::is_move_constructible<T>::value;
+
+  // copy assign
+  static constexpr bool has_trivial_copy_assign =
+      is_copy_assignable<detail::trivial_helper<T>>::value;
+  static constexpr bool has_deleted_copy_assign =
+      !is_copy_assignable<T>::value;
+
+  // move assign
+  static constexpr bool has_trivial_move_assign =
+      is_move_assignable<detail::trivial_helper<T>>::value;
+  static constexpr bool has_deleted_move_assign =
+      !is_move_assignable<T>::value;
+
+  // destructor
+  static constexpr bool has_trivial_destructor =
+      std::is_destructible<detail::trivial_helper<T>>::value;
+
+  public:
+
+  static constexpr bool value =
+      has_trivial_destructor &&
+      (has_deleted_move_assign || has_trivial_move_assign) &&
+      (has_deleted_move_constructor || has_trivial_move_constructor) &&
+      (has_deleted_copy_assign || has_trivial_copy_assign) &&
+      (has_deleted_copy_constructor || has_trivial_copy_constructor);
+
+#ifdef HAVE_STD_IS_TRIVIALLY_COPYABLE
+  static_assert(value == std::is_trivially_copyable<T>::value,
+                "inconsistent behavior between llvm:: and std:: implementation of is_trivially_copyable");
 #endif
 };
-
-// std::pair's are pod-like if their elements are.
-template<typename T, typename U>
-struct isPodLike<std::pair<T, U> > {
-  static const bool value = isPodLike<T>::value && isPodLike<U>::value;
-};
-  
-
-template <class T, T v>
-struct integral_constant {
-  typedef T value_type;
-  static const value_type value = v;
-  typedef integral_constant<T,v> type;
-  operator value_type() { return value; }
-};
-
-typedef integral_constant<bool, true> true_type;
-typedef integral_constant<bool, false> false_type;
-
-/// \brief Metafunction that determines whether the two given types are 
-/// equivalent.
-template<typename T, typename U> struct is_same       : public false_type {};
-template<typename T>             struct is_same<T, T> : public true_type {};
-
-/// \brief Metafunction that removes const qualification from a type.
-template <typename T> struct remove_const          { typedef T type; };
-template <typename T> struct remove_const<const T> { typedef T type; };
-
-/// \brief Metafunction that removes volatile qualification from a type.
-template <typename T> struct remove_volatile             { typedef T type; };
-template <typename T> struct remove_volatile<volatile T> { typedef T type; };
-
-/// \brief Metafunction that removes both const and volatile qualification from
-/// a type.
-template <typename T> struct remove_cv {
-  typedef typename remove_const<typename remove_volatile<T>::type>::type type;
-};
-
-/// \brief Helper to implement is_integral metafunction.
-template <typename T> struct is_integral_impl           : false_type {};
-template <> struct is_integral_impl<         bool>      : true_type {};
-template <> struct is_integral_impl<         char>      : true_type {};
-template <> struct is_integral_impl<  signed char>      : true_type {};
-template <> struct is_integral_impl<unsigned char>      : true_type {};
-template <> struct is_integral_impl<         wchar_t>   : true_type {};
-template <> struct is_integral_impl<         short>     : true_type {};
-template <> struct is_integral_impl<unsigned short>     : true_type {};
-template <> struct is_integral_impl<         int>       : true_type {};
-template <> struct is_integral_impl<unsigned int>       : true_type {};
-template <> struct is_integral_impl<         long>      : true_type {};
-template <> struct is_integral_impl<unsigned long>      : true_type {};
-template <> struct is_integral_impl<         long long> : true_type {};
-template <> struct is_integral_impl<unsigned long long> : true_type {};
-
-/// \brief Metafunction that determines whether the given type is an integral
-/// type.
 template <typename T>
-struct is_integral : is_integral_impl<T> {};
-
-/// \brief Metafunction to remove reference from a type.
-template <typename T> struct remove_reference { typedef T type; };
-template <typename T> struct remove_reference<T&> { typedef T type; };
-
-/// \brief Metafunction that determines whether the given type is a pointer
-/// type.
-template <typename T> struct is_pointer : false_type {};
-template <typename T> struct is_pointer<T*> : true_type {};
-template <typename T> struct is_pointer<T* const> : true_type {};
-template <typename T> struct is_pointer<T* volatile> : true_type {};
-template <typename T> struct is_pointer<T* const volatile> : true_type {};
-
-/// \brief Metafunction that determines whether the given type is either an
-/// integral type or an enumeration type.
-///
-/// Note that this accepts potentially more integral types than we whitelist
-/// above for is_integral because it is based on merely being convertible
-/// implicitly to an integral type.
-template <typename T> class is_integral_or_enum {
-  // Provide an overload which can be called with anything implicitly
-  // convertible to an unsigned long long. This should catch integer types and
-  // enumeration types at least. We blacklist classes with conversion operators
-  // below.
-  static double check_int_convertible(unsigned long long);
-  static char check_int_convertible(...);
-
-  typedef typename remove_reference<T>::type UnderlyingT;
-  static UnderlyingT &nonce_instance;
-
-public:
-  static const bool
-    value = (!is_class<UnderlyingT>::value && !is_pointer<UnderlyingT>::value &&
-             !is_same<UnderlyingT, float>::value &&
-             !is_same<UnderlyingT, double>::value &&
-             sizeof(char) != sizeof(check_int_convertible(nonce_instance)));
+class is_trivially_copyable<T*> : public std::true_type {
 };
 
-// enable_if_c - Enable/disable a template based on a metafunction
-template<bool Cond, typename T = void>
-struct enable_if_c {
-  typedef T type;
-};
 
-template<typename T> struct enable_if_c<false, T> { };
-  
-// enable_if - Enable/disable a template based on a metafunction
-template<typename Cond, typename T = void>
-struct enable_if : public enable_if_c<Cond::value, T> { };
-
-namespace dont_use {
-  template<typename Base> char base_of_helper(const volatile Base*);
-  template<typename Base> double base_of_helper(...);
-}
-
-/// is_base_of - Metafunction to determine whether one type is a base class of
-/// (or identical to) another type.
-template<typename Base, typename Derived>
-struct is_base_of {
-  static const bool value 
-    = is_class<Base>::value && is_class<Derived>::value &&
-      sizeof(char) == sizeof(dont_use::base_of_helper<Base>((Derived*)0));
-};
-
-// remove_pointer - Metafunction to turn Foo* into Foo.  Defined in
-// C++0x [meta.trans.ptr].
-template <typename T> struct remove_pointer { typedef T type; };
-template <typename T> struct remove_pointer<T*> { typedef T type; };
-template <typename T> struct remove_pointer<T*const> { typedef T type; };
-template <typename T> struct remove_pointer<T*volatile> { typedef T type; };
-template <typename T> struct remove_pointer<T*const volatile> {
-    typedef T type; };
-
-template <bool, typename T, typename F>
-struct conditional { typedef T type; };
-
-template <typename T, typename F>
-struct conditional<false, T, F> { typedef F type; };
-
-}
+} // end namespace llvm
 
 #ifdef LLVM_DEFINED_HAS_FEATURE
 #undef __has_feature
 #endif
 
-#endif
+#endif // LLVM_SUPPORT_TYPE_TRAITS_H

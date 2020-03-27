@@ -195,34 +195,14 @@ Class object_setClass(id obj, Class cls)
     // weakly-referenced object has an un-+initialized isa.
     // Unresolved future classes are not so protected.
     if (!cls->isFuture()  &&  !cls->isInitialized()) {
-        // use lookUpImpOrForward to indirectly provoke +initialize
+        // use lookUpImpOrNil to indirectly provoke +initialize
         // to avoid duplicating the code to actually send +initialize
-        lookUpImpOrForward(cls, SEL_initialize, nil,
-                           YES/*initialize*/, YES/*cache*/, NO/*resolver*/);
+        lookUpImpOrNil(nil, @selector(initialize), cls, LOOKUP_INITIALIZE);
     }
 
     return obj->changeIsa(cls);
 }
 
-
-Class _Nullable
-objc_opt_class(id _Nullable obj) {
-    if (obj == nil) {
-        return nil;
-    }
-    Class cls = nil;
-#if OBJC_HAVE_TAGGED_POINTERS
-    const bool isTaggedPtr = _objc_isTaggedPointer(obj);
-    if (isTaggedPtr) {
-        cls = _objc_getClassForTag(_objc_getTaggedPointerTag(obj));
-    } else {
-#endif
-        cls = obj->ISA();
-#if OBJC_HAVE_TAGGED_POINTERS
-    }
-#endif
-    return cls;
-}
 
 /***********************************************************************
 * object_isClass.
@@ -504,9 +484,9 @@ void object_cxxDestruct(id obj)
 * return nil:  construction failed because a C++ constructor threw an exception
 **********************************************************************/
 id 
-object_cxxConstructFromClass(id obj, Class cls)
+object_cxxConstructFromClass(id obj, Class cls, int flags)
 {
-    assert(cls->hasCxxCtor());  // required for performance, not correctness
+    ASSERT(cls->hasCxxCtor());  // required for performance, not correctness
 
     id (*ctor)(id);
     Class supercls;
@@ -515,8 +495,8 @@ object_cxxConstructFromClass(id obj, Class cls)
 
     // Call superclasses' ctors first, if any.
     if (supercls  &&  supercls->hasCxxCtor()) {
-        bool ok = object_cxxConstructFromClass(obj, supercls);
-        if (!ok) return nil;  // some superclass's ctor failed - give up
+        bool ok = object_cxxConstructFromClass(obj, supercls, flags);
+        if (slowpath(!ok)) return nil;  // some superclass's ctor failed - give up
     }
 
     // Find this class's ctor, if any.
@@ -528,11 +508,17 @@ object_cxxConstructFromClass(id obj, Class cls)
         _objc_inform("CXX: calling C++ constructors for class %s", 
                      cls->nameForLogging());
     }
-    if ((*ctor)(obj)) return obj;  // ctor called and succeeded - ok
+    if (fastpath((*ctor)(obj))) return obj;  // ctor called and succeeded - ok
 
-    // This class's ctor was called and failed. 
+    supercls = cls->superclass; // this reload avoids a spill on the stack
+
+    // This class's ctor was called and failed.
     // Call superclasses's dtors to clean up.
     if (supercls) object_cxxDestructFromClass(obj, supercls);
+    if (flags & OBJECT_CONSTRUCT_FREE_ONFAILURE) free(obj);
+    if (flags & OBJECT_CONSTRUCT_CALL_BADALLOC) {
+        return _objc_callBadAllocHandler(cls);
+    }
     return nil;
 }
 
@@ -574,12 +560,10 @@ void fixupCopiedIvars(id newObject, id oldObject)
                 while ((byte = *weakLayout++)) {
                     unsigned skips = (byte >> 4);
                     unsigned weaks = (byte & 0x0F);
-                    newPtr += skips;
-                    oldPtr += skips;
+                    newPtr += skips, oldPtr += skips;
                     while (weaks--) {
                         objc_copyWeak(newPtr, oldPtr);
-                        ++newPtr;
-                        ++oldPtr;
+                        ++newPtr, ++oldPtr;
                     }
                 }
             }
@@ -646,23 +630,18 @@ BOOL class_respondsToMethod(Class cls, SEL sel)
 
 BOOL class_respondsToSelector(Class cls, SEL sel)
 {
-    return class_respondsToSelector_inst(cls, sel, nil);
+    return class_respondsToSelector_inst(nil, sel, cls);
 }
 
 
 // inst is an instance of cls or a subclass thereof, or nil if none is known.
 // Non-nil inst is faster in some cases. See lookUpImpOrForward() for details.
-bool class_respondsToSelector_inst(Class cls, SEL sel, id inst)
+NEVER_INLINE BOOL
+class_respondsToSelector_inst(id inst, SEL sel, Class cls)
 {
-    IMP imp;
-
-    if (!sel  ||  !cls) return NO;
-
     // Avoids +initialize because it historically did so.
     // We're not returning a callable IMP anyway.
-    imp = lookUpImpOrNil(cls, sel, inst, 
-                         NO/*initialize*/, YES/*cache*/, YES/*resolver*/);
-    return bool(imp);
+    return sel && cls && lookUpImpOrNil(inst, sel, cls, LOOKUP_RESOLVER);
 }
 
 
@@ -689,8 +668,7 @@ IMP class_getMethodImplementation(Class cls, SEL sel)
 
     if (!cls  ||  !sel) return nil;
 
-    imp = lookUpImpOrNil(cls, sel, nil, 
-                         YES/*initialize*/, YES/*cache*/, YES/*resolver*/);
+    imp = lookUpImpOrNil(nil, sel, cls, LOOKUP_INITIALIZE | LOOKUP_RESOLVER);
 
     // Translate forwarding function to C-callable external version
     if (!imp) {
@@ -849,26 +827,6 @@ char * method_copyArgumentType(Method m, unsigned int index)
     return encoding_copyArgumentType(method_getTypeEncoding(m), index);
 }
 
-
-/***********************************************************************
-* _objc_constructOrFree
-* Call C++ constructors, and free() if they fail.
-* bytes->isa must already be set.
-* cls must have cxx constructors.
-* Returns the object, or nil.
-**********************************************************************/
-id
-_objc_constructOrFree(id bytes, Class cls)
-{
-    assert(cls->hasCxxCtor());  // for performance, not correctness
-
-    id obj = object_cxxConstructFromClass(bytes, cls);
-    if (!obj) free(bytes);
-
-    return obj;
-}
-
-
 /***********************************************************************
 * _class_createInstancesFromZone
 * Batch-allocating version of _class_createInstanceFromZone.
@@ -899,8 +857,10 @@ _class_createInstancesFromZone(Class cls, size_t extraBytes, void *zone,
     for (unsigned i = 0; i < num_allocated; i++) {
         id obj = results[i];
         obj->initIsa(cls);    // fixme allow nonpointer
-        if (ctor) obj = _objc_constructOrFree(obj, cls);
-
+        if (ctor) {
+            obj = object_cxxConstructFromClass(obj, cls,
+                                               OBJECT_CONSTRUCT_FREE_ONFAILURE);
+        }
         if (obj) {
             results[i-shift] = obj;
         } else {
@@ -946,11 +906,11 @@ copyPropertyAttributeString(const objc_property_attribute_t *attrs,
 #if DEBUG
     // debug build: sanitize input
     for (i = 0; i < count; i++) {
-        assert(attrs[i].name);
-        assert(strlen(attrs[i].name) > 0);
-        assert(! strchr(attrs[i].name, ','));
-        assert(! strchr(attrs[i].name, '"'));
-        if (attrs[i].value) assert(! strchr(attrs[i].value, ','));
+        ASSERT(attrs[i].name);
+        ASSERT(strlen(attrs[i].name) > 0);
+        ASSERT(! strchr(attrs[i].name, ','));
+        ASSERT(! strchr(attrs[i].name, '"'));
+        if (attrs[i].value) ASSERT(! strchr(attrs[i].value, ','));
     }
 #endif
 
@@ -1036,8 +996,8 @@ iteratePropertyAttributes(const char *attrs,
         const char *nameStart;
         const char *nameEnd;
 
-        assert(start < end);
-        assert(*start);
+        ASSERT(start < end);
+        ASSERT(*start);
         if (*start != '\"') {
             // single-char short name
             nameStart = start;
@@ -1057,7 +1017,7 @@ iteratePropertyAttributes(const char *attrs,
         const char *valueStart;
         const char *valueEnd;
 
-        assert(start <= end);
+        ASSERT(start <= end);
 
         valueStart = start;
         valueEnd = end;
@@ -1134,8 +1094,8 @@ copyPropertyAttributeList(const char *attrs, unsigned int *outCount)
 
     attrcount = iteratePropertyAttributes(attrs, copyOneAttribute, &ra, &rs);
 
-    assert((uint8_t *)(ra+1) <= (uint8_t *)result+size);
-    assert((uint8_t *)rs <= (uint8_t *)result+size);
+    ASSERT((uint8_t *)(ra+1) <= (uint8_t *)result+size);
+    ASSERT((uint8_t *)rs <= (uint8_t *)result+size);
 
     if (attrcount == 0) {
         free(result);

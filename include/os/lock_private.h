@@ -60,7 +60,7 @@ OS_ASSUME_NONNULL_BEGIN
 			OS_LOCK_TYPE_STRUCT(type) * osl_type OS_UNUSED; \
 			uintptr_t _osl_##type##_opaque[size-1] OS_UNUSED; \
 			public: \
-            constexpr OS_LOCK(type)() : \
+			constexpr OS_LOCK(type)() : \
 				osl_type(&OS_LOCK_TYPE_REF(type)), _osl_##type##_opaque() {} \
 		} OS_LOCK(type)
 #define OS_LOCK_INIT(type) {}
@@ -90,8 +90,6 @@ typedef OS_TRANSPARENT_UNION union {
 	OS_LOCK_T_MEMBER(nospin);
 	OS_LOCK_T_MEMBER(spin);
 	OS_LOCK_T_MEMBER(handoff);
-	OS_LOCK_T_MEMBER(eliding);
-	OS_LOCK_T_MEMBER(transactional);
 } os_lock_t;
 
 #endif
@@ -190,58 +188,6 @@ OS_LOCK_DECL(handoff, 2);
 #define OS_LOCK_HANDOFF_INIT OS_LOCK_INIT(handoff)
 
 
-#if !TARGET_OS_IPHONE
-/*!
- * @typedef os_lock_eliding_s
- *
- * @abstract
- * os_lock variant that uses hardware lock elision support if available to allow
- * multiple processors to concurrently execute a critical section as long as
- * they don't perform conflicting operations on each other's data. In case of
- * conflict, the lock reverts to exclusive operation and os_lock_spin_s behavior
- * on contention (at potential extra cost for the aborted attempt at lock-elided
- * concurrent execution). If hardware HLE support is not present, this lock
- * variant behaves like os_lock_spin_s.
- *
- * @discussion
- * IMPORTANT: Use of this lock variant MUST be extensively tested on hardware
- * with HLE support to ensure the data access pattern and length of the critical
- * section allows lock-elided execution to succeed frequently enough to offset
- * the cost of any aborted concurrent execution.
- *
- * Must be initialized with OS_LOCK_ELIDING_INIT
- */
-__OSX_AVAILABLE_STARTING(__MAC_10_9,__IPHONE_NA)
-OS_EXPORT OS_LOCK_TYPE_DECL(eliding);
-OS_LOCK_DECL(eliding, 8) OS_ALIGNED(64);
-#define OS_LOCK_ELIDING_INIT OS_LOCK_INIT(eliding)
-
-/*!
- * @typedef os_lock_transactional_s
- *
- * @abstract
- * os_lock variant that uses hardware restricted transactional memory support if
- * available to allow multiple processors to concurrently execute the critical
- * section as a transactional region. If transactional execution aborts, the
- * lock reverts to exclusive operation and os_lock_spin_s behavior on contention
- * (at potential extra cost for the aborted attempt at transactional concurrent
- * execution). If hardware RTM support is not present, this lock variant behaves
- * like os_lock_eliding_s.
- *
- * @discussion
- * IMPORTANT: Use of this lock variant MUST be extensively tested on hardware
- * with RTM support to ensure the data access pattern and length of the critical
- * section allows transactional execution to succeed frequently enough to offset
- * the cost of any aborted transactions.
- *
- * Must be initialized with OS_LOCK_TRANSACTIONAL_INIT
- */
-__OSX_AVAILABLE_STARTING(__MAC_10_9,__IPHONE_NA)
-OS_EXPORT OS_LOCK_TYPE_DECL(transactional);
-OS_LOCK_DECL(transactional, 8) OS_ALIGNED(64);
-#define OS_LOCK_TRANSACTIONAL_INIT OS_LOCK_INIT(transactional)
-#endif
-
 __BEGIN_DECLS
 
 /*!
@@ -295,7 +241,7 @@ void os_lock_unlock(os_lock_t lock);
  * contains thread ownership information that the system may use to attempt to
  * resolve priority inversions.
  *
- * This lock must be unlocked from the same thread that locked it, attemps to
+ * This lock must be unlocked from the same thread that locked it, attempts to
  * unlock from a different thread will cause an assertion aborting the process.
  *
  * This lock must not be accessed from multiple processes or threads via shared
@@ -325,13 +271,31 @@ void os_lock_unlock(os_lock_t lock);
  * When this flag is used, the code running under the critical section should
  * be well known and under your control  (Generally it should not call into
  * framework code).
+ *
+ * @const OS_UNFAIR_LOCK_ADAPTIVE_SPIN
+ * This flag allows for the kernel to use adaptive spinning when the holder
+ * of the lock is currently on core. This should only be used for locks
+ * where the protected critical section is always extremely short.
  */
-OS_ENUM(os_unfair_lock_options, uint32_t,
-	OS_UNFAIR_LOCK_NONE
+OS_OPTIONS(os_unfair_lock_options, uint32_t,
+	OS_UNFAIR_LOCK_NONE OS_SWIFT_NAME(None)
 		OS_UNFAIR_LOCK_AVAILABILITY = 0x00000000,
-	OS_UNFAIR_LOCK_DATA_SYNCHRONIZATION
+	OS_UNFAIR_LOCK_DATA_SYNCHRONIZATION OS_SWIFT_NAME(DataSynchronization)
 		OS_UNFAIR_LOCK_AVAILABILITY = 0x00010000,
+	OS_UNFAIR_LOCK_ADAPTIVE_SPIN OS_SWIFT_NAME(AdaptiveSpin)
+		__API_AVAILABLE(macos(10.15), ios(13.0),
+		tvos(13.0), watchos(6.0)) = 0x00040000,
 );
+
+#if __swift__
+#define OS_UNFAIR_LOCK_OPTIONS_COMPAT_FOR_SWIFT(name) \
+		static const os_unfair_lock_options_t \
+		name##_FOR_SWIFT OS_SWIFT_NAME(name) = name
+OS_UNFAIR_LOCK_OPTIONS_COMPAT_FOR_SWIFT(OS_UNFAIR_LOCK_NONE);
+OS_UNFAIR_LOCK_OPTIONS_COMPAT_FOR_SWIFT(OS_UNFAIR_LOCK_DATA_SYNCHRONIZATION);
+OS_UNFAIR_LOCK_OPTIONS_COMPAT_FOR_SWIFT(OS_UNFAIR_LOCK_ADAPTIVE_SPIN);
+#undef OS_UNFAIR_LOCK_OPTIONS_COMPAT_FOR_SWIFT
+#endif
 
 /*!
  * @function os_unfair_lock_lock_with_options
@@ -494,6 +458,53 @@ os_unfair_recursive_lock_assert_not_owner(os_unfair_recursive_lock_t lock)
 {
 	os_unfair_lock_assert_not_owner(&lock->ourl_lock);
 }
+
+/*!
+ * @function os_unfair_recursive_lock_owned
+ *
+ * @abstract
+ * This function is reserved for the use of people who want to soft-fault
+ * when locking models have been violated.
+ *
+ * @discussion
+ * This is meant for SQLite use to detect existing misuse of the API surface,
+ * and is not meant for anything else than calling os_log_fault() when such
+ * contracts are violated.
+ *
+ * There's little point to use this value for logic as the
+ * os_unfair_recursive_lock is already recursive anyway.
+ */
+__OSX_AVAILABLE(10.15) __IOS_AVAILABLE(13.0)
+__TVOS_AVAILABLE(13.0) __WATCHOS_AVAILABLE(6.0)
+OS_EXPORT OS_NOTHROW OS_NONNULL_ALL
+bool
+os_unfair_recursive_lock_owned(os_unfair_recursive_lock_t lock);
+
+/*!
+ * @function os_unfair_recursive_lock_unlock_forked_child
+ *
+ * @abstract
+ * Function to be used in an atfork child handler to unlock a recursive unfair
+ * lock.
+ *
+ * @discussion
+ * This function helps with handling recursive locks in the presence of fork.
+ *
+ * It is typical to setup atfork handlers that will:
+ * - take the lock in the pre-fork handler,
+ * - drop the lock in the parent handler,
+ * - reset the lock in the forked child.
+ *
+ * However, because a recursive lock may have been held by the current thread
+ * already, reseting needs to act like an unlock.  This function serves for this
+ * purpose.  Unlike os_unfair_recursive_lock_unlock(), this function will fixup
+ * the lock ownership to match the new identity of the thread after fork().
+ */
+__OSX_AVAILABLE(10.15) __IOS_AVAILABLE(13.0)
+__TVOS_AVAILABLE(13.0) __WATCHOS_AVAILABLE(6.0)
+OS_EXPORT OS_NOTHROW OS_NONNULL_ALL
+void
+os_unfair_recursive_lock_unlock_forked_child(os_unfair_recursive_lock_t lock);
 
 #if __has_attribute(cleanup)
 

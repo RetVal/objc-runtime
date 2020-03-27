@@ -26,10 +26,10 @@
 
 #include <assert.h>
 #include <stdbool.h>
+#include <unistd.h>
 #include <Availability.h>
 #include <TargetConditionals.h>
 #include <mach-o/dyld.h>
-#include <mach-o/dyld_images.h>
 #include <uuid/uuid.h>
 
 #if __cplusplus
@@ -41,23 +41,9 @@ extern "C" {
 //
 // private interface between libSystem.dylib and dyld
 //
+extern void _dyld_atfork_prepare(void);
+extern void _dyld_atfork_parent(void);
 extern void _dyld_fork_child(void);
-
-
-// DEPRECATED
-enum dyld_image_states
-{
-	dyld_image_state_mapped					= 10,		// No batch notification for this
-	dyld_image_state_dependents_mapped		= 20,		// Only batch notification for this
-	dyld_image_state_rebased				= 30, 
-	dyld_image_state_bound					= 40,
-	dyld_image_state_dependents_initialized	= 45,		// Only single notification for this
-	dyld_image_state_initialized			= 50,
-	dyld_image_state_terminated				= 60		// Only single notification for this
-};
-
-// DEPRECATED
-typedef const char* (*dyld_image_state_change_handler)(enum dyld_image_states state, uint32_t infoCount, const struct dyld_image_info info[]);
 
 
 
@@ -79,52 +65,6 @@ typedef void (*_dyld_objc_notify_unmapped)(const char* path, const struct mach_h
 void _dyld_objc_notify_register(_dyld_objc_notify_mapped    mapped,
                                 _dyld_objc_notify_init      init,
                                 _dyld_objc_notify_unmapped  unmapped);
-
-
-
-//
-// Possible thread-local variable state changes for which you can register to be notified
-//
-enum dyld_tlv_states {
-    dyld_tlv_state_allocated = 10,   // TLV range newly allocated
-    dyld_tlv_state_deallocated = 20  // TLV range about to be deallocated
-};
-
-// 
-// Info about thread-local variable storage.
-// 
-typedef struct {
-    size_t info_size;    // sizeof(dyld_tlv_info)
-    void * tlv_addr;     // Base address of TLV storage
-    size_t tlv_size;     // Byte size of TLV storage
-} dyld_tlv_info;
-
-#if __BLOCKS__
-
-// 
-// Callback that notes changes to thread-local variable storage.
-// 
-typedef void (^dyld_tlv_state_change_handler)(enum dyld_tlv_states state, const dyld_tlv_info *info);
-
-//
-// Register a handler to be called when a thread adds or removes storage for thread-local variables.
-// The registered handler will only be called from and on behalf of the thread that owns the storage.
-// The registered handler will NOT be called for any storage that was 
-//   already allocated before dyld_register_tlv_state_change_handler() was 
-//   called. Use dyld_enumerate_tlv_storage() to get that information.
-// Exists in Mac OS X 10.7 and later 
-// 
-extern void 
-dyld_register_tlv_state_change_handler(enum dyld_tlv_states state, dyld_tlv_state_change_handler handler);
-
-// 
-// Enumerate the current thread-local variable storage allocated for the current thread. 
-// Exists in Mac OS X 10.7 and later 
-//
-extern void 
-dyld_enumerate_tlv_storage(dyld_tlv_state_change_handler handler);
-
-#endif
 
 
 //
@@ -275,6 +215,10 @@ extern void dyld_get_image_versions(const struct mach_header* mh, void (^callbac
 
 //@WATCHOS_VERSION_DEFS@
 
+//@TVOS_VERSION_DEFS@
+
+//@BRIDGEOS_VERSION_DEFS@
+
 //
 // This finds the SDK version a binary was built against.
 // Returns zero on error, or if SDK version could not be determined.
@@ -371,6 +315,13 @@ extern const char* dyld_shared_cache_file_path(void);
 
 
 //
+// Returns if there are any inserted (via DYLD_INSERT_LIBRARIES) or interposing libraries.
+//
+// Exists in Mac OS X 10.15 and later
+extern bool dyld_has_inserted_or_interposing_libraries(void);
+
+
+//
 // <rdar://problem/13820686> for OpenGL to tell dyld it is ok to deallocate a memory based image when done.
 //
 // Exists in Mac OS X 10.9 and later
@@ -461,6 +412,28 @@ extern bool _dyld_get_shared_cache_uuid(uuid_t uuid);
 extern const void* _dyld_get_shared_cache_range(size_t* length);
 
 
+//
+// Returns if the currently active dyld shared cache is optimized.
+// Note: macOS does not use optimized caches and will always return false.
+//
+// Exists in Mac OS X 10.15 and later
+// Exists in iOS 13.0 and later
+extern bool _dyld_shared_cache_optimized(void);
+
+
+//
+// Returns if the currently active dyld shared cache was built locally.
+//
+// Exists in Mac OS X 10.15 and later
+// Exists in iOS 13.0 and later
+extern bool _dyld_shared_cache_is_locally_built(void);
+
+//
+// Returns if the given app needs a closure built.
+//
+// Exists in Mac OS X 10.15 and later
+// Exists in iOS 13.0 and later
+extern bool dyld_need_closure(const char* execPath, const char* tempDir);
 
 
 struct dyld_image_uuid_offset {
@@ -489,6 +462,26 @@ extern void _dyld_images_for_addresses(unsigned count, const void* addresses[], 
 // Exists in macOS 10.14 and later
 // Exists in iOS 12.0 and later
 extern void _dyld_register_for_image_loads(void (*func)(const struct mach_header* mh, const char* path, bool unloadable));
+
+
+
+
+//
+// Lets you register a callback which is called for bulk notifications of images loaded. During the call to
+// _dyld_register_for_bulk_image_loads(), the callback is called once with all images currently loaded.
+// Then later during dlopen() the callback is called once with all newly images.
+//
+// Exists in macOS 10.15 and later
+// Exists in iOS 13.0 and later
+extern void _dyld_register_for_bulk_image_loads(void (*func)(unsigned imageCount, const struct mach_header* mhs[], const char* paths[]));
+
+
+//
+// DriverKit main executables do not have an LC_MAIN.  Instead DriverKit.framework's initializer calls
+// _dyld_register_driverkit_main() with a function pointer that dyld should call into instead
+// of using LC_MAIN.
+//
+extern void _dyld_register_driverkit_main(void (*mainFunc)(void));
 
 
 
@@ -536,6 +529,43 @@ extern void _dyld_initializer(void);
 
 // never called from source code. Used by static linker to implement lazy binding
 extern void dyld_stub_binder(void) __asm__("dyld_stub_binder");
+
+// never call from source code.  Used by closure builder to bind missing lazy symbols to
+extern void _dyld_missing_symbol_abort(void);
+
+// Called only by objc to see if dyld has uniqued this selector.
+// Returns the value if dyld has uniqued it, or nullptr if it has not.
+// Note, this function must be called after _dyld_objc_notify_register.
+//
+// Exists in Mac OS X 10.15 and later
+// Exists in iOS 13.0 and later
+extern const char* _dyld_get_objc_selector(const char* selName);
+
+
+// Called only by objc to see if dyld has pre-optimized classes with this name.
+// The callback will be called once for each class with the given name where
+// isLoaded is true if that class is in a binary which has been previously passed
+// to the objc load notifier.
+// Note you can set stop to true to stop iterating.
+// Also note, this function must be called after _dyld_objc_notify_register.
+//
+// Exists in Mac OS X 10.15 and later
+// Exists in iOS 13.0 and later
+extern void _dyld_for_each_objc_class(const char* className,
+                                      void (^callback)(void* classPtr, bool isLoaded, bool* stop));
+
+
+// Called only by objc to see if dyld has pre-optimized protocols with this name.
+// The callback will be called once for each protocol with the given name where
+// isLoaded is true if that protocol is in a binary which has been previously passed
+// to the objc load notifier.
+// Note you can set stop to true to stop iterating.
+// Also note, this function must be called after _dyld_objc_notify_register.
+//
+// Exists in Mac OS X 10.15 and later
+// Exists in iOS 13.0 and later
+extern void _dyld_for_each_objc_protocol(const char* protocolName,
+                                         void (^callback)(void* protocolPtr, bool isLoaded, bool* stop));
 
 
 // called by exit() before it calls cxa_finalize() so that thread_local

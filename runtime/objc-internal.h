@@ -130,23 +130,37 @@ _objc_atfork_child(void)
 // Return YES if GC is on and `object` is a GC allocation.
 OBJC_EXPORT BOOL
 objc_isAuto(id _Nullable object) 
-    __OSX_DEPRECATED(10.4, 10.8, "it always returns NO") 
-    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
-    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
+    OBJC_OSX_DEPRECATED_OTHERS_UNAVAILABLE(10.4, 10.8, "it always returns NO");
 
 // GC debugging
 OBJC_EXPORT BOOL
 objc_dumpHeap(char * _Nonnull filename, unsigned long length)
-    __OSX_DEPRECATED(10.4, 10.8, "it always returns NO") 
-    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
-    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
+    OBJC_OSX_DEPRECATED_OTHERS_UNAVAILABLE(10.4, 10.8, "it always returns NO");
 
 // GC startup callback from Foundation
 OBJC_EXPORT malloc_zone_t * _Nullable
 objc_collect_init(int (* _Nonnull callback)(void))
-    __OSX_DEPRECATED(10.4, 10.8, "it does nothing") 
-    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
-    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
+    OBJC_OSX_DEPRECATED_OTHERS_UNAVAILABLE(10.4, 10.8, "it does nothing");
+
+#if __OBJC2__
+// Copies the list of currently realized classes
+// intended for introspection only
+// most users will want objc_copyClassList instead.
+OBJC_EXPORT
+Class _Nonnull * _Nullable
+objc_copyRealizedClassList(unsigned int *_Nullable outCount)
+	OBJC_AVAILABLE(10.15, 13.0, 13.0, 6.0, 5.0);
+
+typedef struct objc_imp_cache_entry {
+    SEL _Nonnull sel;
+    IMP _Nonnull imp;
+} objc_imp_cache_entry;
+
+OBJC_EXPORT
+objc_imp_cache_entry *_Nullable
+class_copyImpCache(Class _Nonnull cls, int * _Nullable outCount)
+	OBJC_AVAILABLE(10.15, 13.0, 13.0, 6.0, 5.0);
+#endif
 
 // Plainly-implemented GC barriers. Rosetta used to use these.
 OBJC_EXPORT id _Nullable
@@ -174,7 +188,11 @@ OBJC_EXPORT int
 objc_appRequiresGC(int fd)
     __OSX_AVAILABLE(10.11) 
     __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
-    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
+    __WATCHOS_UNAVAILABLE
+#ifndef __APPLE_BLEACH_SDK__
+    __BRIDGEOS_UNAVAILABLE
+#endif
+;
 
 // Install missing-class callback. Used by the late unlamented ZeroLink.
 OBJC_EXPORT void
@@ -182,11 +200,14 @@ _objc_setClassLoader(BOOL (* _Nonnull newClassLoader)(const char * _Nonnull))
     OBJC2_UNAVAILABLE;
 
 #if !(TARGET_OS_OSX && !TARGET_OS_IOSMAC && __i386__)
+// Add a class copy fixup handler. The name is a misnomer, as
+// multiple calls will install multiple handlers. Older versions
+// of the Swift runtime call it by name, and it's only used by Swift
+// so it's not worth deprecating this name in favor of a better one.
 OBJC_EXPORT void
 _objc_setClassCopyFixupHandler(void (* _Nonnull newFixupHandler)
-    (Class _Nonnull oldClass, Class _Nonnull newClass));
-// fixme work around bug in Swift
-//    OBJC_AVAILABLE(10.14, 12.0, 12.0, 5.0, 3.0)
+    (Class _Nonnull oldClass, Class _Nonnull newClass))
+    OBJC_AVAILABLE(10.14, 12.0, 12.0, 5.0, 3.0);
 #endif
 
 // Install handler for allocation failures. 
@@ -200,10 +221,8 @@ _objc_setBadAllocHandler(id _Nullable (* _Nonnull newHandler)
 #if !__OBJC2__
 OBJC_EXPORT void
 _objc_error(id _Nullable rcv, const char * _Nonnull fmt, va_list args)
-    __attribute__((noreturn))
-    __OSX_DEPRECATED(10.0, 10.5, "use other logging facilities instead") 
-    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
-    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
+    __attribute__((noreturn, cold))
+    OBJC_OSX_DEPRECATED_OTHERS_UNAVAILABLE(10.0, 10.5, "use other logging facilities instead");
 
 #endif
 
@@ -264,6 +283,10 @@ enum
     OBJC_TAG_XPC_2             = 13,
     OBJC_TAG_XPC_3             = 14,
     OBJC_TAG_XPC_4             = 15,
+    OBJC_TAG_NSColor           = 16,
+    OBJC_TAG_UIColor           = 17,
+    OBJC_TAG_CGColor           = 18,
+    OBJC_TAG_NSIndexSet        = 19,
 
     OBJC_TAG_First60BitPayload = 0, 
     OBJC_TAG_Last60BitPayload  = 6, 
@@ -396,18 +419,18 @@ _objc_makeTaggedPointer(objc_tag_index_t tag, uintptr_t value)
     // PAYLOAD_LSHIFT and PAYLOAD_RSHIFT are the payload extraction shifts.
     // They are reversed here for payload insertion.
 
-    // assert(_objc_taggedPointersEnabled());
+    // ASSERT(_objc_taggedPointersEnabled());
     if (tag <= OBJC_TAG_Last60BitPayload) {
-        // assert(((value << _OBJC_TAG_PAYLOAD_RSHIFT) >> _OBJC_TAG_PAYLOAD_LSHIFT) == value);
+        // ASSERT(((value << _OBJC_TAG_PAYLOAD_RSHIFT) >> _OBJC_TAG_PAYLOAD_LSHIFT) == value);
         uintptr_t result =
             (_OBJC_TAG_MASK | 
              ((uintptr_t)tag << _OBJC_TAG_INDEX_SHIFT) | 
              ((value << _OBJC_TAG_PAYLOAD_RSHIFT) >> _OBJC_TAG_PAYLOAD_LSHIFT));
         return _objc_encodeTaggedPointer(result);
     } else {
-        // assert(tag >= OBJC_TAG_First52BitPayload);
-        // assert(tag <= OBJC_TAG_Last52BitPayload);
-        // assert(((value << _OBJC_TAG_EXT_PAYLOAD_RSHIFT) >> _OBJC_TAG_EXT_PAYLOAD_LSHIFT) == value);
+        // ASSERT(tag >= OBJC_TAG_First52BitPayload);
+        // ASSERT(tag <= OBJC_TAG_Last52BitPayload);
+        // ASSERT(((value << _OBJC_TAG_EXT_PAYLOAD_RSHIFT) >> _OBJC_TAG_EXT_PAYLOAD_LSHIFT) == value);
         uintptr_t result =
             (_OBJC_TAG_EXT_MASK |
              ((uintptr_t)(tag - OBJC_TAG_First52BitPayload) << _OBJC_TAG_EXT_INDEX_SHIFT) |
@@ -425,7 +448,7 @@ _objc_isTaggedPointer(const void * _Nullable ptr)
 static inline objc_tag_index_t 
 _objc_getTaggedPointerTag(const void * _Nullable ptr) 
 {
-    // assert(_objc_isTaggedPointer(ptr));
+    // ASSERT(_objc_isTaggedPointer(ptr));
     uintptr_t value = _objc_decodeTaggedPointer(ptr);
     uintptr_t basicTag = (value >> _OBJC_TAG_INDEX_SHIFT) & _OBJC_TAG_INDEX_MASK;
     uintptr_t extTag =   (value >> _OBJC_TAG_EXT_INDEX_SHIFT) & _OBJC_TAG_EXT_INDEX_MASK;
@@ -439,7 +462,7 @@ _objc_getTaggedPointerTag(const void * _Nullable ptr)
 static inline uintptr_t
 _objc_getTaggedPointerValue(const void * _Nullable ptr) 
 {
-    // assert(_objc_isTaggedPointer(ptr));
+    // ASSERT(_objc_isTaggedPointer(ptr));
     uintptr_t value = _objc_decodeTaggedPointer(ptr);
     uintptr_t basicTag = (value >> _OBJC_TAG_INDEX_SHIFT) & _OBJC_TAG_INDEX_MASK;
     if (basicTag == _OBJC_TAG_INDEX_MASK) {
@@ -452,7 +475,7 @@ _objc_getTaggedPointerValue(const void * _Nullable ptr)
 static inline intptr_t
 _objc_getTaggedPointerSignedValue(const void * _Nullable ptr) 
 {
-    // assert(_objc_isTaggedPointer(ptr));
+    // ASSERT(_objc_isTaggedPointer(ptr));
     uintptr_t value = _objc_decodeTaggedPointer(ptr);
     uintptr_t basicTag = (value >> _OBJC_TAG_INDEX_SHIFT) & _OBJC_TAG_INDEX_MASK;
     if (basicTag == _OBJC_TAG_INDEX_MASK) {
@@ -666,11 +689,32 @@ objc_allocWithZone(Class _Nullable cls)
 
 OBJC_EXPORT id _Nullable
 objc_alloc_init(Class _Nullable cls)
-    OBJC_AVAILABLE(10.14, 12.0, 12.0, 5.0, 3.0);
-// rdar://44986431 fixme correct availability for objc_alloc_init()
+    OBJC_AVAILABLE(10.14.4, 12.2, 12.2, 5.2, 3.2);
+
+OBJC_EXPORT id _Nullable
+objc_opt_new(Class _Nullable cls)
+	OBJC_AVAILABLE(10.15, 13.0, 13.0, 6.0, 5.0);
+
+OBJC_EXPORT id _Nullable
+objc_opt_self(id _Nullable obj)
+	OBJC_AVAILABLE(10.15, 13.0, 13.0, 6.0, 5.0);
 
 OBJC_EXPORT Class _Nullable
-objc_opt_class(id _Nullable obj) OBJC_AVAILABLE(10.14, 12.0, 12.0, 5.0, 3.0);
+objc_opt_class(id _Nullable obj)
+	OBJC_AVAILABLE(10.15, 13.0, 13.0, 6.0, 5.0);
+
+OBJC_EXPORT BOOL
+objc_opt_respondsToSelector(id _Nullable obj, SEL _Nullable sel)
+	OBJC_AVAILABLE(10.15, 13.0, 13.0, 6.0, 5.0);
+
+OBJC_EXPORT BOOL
+objc_opt_isKindOfClass(id _Nullable obj, Class _Nullable cls)
+	OBJC_AVAILABLE(10.15, 13.0, 13.0, 6.0, 5.0);
+
+
+OBJC_EXPORT BOOL
+objc_sync_try_enter(id _Nonnull obj)
+    OBJC_AVAILABLE(10.15, 13.0, 13.0, 6.0, 5.0);
 
 OBJC_EXPORT id _Nullable
 objc_retain(id _Nullable obj)
@@ -779,12 +823,58 @@ _objc_autoreleasePoolPop(void * _Nonnull context)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
 
 
+/**
+ * Load a classref, which is a chunk of data containing a class
+ * pointer. May perform initialization and rewrite the classref to
+ * point to a new object, if needed. Returns the loaded Class.
+ *
+ * In particular, if the classref points to a stub class (indicated
+ * by setting the bottom bit of the class pointer to 1), then this
+ * will call the stub's initializer and then replace the classref
+ * value with the value returned by the initializer.
+ *
+ * @param clsref The classref to load.
+ * @return The loaded Class pointer.
+ */
+#if __OBJC2__
+OBJC_EXPORT _Nullable Class
+objc_loadClassref(_Nullable Class * _Nonnull clsref)
+    OBJC_AVAILABLE(10.15, 13.0, 13.0, 6.0, 5.0);
+#endif
+
+
 // Extra @encode data for XPC, or NULL
 OBJC_EXPORT const char * _Nullable
 _protocol_getMethodTypeEncoding(Protocol * _Nonnull proto, SEL _Nonnull sel,
                                 BOOL isRequiredMethod, BOOL isInstanceMethod)
     OBJC_AVAILABLE(10.8, 6.0, 9.0, 1.0, 2.0);
 
+
+/**
+ * Function type for a function that is called when a realized class
+ * is about to be initialized.
+ *
+ * @param context The context pointer the function was registered with.
+ * @param cls The class that's about to be initialized.
+ */
+struct mach_header;
+typedef void (*_objc_func_willInitializeClass)(void * _Nullable context, Class _Nonnull cls);
+
+/**
+ * Add a function to be called when a realized class is about to be
+ * initialized. The class can be queried and manipulated using runtime
+ * functions. Don't message it.
+ *
+ * When adding a new function, that function is immediately called with all
+ * realized classes that are already initialized or are in the process
+ * of initialization.
+ *
+ * @param func The function to add.
+ * @param context A context pointer that will be passed to the function when called.
+ */
+#define OBJC_WILLINITIALIZECLASSFUNC_DEFINED 1
+OBJC_EXPORT void _objc_addWillInitializeClassFunc(_objc_func_willInitializeClass _Nonnull func, void * _Nullable context)
+    OBJC_AVAILABLE(10.15, 13.0, 13.0, 6.0, 4.0);
 
 // API to only be called by classes that provide their own reference count storage
 

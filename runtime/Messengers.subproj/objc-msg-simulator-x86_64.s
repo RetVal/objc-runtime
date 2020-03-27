@@ -34,48 +34,36 @@
 
 .data
 
-// _objc_entryPoints and _objc_exitPoints are used by objc
+// _objc_restartableRanges is used by method dispatch
 // to get the critical regions for which method caches 
 // cannot be garbage collected.
 
-.align 4
-.private_extern	_objc_entryPoints
-_objc_entryPoints:
-	.quad	_cache_getImp
-	.quad	_objc_msgSend
-	.quad	_objc_msgSend_fpret
-	.quad	_objc_msgSend_fp2ret
-	.quad	_objc_msgSend_stret
-	.quad	_objc_msgSendSuper
-	.quad	_objc_msgSendSuper_stret
-	.quad	_objc_msgSendSuper2
-	.quad	_objc_msgSendSuper2_stret
-	.quad	_objc_msgLookup
-	.quad	_objc_msgLookup_fpret
-	.quad	_objc_msgLookup_fp2ret
-	.quad	_objc_msgLookup_stret
-	.quad	_objc_msgLookupSuper2
-	.quad	_objc_msgLookupSuper2_stret
-	.quad	0
+.macro RestartableEntry
+	.quad	$0
+	.short	LExit$0 - $0
+	.short	0xffff // The simulator doesn't support kernel based recovery
+	.long	0
+.endmacro
 
-.private_extern	_objc_exitPoints
-_objc_exitPoints:
-	.quad	LExit_cache_getImp
-	.quad	LExit_objc_msgSend
-	.quad	LExit_objc_msgSend_fpret
-	.quad	LExit_objc_msgSend_fp2ret
-	.quad	LExit_objc_msgSend_stret
-	.quad	LExit_objc_msgSendSuper
-	.quad	LExit_objc_msgSendSuper_stret
-	.quad	LExit_objc_msgSendSuper2
-	.quad	LExit_objc_msgSendSuper2_stret
-	.quad	LExit_objc_msgLookup
-	.quad	LExit_objc_msgLookup_fpret
-	.quad	LExit_objc_msgLookup_fp2ret
-	.quad	LExit_objc_msgLookup_stret
-	.quad	LExit_objc_msgLookupSuper2
-	.quad	LExit_objc_msgLookupSuper2_stret
-	.quad	0
+	.align 4
+	.private_extern _objc_restartableRanges
+_objc_restartableRanges:
+	RestartableEntry _cache_getImp
+	RestartableEntry _objc_msgSend
+	RestartableEntry _objc_msgSend_fpret
+	RestartableEntry _objc_msgSend_fp2ret
+	RestartableEntry _objc_msgSend_stret
+	RestartableEntry _objc_msgSendSuper
+	RestartableEntry _objc_msgSendSuper_stret
+	RestartableEntry _objc_msgSendSuper2
+	RestartableEntry _objc_msgSendSuper2_stret
+	RestartableEntry _objc_msgLookup
+	RestartableEntry _objc_msgLookup_fpret
+	RestartableEntry _objc_msgLookup_fp2ret
+	RestartableEntry _objc_msgLookup_stret
+	RestartableEntry _objc_msgLookupSuper2
+	RestartableEntry _objc_msgLookupSuper2_stret
+	.fill	16, 1, 0
 
 
 /********************************************************************
@@ -245,28 +233,30 @@ LExit$0:
 
 .macro CacheHit
 
-	// CacheHit must always be preceded by a not-taken `jne` instruction
-	// in order to set the correct flags for _objc_msgForward_impcache.
-
 	// r11 = found bucket
 	
 .if $1 == GETIMP
 	movq	cached_imp(%r11), %rax	// return imp
-	ret
+	cmpq	$$0, %rax
+ 	jz	9f			// don't xor a nil imp
+	xorq	%r10, %rax		// xor the isa with the imp
+9:	ret
 
 .else
-
-.if $0 != STRET
-	// eq already set for forwarding by `jne`
-.else
-	test	%r11, %r11		// set ne for stret forwarding
-.endif
 
 .if $1 == CALL
-	jmp	*cached_imp(%r11)	// call imp
-	
+	movq	cached_imp(%r11), %r11	// load imp
+	xorq	%r10, %r11			// xor imp and isa
+.if $0 != STRET
+	// ne already set for forwarding by `xor`
+.else
+	cmp	%r11, %r11		// set eq for stret forwarding
+.endif
+	jmp	*%r11			// call imp
+
 .elseif $1 == LOOKUP
-	movq	cached_imp(%r11), %r11	// return imp
+	movq	cached_imp(%r11), %r11
+	xorq	%r10, %r11		// return imp ^ isa
 	ret
 	
 .else
@@ -294,7 +284,6 @@ LExit$0:
 	cmpq	cached_sel(%r11), %a3	// if (bucket->sel != _cmd)
 .endif
 	jne 	1f			//     scan more
-	// CacheHit must always be preceded by a not-taken `jne` instruction
 	CacheHit $0, $1			// call or return imp
 
 1:
@@ -310,7 +299,6 @@ LExit$0:
 	cmpq	cached_sel(%r11), %a3	// if (bucket->sel != _cmd)
 .endif
 	jne 	1b			//     scan more
-	// CacheHit must always be preceded by a not-taken `jne` instruction
 	CacheHit $0, $1			// call or return imp
 
 3:
@@ -336,7 +324,6 @@ LExit$0:
 	cmpq	cached_sel(%r11), %a3	// if (bucket->sel != _cmd)
 .endif
 	jne 	1b			//     scan more
-	// CacheHit must always be preceded by a not-taken `jne` instruction
 	CacheHit $0, $1			// call or return imp
 
 3:
@@ -381,8 +368,7 @@ LExit$0:
 	push	%a6
 	movdqa	%xmm7, -0x10(%rbp)
 
-	// _class_lookupMethodAndLoadCache3(receiver, selector, class)
-
+	// lookUpImpOrForward(obj, sel, cls, LOOKUP_INITIALIZE | LOOKUP_RESOLVER)
 .if $0 == NORMAL
 	// receiver already in a1
 	// selector already in a2
@@ -391,7 +377,8 @@ LExit$0:
 	movq	%a3, %a2
 .endif
 	movq	%r10, %a3
-	call	__class_lookupMethodAndLoadCache3
+	movl	$$3, %a4d
+	call	_lookUpImpOrForward
 
 	// IMP is now in %rax
 	movq	%rax, %r11
@@ -413,9 +400,9 @@ LExit$0:
 	movdqa	-0x10(%rbp), %xmm7
 
 .if $0 == NORMAL
-	cmp	%r11, %r11		// set eq for nonstret forwarding
-.else
 	test	%r11, %r11		// set ne for stret forwarding
+.else
+	cmp	%r11, %r11		// set eq for nonstret forwarding
 .endif
 	
 	leave
@@ -1061,7 +1048,7 @@ LCacheMiss:
 	// THIS IS NOT A CALLABLE C FUNCTION
 	// Out-of-band condition register is NE for stret, EQ otherwise.
 
-	jne	__objc_msgForward_stret
+	je	__objc_msgForward_stret
 	jmp	__objc_msgForward
 
 	END_ENTRY __objc_msgForward_impcache

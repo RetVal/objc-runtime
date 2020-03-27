@@ -59,11 +59,12 @@ GETSECT(_getObjc2SelectorRefs,        SEL,             "__objc_selrefs");
 GETSECT(_getObjc2MessageRefs,         message_ref_t,   "__objc_msgrefs"); 
 GETSECT(_getObjc2ClassRefs,           Class,           "__objc_classrefs");
 GETSECT(_getObjc2SuperRefs,           Class,           "__objc_superrefs");
-GETSECT(_getObjc2ClassList,           classref_t,      "__objc_classlist");
-GETSECT(_getObjc2NonlazyClassList,    classref_t,      "__objc_nlclslist");
-GETSECT(_getObjc2CategoryList,        category_t *,    "__objc_catlist");
-GETSECT(_getObjc2NonlazyCategoryList, category_t *,    "__objc_nlcatlist");
-GETSECT(_getObjc2ProtocolList,        protocol_t *,    "__objc_protolist");
+GETSECT(_getObjc2ClassList,           classref_t const,      "__objc_classlist");
+GETSECT(_getObjc2NonlazyClassList,    classref_t const,      "__objc_nlclslist");
+GETSECT(_getObjc2CategoryList,        category_t * const,    "__objc_catlist");
+GETSECT(_getObjc2CategoryList2,       category_t * const,    "__objc_catlist2");
+GETSECT(_getObjc2NonlazyCategoryList, category_t * const,    "__objc_nlcatlist");
+GETSECT(_getObjc2ProtocolList,        protocol_t * const,    "__objc_protolist");
 GETSECT(_getObjc2ProtocolRefs,        protocol_t *,    "__objc_protorefs");
 GETSECT(getLibobjcInitializers,       UnsignedInitializer, "__objc_init_func");
 

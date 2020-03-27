@@ -425,11 +425,14 @@ class_getSuperclass(Class _Nullable cls)
  */
 OBJC_EXPORT Class _Nonnull
 class_setSuperclass(Class _Nonnull cls, Class _Nonnull newSuper) 
-    __OSX_DEPRECATED(10.5, 10.5, "not recommended") 
-    __IOS_DEPRECATED(2.0, 2.0, "not recommended") 
-    __TVOS_DEPRECATED(9.0, 9.0, "not recommended") 
+    __OSX_DEPRECATED(10.5, 10.5, "not recommended")
+    __IOS_DEPRECATED(2.0, 2.0, "not recommended")
+    __TVOS_DEPRECATED(9.0, 9.0, "not recommended")
     __WATCHOS_DEPRECATED(1.0, 1.0, "not recommended")
-    __BRIDGEOS_DEPRECATED(2.0, 2.0, "not recommended");
+#ifndef __APPLE_BLEACH_SDK__
+    __BRIDGEOS_DEPRECATED(2.0, 2.0, "not recommended")
+#endif
+;
 
 /** 
  * Returns the version number of a class definition.
@@ -1357,7 +1360,7 @@ protocol_copyPropertyList2(Protocol * _Nonnull proto,
  * 
  * @return A C array of protocols adopted by \e proto. The array contains \e *outCount pointers
  *  followed by a \c NULL terminator. You must free the array with \c free().
- *  If the protocol declares no properties, \c NULL is returned and \c *outCount is \c 0.
+ *  If the protocol adopts no other protocols, \c NULL is returned and \c *outCount is \c 0.
  */
 OBJC_EXPORT Protocol * __unsafe_unretained _Nonnull * _Nullable
 protocol_copyProtocolList(Protocol * _Nonnull proto,
@@ -1761,9 +1764,72 @@ typedef BOOL (*objc_hook_getClass)(const char * _Nonnull name, Class _Nullable *
 #define OBJC_GETCLASSHOOK_DEFINED 1
 OBJC_EXPORT void objc_setHook_getClass(objc_hook_getClass _Nonnull newValue,
                                        objc_hook_getClass _Nullable * _Nonnull outOldValue)
-    OBJC_AVAILABLE(10.14, 12.0, 12.0, 5.0, 3.0);
-// rdar://44986431 fixme correct availability for _objc_realizeClassFromSwift
+    OBJC_AVAILABLE(10.14.4, 12.2, 12.2, 5.2, 3.2);
 #endif
+
+/**
+ * Function type for a hook that assists objc_setAssociatedObject().
+ *
+ * @param object The source object for the association.
+ * @param key The key for the association.
+ * @param value The value to associate with the key key for object. Pass nil to clear an existing association.
+ * @param policy The policy for the association. For possible values, see “Associative Object Behaviors.”
+ *
+ * @see objc_setAssociatedObject
+ * @see objc_setHook_setAssociatedObject
+ */
+typedef void (*objc_hook_setAssociatedObject)(id _Nonnull object, const void * _Nonnull key,
+                                              id _Nullable value, objc_AssociationPolicy policy);
+
+/**
+ * Install a hook for objc_setAssociatedObject().
+ *
+ * @param newValue The hook function to install.
+ * @param outOldValue The address of a function pointer variable. On return,
+ *  the old hook function is stored in the variable.
+ *
+ * @note The store to *outOldValue is thread-safe: the variable will be
+ *  updated before objc_setAssociatedObject() calls your new hook to read it,
+ *  even if your new hook is called from another thread before this
+ *  setter completes.
+ * @note Your hook should always call the previous hook.
+ *
+ * @see objc_setAssociatedObject
+ * @see objc_hook_setAssociatedObject
+ */
+#if !(TARGET_OS_OSX && __i386__)
+#define OBJC_SETASSOCIATEDOBJECTHOOK_DEFINED 1
+OBJC_EXPORT void objc_setHook_setAssociatedObject(objc_hook_setAssociatedObject _Nonnull newValue,
+                                       objc_hook_setAssociatedObject _Nullable * _Nonnull outOldValue)
+    OBJC_AVAILABLE(10.15, 13.0, 13.0, 6.0, 4.0);
+#endif
+
+/**
+ * Function type for a function that is called when an image is loaded.
+ *
+ * @param header The newly loaded header.
+ */
+struct mach_header;
+typedef void (*objc_func_loadImage)(const struct mach_header * _Nonnull header);
+
+/**
+ * Add a function to be called when a new image is loaded. The function is
+ * called after ObjC has scanned and fixed up the image. It is called
+ * BEFORE +load methods are invoked.
+ *
+ * When adding a new function, that function is immediately called with all
+ * images that are currently loaded. It is then called as needed for images
+ * that are loaded afterwards.
+ *
+ * Note: the function is called with ObjC's internal runtime lock held.
+ * Be VERY careful with what the function does to avoid deadlocks or
+ * poor performance.
+ *
+ * @param func The function to add.
+ */
+#define OBJC_ADDLOADIMAGEFUNC_DEFINED 1
+OBJC_EXPORT void objc_addLoadImageFunc(objc_func_loadImage _Nonnull func)
+    OBJC_AVAILABLE(10.15, 13.0, 13.0, 6.0, 4.0);
 
 /** 
  * Callback from Objective-C to Swift to perform Swift class initialization.
@@ -1783,8 +1849,7 @@ typedef Class _Nullable
 #define OBJC_REALIZECLASSFROMSWIFT_DEFINED 1
 OBJC_EXPORT Class _Nullable
 _objc_realizeClassFromSwift(Class _Nullable cls, void * _Nullable previously)
-    OBJC_AVAILABLE(10.14, 12.0, 12.0, 5.0, 3.0);
-// rdar://44986431 fixme correct availability for _objc_realizeClassFromSwift
+    OBJC_AVAILABLE(10.14.4, 12.2, 12.2, 5.2, 3.2);
 #endif
 
 
@@ -1971,33 +2036,39 @@ struct objc_method_list;
 
 OBJC_EXPORT IMP _Nullable
 class_lookupMethod(Class _Nullable cls, SEL _Nonnull sel) 
-    __OSX_DEPRECATED(10.0, 10.5, "use class_getMethodImplementation instead") 
-    __IOS_DEPRECATED(2.0, 2.0, "use class_getMethodImplementation instead") 
-    __TVOS_DEPRECATED(9.0, 9.0, "use class_getMethodImplementation instead") 
+    __OSX_DEPRECATED(10.0, 10.5, "use class_getMethodImplementation instead")
+    __IOS_DEPRECATED(2.0, 2.0, "use class_getMethodImplementation instead")
+    __TVOS_DEPRECATED(9.0, 9.0, "use class_getMethodImplementation instead")
     __WATCHOS_DEPRECATED(1.0, 1.0, "use class_getMethodImplementation instead")
-    __BRIDGEOS_DEPRECATED(2.0, 2.0, "use class_getMethodImplementation instead");
+#ifndef __APPLE_BLEACH_SDK__
+    __BRIDGEOS_DEPRECATED(2.0, 2.0, "use class_getMethodImplementation instead")
+#endif
+;
 OBJC_EXPORT BOOL
 class_respondsToMethod(Class _Nullable cls, SEL _Nonnull sel)
-    __OSX_DEPRECATED(10.0, 10.5, "use class_respondsToSelector instead") 
-    __IOS_DEPRECATED(2.0, 2.0, "use class_respondsToSelector instead") 
-    __TVOS_DEPRECATED(9.0, 9.0, "use class_respondsToSelector instead") 
+    __OSX_DEPRECATED(10.0, 10.5, "use class_respondsToSelector instead")
+    __IOS_DEPRECATED(2.0, 2.0, "use class_respondsToSelector instead")
+    __TVOS_DEPRECATED(9.0, 9.0, "use class_respondsToSelector instead")
     __WATCHOS_DEPRECATED(1.0, 1.0, "use class_respondsToSelector instead")
-    __BRIDGEOS_DEPRECATED(2.0, 2.0, "use class_respondsToSelector instead");
+#ifndef __APPLE_BLEACH_SDK__
+    __BRIDGEOS_DEPRECATED(2.0, 2.0, "use class_respondsToSelector instead")
+#endif
+;
 
 OBJC_EXPORT void
 _objc_flush_caches(Class _Nullable cls) 
-    __OSX_DEPRECATED(10.0, 10.5, "not recommended") 
-    __IOS_DEPRECATED(2.0, 2.0, "not recommended") 
-    __TVOS_DEPRECATED(9.0, 9.0, "not recommended") 
+    __OSX_DEPRECATED(10.0, 10.5, "not recommended")
+    __IOS_DEPRECATED(2.0, 2.0, "not recommended")
+    __TVOS_DEPRECATED(9.0, 9.0, "not recommended")
     __WATCHOS_DEPRECATED(1.0, 1.0, "not recommended")
-    __BRIDGEOS_DEPRECATED(2.0, 2.0, "not recommended");
+#ifndef __APPLE_BLEACH_SDK__
+    __BRIDGEOS_DEPRECATED(2.0, 2.0, "not recommended")
+#endif
+;
 
 OBJC_EXPORT id _Nullable
 object_copyFromZone(id _Nullable anObject, size_t nBytes, void * _Nullable z) 
-    __OSX_DEPRECATED(10.0, 10.5, "use object_copy instead") 
-    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
-    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE
-    OBJC_ARC_UNAVAILABLE;
+    OBJC_OSX_DEPRECATED_OTHERS_UNAVAILABLE(10.0, 10.5, "use object_copy instead");
 
 OBJC_EXPORT id _Nullable
 object_realloc(id _Nullable anObject, size_t nBytes)
@@ -2027,10 +2098,7 @@ objc_setMultithreaded(BOOL flag)
 OBJC_EXPORT id _Nullable
 class_createInstanceFromZone(Class _Nullable, size_t idxIvars,
                              void * _Nullable z)
-    __OSX_DEPRECATED(10.0, 10.5, "use class_createInstance instead") 
-    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
-    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE
-    OBJC_ARC_UNAVAILABLE;
+    OBJC_OSX_DEPRECATED_OTHERS_UNAVAILABLE(10.0, 10.5, "use class_createInstance instead");
 
 OBJC_EXPORT void
 class_addMethods(Class _Nullable, struct objc_method_list * _Nonnull)

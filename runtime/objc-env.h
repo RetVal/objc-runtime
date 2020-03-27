@@ -22,8 +22,9 @@ OPTION( PrintAltHandlers,         OBJC_PRINT_ALT_HANDLERS,         "log processi
 OPTION( PrintReplacedMethods,     OBJC_PRINT_REPLACED_METHODS,     "log methods replaced by category implementations")
 OPTION( PrintDeprecation,         OBJC_PRINT_DEPRECATION_WARNINGS, "warn about calls to deprecated runtime functions")
 OPTION( PrintPoolHiwat,           OBJC_PRINT_POOL_HIGHWATER,       "log high-water marks for autorelease pools")
-OPTION( PrintCustomRR,            OBJC_PRINT_CUSTOM_RR,            "log classes with un-optimized custom retain/release methods")
-OPTION( PrintCustomAWZ,           OBJC_PRINT_CUSTOM_AWZ,           "log classes with un-optimized custom allocWithZone methods")
+OPTION( PrintCustomCore,          OBJC_PRINT_CUSTOM_CORE,          "log classes with custom core methods")
+OPTION( PrintCustomRR,            OBJC_PRINT_CUSTOM_RR,            "log classes with custom retain/release methods")
+OPTION( PrintCustomAWZ,           OBJC_PRINT_CUSTOM_AWZ,           "log classes with custom allocWithZone methods")
 OPTION( PrintRawIsa,              OBJC_PRINT_RAW_ISA,              "log classes that require raw pointer isa fields")
 
 OPTION( DebugUnload,              OBJC_DEBUG_UNLOAD,               "warn about poorly-behaving bundles when unloaded")

@@ -102,41 +102,34 @@ _objc_indexed_classes:
 
 
 
-// _objc_entryPoints and _objc_exitPoints are used by method dispatch
+// _objc_restartableRanges is used by method dispatch
 // caching code to figure out whether any threads are actively 
 // in the cache for dispatching.  The labels surround the asm code
 // that do cache lookups.  The tables are zero-terminated.
 
-.align 2
-.private_extern _objc_entryPoints
-_objc_entryPoints:
-	.long   _cache_getImp
-	.long   _objc_msgSend
-	.long   _objc_msgSend_stret
-	.long   _objc_msgSendSuper
-	.long   _objc_msgSendSuper_stret
-	.long   _objc_msgSendSuper2
-	.long   _objc_msgSendSuper2_stret
-	.long   _objc_msgLookup
-	.long   _objc_msgLookup_stret
-	.long   _objc_msgLookupSuper2
-	.long   _objc_msgLookupSuper2_stret
-	.long   0
+.macro RestartableEntry
+	.long	LLookupStart$0
+	.long	0
+	.short	LLookupEnd$0 - LLookupStart$0
+	.short	0xffff // poor ol' armv7 doesn't support kernel based recovery
+	.long	0
+.endmacro
 
-.private_extern _objc_exitPoints
-_objc_exitPoints:
-	.long   LExit_cache_getImp
-	.long   LExit_objc_msgSend
-	.long   LExit_objc_msgSend_stret
-	.long   LExit_objc_msgSendSuper
-	.long   LExit_objc_msgSendSuper_stret
-	.long   LExit_objc_msgSendSuper2
-	.long   LExit_objc_msgSendSuper2_stret
-	.long   LExit_objc_msgLookup
-	.long   LExit_objc_msgLookup_stret
-	.long   LExit_objc_msgLookupSuper2
-	.long   LExit_objc_msgLookupSuper2_stret
-	.long   0
+	.align 4
+	.private_extern _objc_restartableRanges
+_objc_restartableRanges:
+	RestartableEntry _cache_getImp
+	RestartableEntry _objc_msgSend
+	RestartableEntry _objc_msgSend_stret
+	RestartableEntry _objc_msgSendSuper
+	RestartableEntry _objc_msgSendSuper_stret
+	RestartableEntry _objc_msgSendSuper2
+	RestartableEntry _objc_msgSendSuper2_stret
+	RestartableEntry _objc_msgLookup
+	RestartableEntry _objc_msgLookup_stret
+	RestartableEntry _objc_msgLookupSuper2
+	RestartableEntry _objc_msgLookupSuper2_stret
+	.fill	16, 1, 0
 
 	
 /********************************************************************
@@ -231,8 +224,8 @@ LExit$0:
 
 /////////////////////////////////////////////////////////////////////
 //
-// CacheLookup	NORMAL|STRET
-// CacheLookup2	NORMAL|STRET
+// CacheLookup	NORMAL|STRET <function>
+// CacheLookup2	NORMAL|STRET <function>
 //
 // Locate the implementation for a selector in a class's method cache.
 //
@@ -249,7 +242,32 @@ LExit$0:
 /////////////////////////////////////////////////////////////////////
 	
 .macro CacheLookup
-	
+	//
+	// Restart protocol:
+	//
+	//   As soon as we're past the LLookupStart$1 label we may have loaded
+	//   an invalid cache pointer or mask.
+	//
+	//   When task_restartable_ranges_synchronize() is called,
+	//   (or when a signal hits us) before we're past LLookupEnd$1,
+	//   then our PC will be reset to LCacheMiss$1 which forcefully
+	//   jumps to the cache-miss codepath.
+	//
+	//   It is assumed that the CacheMiss codepath starts right at the end
+	//   of CacheLookup2 and will re-setup the registers to meet the cache-miss
+	//   requirements:
+	//
+	//   GETIMP:
+	//     The cache-miss is just returning NULL (setting r9 to 0)
+	//
+	//   NORMAL and STRET:
+	//   - r0 or r1 (STRET) contains the receiver
+	//   - r1 or r2 (STRET) contains the selector
+	//   - r9 contains the isa (reloaded from r0/r1)
+	//   - other registers are set as per calling conventions
+	//
+LLookupStart$1:
+
 	ldrh	r12, [r9, #CACHE_MASK]	// r12 = mask
 	ldr	r9, [r9, #CACHE]	// r9 = buckets
 .if $0 == STRET
@@ -282,12 +300,14 @@ LExit$0:
 #endif
 8:	
 	cmp	r12, #1
-	blo	8f			// if (bucket->sel == 0) cache miss
+	blo	LCacheMiss$1		// if (bucket->sel == 0) cache miss
 	it	eq			// if (bucket->sel == 1) cache wrap
 	ldreq	r9, [r9, #CACHED_IMP]	// bucket->imp is before first bucket
 	ldr	r12, [r9, #8]!		// r12 = (++bucket)->sel
 	b	6b
-8:
+
+LLookupEnd$1:
+LCacheMiss$1:
 
 .endmacro
 
@@ -332,12 +352,12 @@ LExit$0:
 	STATIC_ENTRY _cache_getImp
 
 	mov	r9, r0
-	CacheLookup NORMAL
+	CacheLookup NORMAL, _cache_getImp
 	// cache hit, IMP in r12
 	mov	r0, r12
 	bx	lr			// return imp
 	
-	CacheLookup2 GETIMP
+	CacheLookup2 GETIMP, _cache_getImp
 	// cache miss, return nil
 	mov	r0, #0
 	bx	lr
@@ -363,11 +383,11 @@ LExit$0:
 
 	ldr	r9, [r0]		// r9 = self->isa
 	GetClassFromIsa			// r9 = class
-	CacheLookup NORMAL
+	CacheLookup NORMAL, _objc_msgSend
 	// cache hit, IMP in r12, eq already set for nonstret forwarding
 	bx	r12			// call imp
 
-	CacheLookup2 NORMAL
+	CacheLookup2 NORMAL, _objc_msgSend
 	// cache miss
 	ldr	r9, [r0]		// r9 = self->isa
 	GetClassFromIsa			// r9 = class
@@ -390,11 +410,11 @@ LNilReceiver:
 
 	ldr	r9, [r0]		// r9 = self->isa
 	GetClassFromIsa			// r9 = class
-	CacheLookup NORMAL
+	CacheLookup NORMAL, _objc_msgLookup
 	// cache hit, IMP in r12, eq already set for nonstret forwarding
 	bx	lr
 
-	CacheLookup2 NORMAL
+	CacheLookup2 NORMAL, _objc_msgLookup
 	// cache miss
 	ldr	r9, [r0]		// r9 = self->isa
 	GetClassFromIsa			// r9 = class
@@ -438,11 +458,11 @@ LNilReceiver:
 
 	ldr	r9, [r1]		// r9 = self->isa
 	GetClassFromIsa			// r9 = class
-	CacheLookup STRET
+	CacheLookup STRET, _objc_msgSend_stret
 	// cache hit, IMP in r12, ne already set for stret forwarding
 	bx	r12
 
-	CacheLookup2 STRET
+	CacheLookup2 STRET, _objc_msgSend_stret
 	// cache miss
 	ldr	r9, [r1]		// r9 = self->isa
 	GetClassFromIsa			// r9 = class
@@ -460,11 +480,11 @@ LNilReceiver:
 
 	ldr	r9, [r1]		// r9 = self->isa
 	GetClassFromIsa			// r9 = class
-	CacheLookup STRET
+	CacheLookup STRET, _objc_msgLookup_stret
 	// cache hit, IMP in r12, ne already set for stret forwarding
 	bx	lr
 
-	CacheLookup2 STRET
+	CacheLookup2 STRET, _objc_msgLookup_stret
 	// cache miss
 	ldr	r9, [r1]		// r9 = self->isa
 	GetClassFromIsa			// r9 = class
@@ -496,12 +516,12 @@ LNilReceiver:
 	ENTRY _objc_msgSendSuper
 	
 	ldr	r9, [r0, #CLASS]	// r9 = struct super->class
-	CacheLookup NORMAL
+	CacheLookup NORMAL, _objc_msgSendSuper
 	// cache hit, IMP in r12, eq already set for nonstret forwarding
 	ldr	r0, [r0, #RECEIVER]	// load real receiver
 	bx	r12			// call imp
 
-	CacheLookup2 NORMAL
+	CacheLookup2 NORMAL, _objc_msgSendSuper
 	// cache miss
 	ldr	r9, [r0, #CLASS]	// r9 = struct super->class
 	ldr	r0, [r0, #RECEIVER]	// load real receiver
@@ -523,12 +543,12 @@ LNilReceiver:
 	
 	ldr	r9, [r0, #CLASS]	// class = struct super->class
 	ldr	r9, [r9, #SUPERCLASS]   // class = class->superclass
-	CacheLookup NORMAL
+	CacheLookup NORMAL, _objc_msgSendSuper2
 	// cache hit, IMP in r12, eq already set for nonstret forwarding
 	ldr	r0, [r0, #RECEIVER]	// load real receiver
 	bx	r12			// call imp
 
-	CacheLookup2 NORMAL
+	CacheLookup2 NORMAL, _objc_msgSendSuper2
 	// cache miss
 	ldr	r9, [r0, #CLASS]	// class = struct super->class
 	ldr	r9, [r9, #SUPERCLASS]   // class = class->superclass
@@ -542,12 +562,12 @@ LNilReceiver:
 	
 	ldr	r9, [r0, #CLASS]	// class = struct super->class
 	ldr	r9, [r9, #SUPERCLASS]   // class = class->superclass
-	CacheLookup NORMAL
+	CacheLookup NORMAL, _objc_msgLookupSuper2
 	// cache hit, IMP in r12, eq already set for nonstret forwarding
 	ldr	r0, [r0, #RECEIVER]	// load real receiver
 	bx	lr
 
-	CacheLookup2 NORMAL
+	CacheLookup2 NORMAL, _objc_msgLookupSuper2
 	// cache miss
 	ldr	r9, [r0, #CLASS]
 	ldr	r9, [r9, #SUPERCLASS]	// r9 = class to search
@@ -572,12 +592,12 @@ LNilReceiver:
 	ENTRY _objc_msgSendSuper_stret
 	
 	ldr	r9, [r1, #CLASS]	// r9 = struct super->class
-	CacheLookup STRET
+	CacheLookup STRET, _objc_msgSendSuper_stret
 	// cache hit, IMP in r12, ne already set for stret forwarding
 	ldr	r1, [r1, #RECEIVER]	// load real receiver
 	bx	r12			// call imp
 
-	CacheLookup2 STRET
+	CacheLookup2 STRET, _objc_msgSendSuper_stret
 	// cache miss
 	ldr	r9, [r1, #CLASS]	// r9 = struct super->class
 	ldr	r1, [r1, #RECEIVER]	// load real receiver
@@ -594,12 +614,12 @@ LNilReceiver:
 	
 	ldr	r9, [r1, #CLASS]	// class = struct super->class
 	ldr	r9, [r9, #SUPERCLASS]	// class = class->superclass
-	CacheLookup STRET
+	CacheLookup STRET, _objc_msgSendSuper2_stret
 	// cache hit, IMP in r12, ne already set for stret forwarding
 	ldr	r1, [r1, #RECEIVER]	// load real receiver
 	bx	r12			// call imp
 
-	CacheLookup2 STRET
+	CacheLookup2 STRET, _objc_msgSendSuper2_stret
 	// cache miss
 	ldr	r9, [r1, #CLASS]	// class = struct super->class
 	ldr	r9, [r9, #SUPERCLASS]	// class = class->superclass
@@ -613,12 +633,12 @@ LNilReceiver:
 	
 	ldr	r9, [r1, #CLASS]	// class = struct super->class
 	ldr	r9, [r9, #SUPERCLASS]	// class = class->superclass
-	CacheLookup STRET
+	CacheLookup STRET, _objc_msgLookupSuper2_stret
 	// cache hit, IMP in r12, ne already set for stret forwarding
 	ldr	r1, [r1, #RECEIVER]	// load real receiver
 	bx	lr
 
-	CacheLookup2 STRET
+	CacheLookup2 STRET, _objc_msgLookupSuper2_stret
 	// cache miss
 	ldr	r9, [r1, #CLASS]
 	ldr	r9, [r9, #SUPERCLASS]	// r9 = class to search
@@ -651,6 +671,7 @@ LNilReceiver:
 	sub	sp, #8			// align stack
 	FP_SAVE
 
+	// lookUpImpOrForward(obj, sel, cls, LOOKUP_INITIALIZE | LOOKUP_RESOLVER)
 .if $0 == NORMAL
 	// receiver already in r0
 	// selector already in r1
@@ -659,8 +680,8 @@ LNilReceiver:
 	mov 	r1, r2			// selector
 .endif
 	mov	r2, r9			// class to search
-
-	blx	__class_lookupMethodAndLoadCache3
+	mov	r3, #3			// LOOKUP_INITIALIZE | LOOKUP_INITIALIZE
+	blx	_lookUpImpOrForward
 	mov	r12, r0			// r12 = IMP
 	
 .if $0 == NORMAL

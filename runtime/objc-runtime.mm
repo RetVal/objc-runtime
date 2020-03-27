@@ -35,6 +35,7 @@
 
 #include "objc-private.h"
 #include "objc-loadmethod.h"
+#include "objc-file.h"
 #include "message.h"
 
 /***********************************************************************
@@ -88,35 +89,19 @@ const option_t Settings[] = {
 
 
 // objc's key for pthread_getspecific
+#if SUPPORT_DIRECT_THREAD_KEYS
+#define _objc_pthread_key TLS_DIRECT_KEY
+#else
 static tls_key_t _objc_pthread_key;
+#endif
 
 // Selectors
-SEL SEL_load = NULL;
-SEL SEL_initialize = NULL;
-SEL SEL_resolveInstanceMethod = NULL;
-SEL SEL_resolveClassMethod = NULL;
 SEL SEL_cxx_construct = NULL;
 SEL SEL_cxx_destruct = NULL;
-SEL SEL_retain = NULL;
-SEL SEL_release = NULL;
-SEL SEL_autorelease = NULL;
-SEL SEL_retainCount = NULL;
-SEL SEL_alloc = NULL;
-SEL SEL_allocWithZone = NULL;
-SEL SEL_dealloc = NULL;
-SEL SEL_copy = NULL;
-SEL SEL_new = NULL;
-SEL SEL_forwardInvocation = NULL;
-SEL SEL_tryRetain = NULL;
-SEL SEL_isDeallocating = NULL;
-SEL SEL_retainWeakReference = NULL;
-SEL SEL_allowsWeakReference = NULL;
 
-
+struct objc::SafeRanges objc::dataSegmentsRanges;
 header_info *FirstHeader = 0;  // NULL means empty list
 header_info *LastHeader  = 0;  // NULL means invalid; recompute it
-int HeaderCount = 0;
-
 
 // Set to true on the child side of fork() 
 // if the parent process was multithreaded when fork() was called.
@@ -212,6 +197,72 @@ Class objc_getMetaClass(const char *aClassName)
     return cls->ISA();
 }
 
+/***********************************************************************
+ * objc::SafeRanges::find.  Find an image data segment that contains address
+ **********************************************************************/
+bool
+objc::SafeRanges::find(uintptr_t ptr, uint32_t &pos)
+{
+    if (!sorted) {
+        std::sort(ranges, ranges + count, [](const Range &s1, const Range &s2){
+            return s1.start < s2.start;
+        });
+        sorted = true;
+    }
+
+    uint32_t l = 0, r = count;
+    while (l < r) {
+        uint32_t i = (l + r) / 2;
+
+        if (ptr < ranges[i].start) {
+            r = i;
+        } else if (ptr >= ranges[i].end) {
+            l = i + 1;
+        } else {
+            pos = i;
+            return true;
+        }
+    }
+
+    pos = UINT32_MAX;
+    return false;
+}
+
+/***********************************************************************
+ * objc::SafeRanges::add.  Register a new well known data segment.
+ **********************************************************************/
+void
+objc::SafeRanges::add(uintptr_t start, uintptr_t end)
+{
+    if (count == size) {
+        // Have a typical malloc growth:
+        // - size <= 32:  grow by  4
+        // - size <= 64:  grow by  8
+        // - size <= 128: grow by 16
+        // ... etc
+        size += size < 16 ? 4 : 1 << (fls(size) - 3);
+        ranges = (Range *)realloc(ranges, sizeof(Range) * size);
+    }
+    ranges[count++] = Range{ start, end };
+    sorted = false;
+}
+
+/***********************************************************************
+ * objc::SafeRanges::remove.  Remove a previously known data segment.
+ **********************************************************************/
+void
+objc::SafeRanges::remove(uintptr_t start, uintptr_t end)
+{
+    uint32_t pos;
+
+    if (!find(start, pos) || ranges[pos].end != end) {
+        _objc_fatal("Cannot find range %#lx..%#lx", start, end);
+    }
+    if (pos < --count) {
+        ranges[pos] = ranges[count];
+        sorted = false;
+    }
+}
 
 /***********************************************************************
 * appendHeader.  Add a newly-constructed header_info to the list. 
@@ -220,7 +271,6 @@ void appendHeader(header_info *hi)
 {
     // Add the header to the header list. 
     // The header is appended to the list, to preserve the bottom-up order.
-    HeaderCount++;
     hi->setNext(NULL);
     if (!FirstHeader) {
         // list is empty
@@ -235,6 +285,15 @@ void appendHeader(header_info *hi)
         LastHeader->setNext(hi);
         LastHeader = hi;
     }
+
+#if __OBJC2__
+    if ((hi->mhdr()->flags & MH_DYLIB_IN_CACHE) == 0) {
+        foreach_data_segment(hi->mhdr(), [](const segmentType *seg, intptr_t slide) {
+            uintptr_t start = (uintptr_t)seg->vmaddr + slide;
+            objc::dataSegmentsRanges.add(start, start + seg->vmsize);
+        });
+    }
+#endif
 }
 
 
@@ -264,12 +323,19 @@ void removeHeader(header_info *hi)
             if (LastHeader == deadHead) {
                 LastHeader = NULL;  // will be recomputed next time it's used
             }
-
-            HeaderCount--;
             break;
         }
         prev = current;
     }
+
+#if __OBJC2__
+    if ((hi->mhdr()->flags & MH_DYLIB_IN_CACHE) == 0) {
+        foreach_data_segment(hi->mhdr(), [](const segmentType *seg, intptr_t slide) {
+            uintptr_t start = (uintptr_t)seg->vmaddr + slide;
+            objc::dataSegmentsRanges.remove(start, start + seg->vmsize);
+        });
+    }
+#endif
 }
 
 
@@ -379,7 +445,7 @@ logReplacedMethod(const char *className, SEL s,
     const char *newImage = "??";
 
     // Silently ignore +load replacement because category +load is special
-    if (s == SEL_load) return;
+    if (s == @selector(load)) return;
 
 #if TARGET_OS_WIN32
     // don't know dladdr()/dli_fname equivalent
@@ -448,7 +514,6 @@ void _objc_pthread_destroyspecific(void *arg)
 void tls_init(void)
 {
 #if SUPPORT_DIRECT_THREAD_KEYS
-    _objc_pthread_key = TLS_DIRECT_KEY;
     pthread_key_init_np(TLS_DIRECT_KEY, &_objc_pthread_destroyspecific);
 #else
     _objc_pthread_key = tls_create(&_objc_pthread_destroyspecific);
@@ -481,7 +546,7 @@ void *_objc_forward_stret_handler = nil;
 #else
 
 // Default forward handler halts the process.
-__attribute__((noreturn)) void 
+__attribute__((noreturn, cold)) void
 objc_defaultForwardHandler(id self, SEL sel)
 {
     _objc_fatal("%c[%s %s]: unrecognized selector sent to instance %p "
@@ -493,7 +558,7 @@ void *_objc_forward_handler = (void*)objc_defaultForwardHandler;
 
 #if SUPPORT_STRET
 struct stret { int i[100]; };
-__attribute__((noreturn)) struct stret 
+__attribute__((noreturn, cold)) struct stret
 objc_defaultForwardStretHandler(id self, SEL sel)
 {
     objc_defaultForwardHandler(self, sel);
@@ -578,13 +643,30 @@ void objc_setEnumerationMutationHandler(void (*handler)(id)) {
 * Associative Reference Support
 **********************************************************************/
 
-id objc_getAssociatedObject(id object, const void *key) {
-    return _object_get_associative_reference(object, (void *)key);
+id
+objc_getAssociatedObject(id object, const void *key)
+{
+    return _object_get_associative_reference(object, key);
 }
 
+static void
+_base_objc_setAssociatedObject(id object, const void *key, id value, objc_AssociationPolicy policy)
+{
+  _object_set_associative_reference(object, key, value, policy);
+}
 
-void objc_setAssociatedObject(id object, const void *key, id value, objc_AssociationPolicy policy) {
-    _object_set_associative_reference(object, (void *)key, value, policy);
+static ChainedHookFunction<objc_hook_setAssociatedObject> SetAssocHook{_base_objc_setAssociatedObject};
+
+void
+objc_setHook_setAssociatedObject(objc_hook_setAssociatedObject _Nonnull newValue,
+                                 objc_hook_setAssociatedObject _Nullable * _Nonnull outOldValue) {
+    SetAssocHook.set(newValue, outOldValue);
+}
+
+void
+objc_setAssociatedObject(id object, const void *key, id value, objc_AssociationPolicy policy)
+{
+    SetAssocHook.get()(object, key, value, policy);
 }
 
 

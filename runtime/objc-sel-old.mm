@@ -157,37 +157,13 @@ void sel_init(size_t selrefCount)
 
     // Register selectors used by libobjc
 
-#define s(x) SEL_##x = sel_registerNameNoLock(#x, NO)
-#define t(x,y) SEL_##y = sel_registerNameNoLock(#x, NO)
-
     mutex_locker_t lock(selLock);
 
-    s(load);
-    s(initialize);
-    t(resolveInstanceMethod:, resolveInstanceMethod);
-    t(resolveClassMethod:, resolveClassMethod);
-    t(.cxx_construct, cxx_construct);
-    t(.cxx_destruct, cxx_destruct);
-    s(retain);
-    s(release);
-    s(autorelease);
-    s(retainCount);
-    s(alloc);
-    t(allocWithZone:, allocWithZone);
-    s(dealloc);
-    s(copy);
-    s(new);
-    t(forwardInvocation:, forwardInvocation);
-    t(_tryRetain, tryRetain);
-    t(_isDeallocating, isDeallocating);
-    s(retainWeakReference);
-    s(allowsWeakReference);
+    SEL_cxx_construct = sel_registerNameNoLock(".cxx_construct", NO);
+    SEL_cxx_destruct = sel_registerNameNoLock(".cxx_destruct", NO);
 
     extern SEL FwdSel;
     FwdSel = sel_registerNameNoLock("forward::", NO);
-
-#undef s
-#undef t
 }
 
 __END_DECLS

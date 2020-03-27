@@ -287,8 +287,27 @@ int objc_sync_enter(id obj)
 
     if (obj) {
         SyncData* data = id2data(obj, ACQUIRE);
-        assert(data);
+        ASSERT(data);
         data->mutex.lock();
+    } else {
+        // @synchronized(nil) does nothing
+        if (DebugNilSync) {
+            _objc_inform("NIL SYNC DEBUG: @synchronized(nil); set a breakpoint on objc_sync_nil to debug");
+        }
+        objc_sync_nil();
+    }
+
+    return result;
+}
+
+BOOL objc_sync_try_enter(id obj)
+{
+    BOOL result = YES;
+
+    if (obj) {
+        SyncData* data = id2data(obj, ACQUIRE);
+        ASSERT(data);
+        result = data->mutex.tryLock();
     } else {
         // @synchronized(nil) does nothing
         if (DebugNilSync) {

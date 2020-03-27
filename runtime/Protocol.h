@@ -75,13 +75,19 @@ OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0, 2.0)
     __IOS_DEPRECATED(2.0, 2.0, "use protocol_getMethodDescription instead") 
     __TVOS_DEPRECATED(9.0, 9.0, "use protocol_getMethodDescription instead") 
     __WATCHOS_DEPRECATED(1.0, 1.0, "use protocol_getMethodDescription instead")
-    __BRIDGEOS_DEPRECATED(2.0, 2.0, "use protocol_getMethodDescription instead");
+#ifndef __APPLE_BLEACH_SDK__
+    __BRIDGEOS_DEPRECATED(2.0, 2.0, "use protocol_getMethodDescription instead")
+#endif
+;
 - (struct objc_method_description *) descriptionForClassMethod:(SEL)aSel 
     __OSX_DEPRECATED(10.0, 10.5, "use protocol_getMethodDescription instead") 
     __IOS_DEPRECATED(2.0, 2.0, "use protocol_getMethodDescription instead") 
     __TVOS_DEPRECATED(9.0, 9.0, "use protocol_getMethodDescription instead") 
     __WATCHOS_DEPRECATED(1.0, 1.0, "use protocol_getMethodDescription instead")
-    __BRIDGEOS_DEPRECATED(2.0, 2.0, "use protocol_getMethodDescription instead");
+#ifndef __APPLE_BLEACH_SDK__
+    __BRIDGEOS_DEPRECATED(2.0, 2.0, "use protocol_getMethodDescription instead")
+#endif
+;
 
 @end
 

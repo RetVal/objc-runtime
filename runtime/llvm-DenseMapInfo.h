@@ -75,6 +75,15 @@ template<> struct DenseMapInfo<const char*> {
     return _objc_strhash(Val); 
   }
   static bool isEqual(const char* const &LHS, const char* const &RHS) {
+    if (LHS == RHS) {
+      return true;
+    }
+    if (LHS == getEmptyKey() || RHS == getEmptyKey()) {
+      return false;
+    }
+    if (LHS == getTombstoneKey() || RHS == getTombstoneKey()) {
+      return false;
+    }
     return 0 == strcmp(LHS, RHS);
   }
 };
@@ -193,6 +202,13 @@ struct DenseMapInfo<std::pair<T, U> > {
     return FirstInfo::isEqual(LHS.first, RHS.first) &&
            SecondInfo::isEqual(LHS.second, RHS.second);
   }
+};
+
+template<typename T>
+struct DenseMapValueInfo {
+    static inline bool isPurgeable(const T &value) {
+        return false;
+    }
 };
 
 } // end namespace objc

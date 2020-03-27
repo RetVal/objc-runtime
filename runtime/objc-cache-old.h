@@ -31,6 +31,7 @@ __BEGIN_DECLS
 extern IMP _cache_getImp(Class cls, SEL sel);
 extern Method _cache_getMethod(Class cls, SEL sel, IMP objc_msgForward_internal_imp);
 
+extern void cache_init(void);
 extern void flush_cache(Class cls);
 extern bool _cache_fill(Class cls, Method meth, SEL sel);
 extern void _cache_addForwardEntry(Class cls, SEL sel);

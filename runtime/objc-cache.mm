@@ -90,7 +90,9 @@
 /* Initial cache bucket count. INIT_CACHE_SIZE must be a power of two. */
 enum {
     INIT_CACHE_SIZE_LOG2 = 2,
-    INIT_CACHE_SIZE      = (1 << INIT_CACHE_SIZE_LOG2)
+    INIT_CACHE_SIZE      = (1 << INIT_CACHE_SIZE_LOG2),
+    MAX_CACHE_SIZE_LOG2  = 16,
+    MAX_CACHE_SIZE       = (1 << MAX_CACHE_SIZE_LOG2),
 };
 
 static void cache_collect_free(struct bucket_t *data, mask_t capacity);
@@ -147,8 +149,14 @@ asm("\n .section __TEXT,__const"
     "\n .globl __objc_empty_vtable"
     "\n .set __objc_empty_vtable, 0"
     "\n .globl __objc_empty_cache"
+#if CACHE_MASK_STORAGE == CACHE_MASK_STORAGE_LOW_4
+    "\n .align 4"
+    "\n L__objc_empty_cache: .space " stringize2(EMPTY_BYTES)
+    "\n .set __objc_empty_cache, L__objc_empty_cache + 0xf"
+#else
     "\n .align 3"
     "\n __objc_empty_cache: .space " stringize2(EMPTY_BYTES)
+#endif
     );
 
 
@@ -173,30 +181,14 @@ static inline mask_t cache_next(mask_t i, mask_t mask) {
 #endif
 
 
-// copied from dispatch_atomic_maximally_synchronizing_barrier
-// fixme verify that this barrier hack does in fact work here
-#if __x86_64__
-#define mega_barrier() \
-    do { unsigned long _clbr; __asm__ __volatile__( \
-        "cpuid" \
-        : "=a" (_clbr) : "0" (0) : "rbx", "rcx", "rdx", "cc", "memory" \
-                                                    ); } while(0)
-
-#elif __i386__
-#define mega_barrier() \
-    do { unsigned long _clbr; __asm__ __volatile__( \
-        "cpuid" \
-        : "=a" (_clbr) : "0" (0) : "ebx", "ecx", "edx", "cc", "memory" \
-                                                    ); } while(0)
-
-#elif __arm__  ||  __arm64__
+// mega_barrier doesn't really work, but it works enough on ARM that
+// we leave well enough alone and keep using it there.
+#if __arm__
 #define mega_barrier() \
     __asm__ __volatile__( \
         "dsb    ish" \
         : : : "memory")
 
-#else
-#error unknown architecture
 #endif
 
 #if __arm64__
@@ -250,39 +242,38 @@ static inline mask_t cache_hash(SEL sel, mask_t mask)
 
 cache_t *getCache(Class cls) 
 {
-    assert(cls);
+    ASSERT(cls);
     return &cls->cache;
 }
 
 #if __arm64__
 
-template<Atomicity atomicity>
-void bucket_t::set(SEL newSel, IMP newImp)
+template<Atomicity atomicity, IMPEncoding impEncoding>
+void bucket_t::set(SEL newSel, IMP newImp, Class cls)
 {
-    assert(_sel == 0  ||  _sel == newSel);
+    ASSERT(_sel.load(memory_order::memory_order_relaxed) == 0 ||
+           _sel.load(memory_order::memory_order_relaxed) == newSel);
 
     static_assert(offsetof(bucket_t,_imp) == 0 &&
                   offsetof(bucket_t,_sel) == sizeof(void *),
                   "bucket_t layout doesn't match arm64 bucket_t::set()");
 
-    uintptr_t signedImp = signIMP(newImp, newSel);
+    uintptr_t encodedImp = (impEncoding == Encoded
+                            ? encodeImp(newImp, newSel, cls)
+                            : (uintptr_t)newImp);
 
-    if (atomicity == Atomic) {
-        // LDP/STP guarantees that all observers get
-        // either imp/sel or newImp/newSel
-        stp(signedImp, (uintptr_t)newSel, this);
-    } else {
-        _sel = newSel;
-        _imp = signedImp;
-    }
+    // LDP/STP guarantees that all observers get
+    // either imp/sel or newImp/newSel
+    stp(encodedImp, (uintptr_t)newSel, this);
 }
 
 #else
 
-template<Atomicity atomicity>
-void bucket_t::set(SEL newSel, IMP newImp)
+template<Atomicity atomicity, IMPEncoding impEncoding>
+void bucket_t::set(SEL newSel, IMP newImp, Class cls)
 {
-    assert(_sel == 0  ||  _sel == newSel);
+    ASSERT(_sel.load(memory_order::memory_order_relaxed) == 0 ||
+           _sel.load(memory_order::memory_order_relaxed) == newSel);
 
     // objc_msgSend uses sel and imp with no locks.
     // It is safe for objc_msgSend to see new imp but NULL sel
@@ -290,17 +281,32 @@ void bucket_t::set(SEL newSel, IMP newImp)
     // It is unsafe for objc_msgSend to see old imp and new sel.
     // Therefore we write new imp, wait a lot, then write new sel.
     
-    _imp = (uintptr_t)newImp;
-    
-    if (_sel != newSel) {
-        if (atomicity == Atomic) {
+    uintptr_t newIMP = (impEncoding == Encoded
+                        ? encodeImp(newImp, newSel, cls)
+                        : (uintptr_t)newImp);
+
+    if (atomicity == Atomic) {
+        _imp.store(newIMP, memory_order::memory_order_relaxed);
+        
+        if (_sel.load(memory_order::memory_order_relaxed) != newSel) {
+#ifdef __arm__
             mega_barrier();
+            _sel.store(newSel, memory_order::memory_order_relaxed);
+#elif __x86_64__ || __i386__
+            _sel.store(newSel, memory_order::memory_order_release);
+#else
+#error Don't know how to do bucket_t::set on this architecture.
+#endif
         }
-        _sel = newSel;
+    } else {
+        _imp.store(newIMP, memory_order::memory_order_relaxed);
+        _sel.store(newSel, memory_order::memory_order_relaxed);
     }
 }
 
 #endif
+
+#if CACHE_MASK_STORAGE == CACHE_MASK_STORAGE_OUTLINED
 
 void cache_t::setBucketsAndMask(struct bucket_t *newBuckets, mask_t newMask)
 {
@@ -311,28 +317,137 @@ void cache_t::setBucketsAndMask(struct bucket_t *newBuckets, mask_t newMask)
     // Therefore we write new buckets, wait a lot, then write new mask.
     // objc_msgSend reads mask first, then buckets.
 
+#ifdef __arm__
     // ensure other threads see buckets contents before buckets pointer
     mega_barrier();
 
-    _buckets = newBuckets;
+    _buckets.store(newBuckets, memory_order::memory_order_relaxed);
     
     // ensure other threads see new buckets before new mask
     mega_barrier();
     
-    _mask = newMask;
+    _mask.store(newMask, memory_order::memory_order_relaxed);
     _occupied = 0;
+#elif __x86_64__ || i386
+    // ensure other threads see buckets contents before buckets pointer
+    _buckets.store(newBuckets, memory_order::memory_order_release);
+    
+    // ensure other threads see new buckets before new mask
+    _mask.store(newMask, memory_order::memory_order_release);
+    _occupied = 0;
+#else
+#error Don't know how to do setBucketsAndMask on this architecture.
+#endif
 }
 
+struct bucket_t *cache_t::emptyBuckets()
+{
+    return (bucket_t *)&_objc_empty_cache;
+}
 
 struct bucket_t *cache_t::buckets() 
 {
-    return _buckets; 
+    return _buckets.load(memory_order::memory_order_relaxed);
 }
 
 mask_t cache_t::mask() 
 {
-    return _mask; 
+    return _mask.load(memory_order::memory_order_relaxed);
 }
+
+void cache_t::initializeToEmpty()
+{
+    bzero(this, sizeof(*this));
+    _buckets.store((bucket_t *)&_objc_empty_cache, memory_order::memory_order_relaxed);
+}
+
+#elif CACHE_MASK_STORAGE == CACHE_MASK_STORAGE_HIGH_16
+
+void cache_t::setBucketsAndMask(struct bucket_t *newBuckets, mask_t newMask)
+{
+    uintptr_t buckets = (uintptr_t)newBuckets;
+    uintptr_t mask = (uintptr_t)newMask;
+    
+    ASSERT(buckets <= bucketsMask);
+    ASSERT(mask <= maxMask);
+    
+    _maskAndBuckets.store(((uintptr_t)newMask << maskShift) | (uintptr_t)newBuckets, std::memory_order_relaxed);
+    _occupied = 0;
+}
+
+struct bucket_t *cache_t::emptyBuckets()
+{
+    return (bucket_t *)&_objc_empty_cache;
+}
+
+struct bucket_t *cache_t::buckets()
+{
+    uintptr_t maskAndBuckets = _maskAndBuckets.load(memory_order::memory_order_relaxed);
+    return (bucket_t *)(maskAndBuckets & bucketsMask);
+}
+
+mask_t cache_t::mask()
+{
+    uintptr_t maskAndBuckets = _maskAndBuckets.load(memory_order::memory_order_relaxed);
+    return maskAndBuckets >> maskShift;
+}
+
+void cache_t::initializeToEmpty()
+{
+    bzero(this, sizeof(*this));
+    _maskAndBuckets.store((uintptr_t)&_objc_empty_cache, std::memory_order_relaxed);
+}
+
+#elif CACHE_MASK_STORAGE == CACHE_MASK_STORAGE_LOW_4
+
+void cache_t::setBucketsAndMask(struct bucket_t *newBuckets, mask_t newMask)
+{
+    uintptr_t buckets = (uintptr_t)newBuckets;
+    unsigned mask = (unsigned)newMask;
+    
+    ASSERT(buckets == (buckets & bucketsMask));
+    ASSERT(mask <= 0xffff);
+    
+    // The shift amount is equal to the number of leading zeroes in
+    // the last 16 bits of mask. Count all the leading zeroes, then
+    // subtract to ignore the top half.
+    uintptr_t maskShift = __builtin_clz(mask) - (sizeof(mask) * CHAR_BIT - 16);
+    ASSERT(mask == (0xffff >> maskShift));
+    
+    _maskAndBuckets.store(buckets | maskShift, memory_order::memory_order_relaxed);
+    _occupied = 0;
+    
+    ASSERT(this->buckets() == newBuckets);
+    ASSERT(this->mask() == newMask);
+}
+
+struct bucket_t *cache_t::emptyBuckets()
+{
+    return (bucket_t *)((uintptr_t)&_objc_empty_cache & bucketsMask);
+}
+
+struct bucket_t *cache_t::buckets()
+{
+    uintptr_t maskAndBuckets = _maskAndBuckets.load(memory_order::memory_order_relaxed);
+    return (bucket_t *)(maskAndBuckets & bucketsMask);
+}
+
+mask_t cache_t::mask()
+{
+    uintptr_t maskAndBuckets = _maskAndBuckets.load(memory_order::memory_order_relaxed);
+    uintptr_t maskShift = (maskAndBuckets & maskMask);
+    return 0xffff >> maskShift;
+}
+
+void cache_t::initializeToEmpty()
+{
+    bzero(this, sizeof(*this));
+    _maskAndBuckets.store((uintptr_t)&_objc_empty_cache, std::memory_order_relaxed);
+}
+
+#else
+#error Unknown cache mask storage type.
+#endif
 
 mask_t cache_t::occupied() 
 {
@@ -344,14 +459,7 @@ void cache_t::incrementOccupied()
     _occupied++;
 }
 
-void cache_t::initializeToEmpty()
-{
-    bzero(this, sizeof(*this));
-    _buckets = (bucket_t *)&_objc_empty_cache;
-}
-
-
-mask_t cache_t::capacity() 
+unsigned cache_t::capacity()
 {
     return mask() ? mask()+1 : 0; 
 }
@@ -384,10 +492,10 @@ bucket_t *allocateBuckets(mask_t newCapacity)
 #if __arm__
     // End marker's sel is 1 and imp points BEFORE the first bucket.
     // This saves an instruction in objc_msgSend.
-    end->set<NotAtomic>((SEL)(uintptr_t)1, (IMP)(newBuckets - 1));
+    end->set<NotAtomic, Raw>((SEL)(uintptr_t)1, (IMP)(newBuckets - 1), nil);
 #else
     // End marker's sel is 1 and imp points to the first bucket.
-    end->set<NotAtomic>((SEL)(uintptr_t)1, (IMP)newBuckets);
+    end->set<NotAtomic, Raw>((SEL)(uintptr_t)1, (IMP)newBuckets, nil);
 #endif
     
     if (PrintCaches) recordNewCache(newCapacity);
@@ -414,13 +522,17 @@ bucket_t *allocateBuckets(mask_t newCapacity)
 
 bucket_t *emptyBucketsForCapacity(mask_t capacity, bool allocate = true)
 {
+#if CONFIG_USE_CACHE_LOCK
     cacheUpdateLock.assertLocked();
+#else
+    runtimeLock.assertLocked();
+#endif
 
     size_t bytes = cache_t::bytesForCapacity(capacity);
 
     // Use _objc_empty_cache if the buckets is small enough.
     if (bytes <= EMPTY_BYTES) {
-        return (bucket_t *)&_objc_empty_cache;
+        return cache_t::emptyBuckets();
     }
 
     // Use shared empty buckets allocated on the heap.
@@ -465,11 +577,9 @@ bool cache_t::canBeFreed()
     return !isConstantEmptyCache();
 }
 
-
-void cache_t::reallocate(mask_t oldCapacity, mask_t newCapacity)
+ALWAYS_INLINE
+void cache_t::reallocate(mask_t oldCapacity, mask_t newCapacity, bool freeOld)
 {
-    bool freeOld = canBeFreed();
-
     bucket_t *oldBuckets = buckets();
     bucket_t *newBuckets = allocateBuckets(newCapacity);
 
@@ -477,14 +587,13 @@ void cache_t::reallocate(mask_t oldCapacity, mask_t newCapacity)
     // This is thought to save cache memory at the cost of extra cache fills.
     // fixme re-measure this
 
-    assert(newCapacity > 0);
-    assert((uintptr_t)(mask_t)(newCapacity-1) == newCapacity-1);
+    ASSERT(newCapacity > 0);
+    ASSERT((uintptr_t)(mask_t)(newCapacity-1) == newCapacity-1);
 
     setBucketsAndMask(newBuckets, newCapacity - 1);
     
     if (freeOld) {
         cache_collect_free(oldBuckets, oldCapacity);
-        cache_collect(false);
     }
 }
 
@@ -496,16 +605,35 @@ void cache_t::bad_cache(id receiver, SEL sel, Class isa)
         ("Method cache corrupted. This may be a message to an "
          "invalid object, or a memory error somewhere else.");
     cache_t *cache = &isa->cache;
+#if CACHE_MASK_STORAGE == CACHE_MASK_STORAGE_OUTLINED
+    bucket_t *buckets = cache->_buckets.load(memory_order::memory_order_relaxed);
     _objc_inform_now_and_on_crash
         ("%s %p, SEL %p, isa %p, cache %p, buckets %p, "
          "mask 0x%x, occupied 0x%x", 
          receiver ? "receiver" : "unused", receiver, 
-         sel, isa, cache, cache->_buckets, 
-         cache->_mask, cache->_occupied);
+         sel, isa, cache, buckets,
+         cache->_mask.load(memory_order::memory_order_relaxed),
+         cache->_occupied);
     _objc_inform_now_and_on_crash
         ("%s %zu bytes, buckets %zu bytes", 
          receiver ? "receiver" : "unused", malloc_size(receiver), 
-         malloc_size(cache->_buckets));
+         malloc_size(buckets));
+#elif (CACHE_MASK_STORAGE == CACHE_MASK_STORAGE_HIGH_16 || \
+       CACHE_MASK_STORAGE == CACHE_MASK_STORAGE_LOW_4)
+    uintptr_t maskAndBuckets = cache->_maskAndBuckets.load(memory_order::memory_order_relaxed);
+    _objc_inform_now_and_on_crash
+        ("%s %p, SEL %p, isa %p, cache %p, buckets and mask 0x%lx, "
+         "occupied 0x%x",
+         receiver ? "receiver" : "unused", receiver,
+         sel, isa, cache, maskAndBuckets,
+         cache->_occupied);
+    _objc_inform_now_and_on_crash
+        ("%s %zu bytes, buckets %zu bytes",
+         receiver ? "receiver" : "unused", malloc_size(receiver),
+         malloc_size(cache->buckets()));
+#else
+#error Unknown cache mask storage type.
+#endif
     _objc_inform_now_and_on_crash
         ("selector '%s'", sel_getName(sel));
     _objc_inform_now_and_on_crash
@@ -515,88 +643,75 @@ void cache_t::bad_cache(id receiver, SEL sel, Class isa)
          "invalid object, or a memory error somewhere else.");
 }
 
-
-bucket_t * cache_t::find(SEL s, id receiver)
+ALWAYS_INLINE
+void cache_t::insert(Class cls, SEL sel, IMP imp, id receiver)
 {
-    assert(s != 0);
-
-    bucket_t *b = buckets();
-    mask_t m = mask();
-    mask_t begin = cache_hash(s, m);
-    mask_t i = begin;
-    do {
-        if (b[i].sel() == 0  ||  b[i].sel() == s) {
-            return &b[i];
-        }
-    } while ((i = cache_next(i, m)) != begin);
-
-    // hack
-    Class cls = (Class)((uintptr_t)this - offsetof(objc_class, cache));
-    cache_t::bad_cache(receiver, (SEL)s, cls);
-}
-
-
-void cache_t::expand()
-{
+#if CONFIG_USE_CACHE_LOCK
     cacheUpdateLock.assertLocked();
-    
-    uint32_t oldCapacity = capacity();
-    uint32_t newCapacity = oldCapacity ? oldCapacity*2 : INIT_CACHE_SIZE;
+#else
+    runtimeLock.assertLocked();
+#endif
 
-    if ((uint32_t)(mask_t)newCapacity != newCapacity) {
-        // mask overflow - can't grow further
-        // fixme this wastes one bit of mask
-        newCapacity = oldCapacity;
-    }
-
-    reallocate(oldCapacity, newCapacity);
-}
-
-
-static void cache_fill_nolock(Class cls, SEL sel, IMP imp, id receiver)
-{
-    cacheUpdateLock.assertLocked();
-
-    // Never cache before +initialize is done
-    if (!cls->isInitialized()) return;
-
-    // Make sure the entry wasn't added to the cache by some other thread 
-    // before we grabbed the cacheUpdateLock.
-    if (cache_getImp(cls, sel)) return;
-
-    cache_t *cache = getCache(cls);
+    ASSERT(sel != 0 && cls->isInitialized());
 
     // Use the cache as-is if it is less than 3/4 full
-    mask_t newOccupied = cache->occupied() + 1;
-    mask_t capacity = cache->capacity();
-    if (cache->isConstantEmptyCache()) {
+    mask_t newOccupied = occupied() + 1;
+    unsigned oldCapacity = capacity(), capacity = oldCapacity;
+    if (slowpath(isConstantEmptyCache())) {
         // Cache is read-only. Replace it.
-        cache->reallocate(capacity, capacity ?: INIT_CACHE_SIZE);
+        if (!capacity) capacity = INIT_CACHE_SIZE;
+        reallocate(oldCapacity, capacity, /* freeOld */false);
     }
-    else if (newOccupied <= capacity / 4 * 3) {
+    else if (fastpath(newOccupied <= capacity / 4 * 3)) {
         // Cache is less than 3/4 full. Use it as-is.
     }
     else {
-        // Cache is too full. Expand it.
-        cache->expand();
+        capacity = capacity ? capacity * 2 : INIT_CACHE_SIZE;
+        if (capacity > MAX_CACHE_SIZE) {
+            capacity = MAX_CACHE_SIZE;
+        }
+        reallocate(oldCapacity, capacity, true);
     }
 
+    bucket_t *b = buckets();
+    mask_t m = capacity - 1;
+    mask_t begin = cache_hash(sel, m);
+    mask_t i = begin;
+
     // Scan for the first unused slot and insert there.
-    // There is guaranteed to be an empty slot because the 
+    // There is guaranteed to be an empty slot because the
     // minimum size is 4 and we resized at 3/4 full.
-    bucket_t *bucket = cache->find(sel, receiver);
-    if (bucket->sel() == 0) cache->incrementOccupied();
-    bucket->set<Atomic>(sel, imp);
+    do {
+        if (fastpath(b[i].sel() == 0)) {
+            incrementOccupied();
+            b[i].set<Atomic, Encoded>(sel, imp, cls);
+            return;
+        }
+        if (b[i].sel() == sel) {
+            // The entry was added to the cache by some other thread
+            // before we grabbed the cacheUpdateLock.
+            return;
+        }
+    } while (fastpath((i = cache_next(i, m)) != begin));
+
+    cache_t::bad_cache(receiver, (SEL)sel, cls);
 }
 
 void cache_fill(Class cls, SEL sel, IMP imp, id receiver)
 {
+    runtimeLock.assertLocked();
+
 #if !DEBUG_TASK_THREADS
-    mutex_locker_t lock(cacheUpdateLock);
-    cache_fill_nolock(cls, sel, imp, receiver);
+    // Never cache before +initialize is done
+    if (cls->isInitialized()) {
+        cache_t *cache = getCache(cls);
+#if CONFIG_USE_CACHE_LOCK
+        mutex_locker_t lock(cacheUpdateLock);
+#endif
+        cache->insert(cls, sel, imp, receiver);
+    }
 #else
     _collecting_in_critical();
-    return;
 #endif
 }
 
@@ -605,7 +720,11 @@ void cache_fill(Class cls, SEL sel, IMP imp, id receiver)
 // This must not shrink the cache - that breaks the lock-free scheme.
 void cache_erase_nolock(Class cls)
 {
+#if CONFIG_USE_CACHE_LOCK
     cacheUpdateLock.assertLocked();
+#else
+    runtimeLock.assertLocked();
+#endif
 
     cache_t *cache = getCache(cls);
 
@@ -616,14 +735,17 @@ void cache_erase_nolock(Class cls)
         cache->setBucketsAndMask(buckets, capacity - 1); // also clears occupied
 
         cache_collect_free(oldBuckets, capacity);
-        cache_collect(false);
     }
 }
 
 
 void cache_delete(Class cls)
 {
+#if CONFIG_USE_CACHE_LOCK
     mutex_locker_t lock(cacheUpdateLock);
+#else
+    runtimeLock.assertLocked();
+#endif
     if (cls->cache.canBeFreed()) {
         if (PrintCaches) recordDeadCache(cls->cache.capacity());
         free(cls->cache.buckets());
@@ -669,7 +791,7 @@ static uintptr_t _get_pc_for_thread(thread_t thread)
     arm_thread_state64_t state;
     unsigned int count = ARM_THREAD_STATE64_COUNT;
     kern_return_t okay = thread_get_state (thread, ARM_THREAD_STATE64, (thread_state_t)&state, &count);
-    return (okay == KERN_SUCCESS) ? arm_thread_state64_get_pc(state) : PC_SENTINEL;
+    return (okay == KERN_SUCCESS) ? (uintptr_t)arm_thread_state64_get_pc(state) : PC_SENTINEL;
 }
 #else
 {
@@ -686,21 +808,64 @@ static uintptr_t _get_pc_for_thread(thread_t thread)
 * reading function is in progress because it might still be using 
 * the garbage memory.
 **********************************************************************/
-extern "C" uintptr_t objc_entryPoints[];
-extern "C"  uintptr_t objc_exitPoints[];
+#if HAVE_TASK_RESTARTABLE_RANGES
+#include <kern/restartable.h>
+#else
+typedef struct {
+    uint64_t          location;
+    unsigned short    length;
+    unsigned short    recovery_offs;
+    unsigned int      flags;
+} task_restartable_range_t;
+#endif
+
+extern "C" task_restartable_range_t objc_restartableRanges[];
+
+#if HAVE_TASK_RESTARTABLE_RANGES
+static bool shouldUseRestartableRanges = true;
+#endif
+
+void cache_init()
+{
+#if HAVE_TASK_RESTARTABLE_RANGES
+    mach_msg_type_number_t count = 0;
+    kern_return_t kr;
+
+    while (objc_restartableRanges[count].location) {
+        count++;
+    }
+
+    kr = task_restartable_ranges_register(mach_task_self(),
+                                          objc_restartableRanges, count);
+    if (kr == KERN_SUCCESS) return;
+    _objc_fatal("task_restartable_ranges_register failed (result 0x%x: %s)",
+                kr, mach_error_string(kr));
+#endif // HAVE_TASK_RESTARTABLE_RANGES
+}
 
 static int _collecting_in_critical(void)
 {
 #if TARGET_OS_WIN32
     return TRUE;
-#else
+#elif HAVE_TASK_RESTARTABLE_RANGES
+    // Only use restartable ranges if we registered them earlier.
+    if (shouldUseRestartableRanges) {
+        kern_return_t kr = task_restartable_ranges_synchronize(mach_task_self());
+        if (kr == KERN_SUCCESS) return FALSE;
+        _objc_fatal("task_restartable_ranges_synchronize failed (result 0x%x: %s)",
+                    kr, mach_error_string(kr));
+    }
+#endif // !HAVE_TASK_RESTARTABLE_RANGES
+
+    // Fallthrough if we didn't use restartable ranges.
+
     thread_act_port_array_t threads;
     unsigned number;
     unsigned count;
     kern_return_t ret;
     int result;
 
-    mach_port_t mythread = pthread_mach_thread_np(pthread_self());
+    mach_port_t mythread = pthread_mach_thread_np(objc_thread_self());
 
     // Get a list of all the threads in the current task
 #if !DEBUG_TASK_THREADS
@@ -736,10 +901,11 @@ static int _collecting_in_critical(void)
         }
         
         // Check whether it is in the cache lookup code
-        for (region = 0; objc_entryPoints[region] != 0; region++)
+        for (region = 0; objc_restartableRanges[region].location != 0; region++)
         {
-            if ((pc >= objc_entryPoints[region]) &&
-                (pc <= objc_exitPoints[region])) 
+            uint64_t loc = objc_restartableRanges[region].location;
+            if ((pc > loc) &&
+                (pc - loc < (uint64_t)objc_restartableRanges[region].length))
             {
                 result = TRUE;
                 goto done;
@@ -758,7 +924,6 @@ static int _collecting_in_critical(void)
 
     // Return our finding
     return result;
-#endif
 }
 
 
@@ -819,13 +984,18 @@ static void _garbage_make_room(void)
 **********************************************************************/
 static void cache_collect_free(bucket_t *data, mask_t capacity)
 {
+#if CONFIG_USE_CACHE_LOCK
     cacheUpdateLock.assertLocked();
+#else
+    runtimeLock.assertLocked();
+#endif
 
     if (PrintCaches) recordDeadCache(capacity);
 
     _garbage_make_room ();
     garbage_byte_size += cache_t::bytesForCapacity(capacity);
     garbage_refs[garbage_count++] = data;
+    cache_collect(false);
 }
 
 
@@ -836,7 +1006,11 @@ static void cache_collect_free(bucket_t *data, mask_t capacity)
 **********************************************************************/
 void cache_collect(bool collectALot)
 {
+#if CONFIG_USE_CACHE_LOCK
     cacheUpdateLock.assertLocked();
+#else
+    runtimeLock.assertLocked();
+#endif
 
     // Done if the garbage is not full
     if (garbage_byte_size < garbage_threshold  &&  !collectALot) {

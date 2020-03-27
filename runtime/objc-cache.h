@@ -6,6 +6,8 @@
 
 __BEGIN_DECLS
 
+extern void cache_init(void);
+
 extern IMP cache_getImp(Class cls, SEL sel);
 
 extern void cache_fill(Class cls, SEL sel, IMP imp, id receiver);

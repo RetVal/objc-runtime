@@ -1,7 +1,7 @@
 __objc_init
 _environ_init
 _tls_init
-_lock_init
+_runtime_init
 _recursive_mutex_init
 _exception_init
 _map_images
@@ -96,6 +96,7 @@ __ZNSt3__122__merge_move_constructIRN8method_t16SortBySELAddressEN13method_list_
 __ZNSt3__119__merge_move_assignIRN8method_t16SortBySELAddressEPS1_S4_N13method_list_t15method_iteratorEEEvT0_S7_T1_S8_T2_T_
 _NXPtrIsEqual
 __getObjc2CategoryList
+__getObjc2CategoryList2
 __Z29addUnattachedCategoryForClassP10category_tP7class_tP12_header_info
 __Z16remethodizeClassP7class_t
 __Z11flushCachesP7class_t
@@ -143,7 +144,6 @@ __objc_insert_tagged_isa
 _objc_msgSend_fixup
 __objc_fixupMessageRef
 _objc_msgSend
-__class_lookupMethodAndLoadCache3
 _lookUpMethod
 _prepareForMethodLookup
 __class_initialize
@@ -330,7 +330,6 @@ _objc_atomicCompareAndSwapGlobalBarrier
 _sel_getUid
 __ZN12_GLOBAL__N_119AutoreleasePoolPage11tls_deallocEPv
 __ZN12_GLOBAL__N_119AutoreleasePoolPage4killEv
-__objc_constructOrFree
 _object_cxxConstruct
 _object_cxxConstructFromClass
 __class_hasCxxStructors
