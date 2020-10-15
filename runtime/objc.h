@@ -180,8 +180,7 @@ OBJC_EXPORT const char * _Nonnull object_getClassName(id _Nullable obj)
  * @note In a garbage-collected environment, the memory is scanned conservatively.
  */
 OBJC_EXPORT void * _Nullable object_getIndexedIvars(id _Nullable obj)
-    OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0, 2.0)
-    OBJC_ARC_UNAVAILABLE;
+    OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0, 2.0);
 
 /** 
  * Identifies a selector as being valid or invalid.

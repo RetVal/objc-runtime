@@ -157,6 +157,49 @@ OBJC_EXPORT uintptr_t objc_indexed_classes_count;
 OBJC_EXPORT const uintptr_t objc_debug_class_rw_data_mask
     OBJC_AVAILABLE(10.13, 11.0, 11.0, 4.0, 2.0);
 
+// The ABI version for the internal runtime representations
+// lldb, CoreSymbolication and debugging tools need to know
+OBJC_EXTERN const uint32_t objc_class_abi_version
+	OBJC_AVAILABLE(10.15, 13.0, 13.0, 6.0, 5.0);
+
+// the maximum ABI version in existence for now
+#define OBJC_CLASS_ABI_VERSION_MAX 1
+
+// Used when objc_class_abi_version is absent or 0
+struct class_rw_v0_t {
+    uint32_t  flags;
+    uint32_t  version;
+    uintptr_t ro;                   // class_ro_t
+    uintptr_t methods;              // method_array_t
+    uintptr_t properties;           // property_array_t
+    uintptr_t protocols;            // protocol_array_t
+    Class _Nullable firstSubclass;
+    Class _Nullable nextSiblingClass;
+    char *_Nullable demangledName;
+
+    // uint32_t index;              // only when indexed-isa is used
+};
+
+// Used when objc_class_abi_version is 1
+struct class_rw_v1_t {
+    uint32_t  flags;
+    uint16_t  witness;
+    uint16_t  index;                // only when indexed-isa is used
+    uintptr_t ro_or_rw_ext;         // tagged union based on the low bit:
+                                    // 0: class_ro_t  1: class_rw_ext_t
+    Class _Nullable firstSubclass;
+    Class _Nullable nextSiblingClass;
+};
+
+struct class_rw_ext_v1_t {
+    uintptr_t ro;                   // class_ro_t
+    uintptr_t methods;              // method_array_t
+    uintptr_t properties;           // property_array_t
+    uintptr_t protocols;            // protocol_array_t
+    char *_Nullable demangledName;
+    uint32_t version;
+};
+
 #endif
 
 

@@ -120,7 +120,7 @@ int main()
     // rdar://44094390 tolerate nil object and nil value
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wnonnull"
-    objc_setAssociatedObject(nil, &key, nil, 0);
+    objc_setAssociatedObject(nil, &key, nil, OBJC_ASSOCIATION_ASSIGN);
 #pragma clang diagnostic pop
 
     succeed(__FILE__);

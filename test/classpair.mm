@@ -31,11 +31,25 @@
 @end
 
 static int super_initialize;
+static int super_cxxctor;
+static int super_cxxdtor;
+
+struct super_cxx {
+    int foo;
+    super_cxx() : foo(0) {
+        super_cxxctor++;
+    }
+    ~super_cxx() {
+        super_cxxdtor++;
+    }
+};
 
 @interface Super : TestRoot
 @property int superProp;
 @end
-@implementation Super 
+@implementation Super {
+    super_cxx _foo;
+}
 @dynamic superProp;
 +(void)initialize { super_initialize++; } 
 
@@ -227,12 +241,18 @@ static void cycle(void)
     // put instance tests on a separate thread so they 
     // are reliably deallocated before class destruction
     testonthread(^{
+        super_cxxctor = 0;
+        super_cxxdtor = 0;
         id obj = [cls new];
+        testassert(super_cxxctor == 1);
+        testassert(super_cxxdtor == 0);
         state = 0;
         [obj instanceMethod];
         [obj instanceMethod2];
         testassert(state == 2);
         RELEASE_VAR(obj);
+        testassert(super_cxxctor == 1);
+        testassert(super_cxxdtor == 1);
     });
 
     // Test ivar layouts of sub-subclass

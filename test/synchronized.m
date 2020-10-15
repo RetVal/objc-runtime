@@ -21,9 +21,16 @@ static semaphore_t stop;
 void *thread(void *arg __unused)
 {
     int err;
+    BOOL locked;
 
     // non-blocking sync_enter
     err = objc_sync_enter(obj);
+    testassert(err == OBJC_SYNC_SUCCESS);
+
+    // recursive try_sync_enter
+    locked = objc_sync_try_enter(obj);
+    testassert(locked);
+    err = objc_sync_exit(obj);
     testassert(err == OBJC_SYNC_SUCCESS);
 
     semaphore_signal(go);
@@ -59,6 +66,7 @@ int main()
     pthread_t th;
     int err;
     struct timeval start, end;
+    BOOL locked;
 
     obj = [[NSObject alloc] init];
 
@@ -77,6 +85,10 @@ int main()
 
     semaphore_signal(stop);
     semaphore_wait(go);
+
+    // contended try_sync_enter
+    locked = objc_sync_try_enter(obj);
+    testassert(!locked);
 
     // blocking sync_enter
     gettimeofday(&start, NULL);

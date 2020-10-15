@@ -5,6 +5,12 @@
 #include <string.h>
 #include <objc/runtime.h>
 
+#if __LP64__
+#   define PTR " .quad " 
+#else
+#   define PTR " .long " 
+#endif
+
 static int state = 0;
 
 @interface Super : TestRoot @end
@@ -110,6 +116,57 @@ static int state = 0;
 @end
 
 
+// Manually build a category that goes in __objc_catlist2.
+#if __has_feature(ptrauth_calls)
+#define SIGNED_CATEGORY_IMP "@AUTH(ia,0,addr)"
+#else
+#define SIGNED_CATEGORY_IMP
+#endif
+asm(
+"    .section __DATA,__objc_const                                       \n"
+"L_catlist2CategoryName:                                                \n"
+"    .asciz \"Category_catlist2\"                                       \n"
+"L_catlist2MethodString:                                                \n"
+"    .asciz \"catlist2Method\"                                          \n"
+"L_catlist2MethodTypes:                                                 \n"
+"    .asciz \"i16@0:8\"                                                 \n"
+
+"    .p2align 3                                                         \n"
+"l_OBJC_$_CATEGORY_INSTANCE_METHODS_Super_$_Category_catlist2:          \n"
+"    .long 24                                                           \n"
+"    .long 1                                                            \n"
+"    "PTR" L_catlist2MethodString                                       \n"
+"    "PTR" L_catlist2MethodTypes                                        \n"
+"    "PTR" _catlist2MethodImplementation"SIGNED_CATEGORY_IMP"           \n"
+
+"    .p2align 3                                                         \n"
+"l_OBJC_$_CATEGORY_Super_$_Category_catlist2:                           \n"
+"    "PTR" L_catlist2CategoryName                                       \n"
+"    "PTR" _OBJC_CLASS_$_Super                                          \n"
+"    "PTR" l_OBJC_$_CATEGORY_INSTANCE_METHODS_Super_$_Category_catlist2 \n"
+"    "PTR" 0                                                            \n"
+"    "PTR" 0                                                            \n"
+"    "PTR" 0                                                            \n"
+"    "PTR" 0                                                            \n"
+"    .long 64                                                           \n"
+"    .space 4                                                           \n"
+
+"    .section __DATA,__objc_catlist2                                    \n"
+"    .p2align 3                                                         \n"
+"    "PTR" l_OBJC_$_CATEGORY_Super_$_Category_catlist2                  \n"
+
+"    .text                                                              \n"
+);
+
+@interface Super (Category_catlist2)
+- (int)catlist2Method;
+@end
+
+EXTERN_C int catlist2MethodImplementation(id self __unused, SEL _cmd __unused) {
+    return 0;
+}
+
+
 int main()
 {
     {
@@ -163,6 +220,9 @@ int main()
     testassert(0 == strcmp(property_getAttributes(plist[1]), "Ti,R,Vq"));
     testassert(!plist[2]);
     free(plist);
+    
+    // method introduced by category in catlist2
+    testassert([[Super new] catlist2Method] == 0);
     
     succeed(__FILE__);
 }

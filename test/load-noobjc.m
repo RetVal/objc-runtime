@@ -1,4 +1,8 @@
 /*
+dyld3 calls the load callback with its own internal lock held, which causes
+this test to deadlock. Disable the test in dyld3 mode. If
+rdar://problem/53769512 is fixed then remove this.
+TEST_CONFIG DYLD=2
 TEST_BUILD
     $C{COMPILE} $DIR/load-noobjc.m -o load-noobjc.exe
     $C{COMPILE} $DIR/load-noobjc2.m -o libload-noobjc2.dylib -bundle -bundle_loader load-noobjc.exe

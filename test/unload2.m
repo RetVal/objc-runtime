@@ -24,3 +24,19 @@ OBJC_ROOT_CLASS
 @implementation SmallClass (Category)
 -(void)unload2_category_method { }
 @end
+
+// This isn't really weak-import: we link with `-undefined dynamic_lookup`
+// instead of providing a valid definition at link time.
+// But it looks the same to the runtime.
+__attribute__((weak_import))
+@interface ClassThatIsWeakImportAndMissing : TestRoot @end
+
+@interface SubclassOfMissingWeakImport : ClassThatIsWeakImportAndMissing <SmallProtocol> @end
+@implementation SubclassOfMissingWeakImport
+-(void)unload2_category_method { }
+@end
+
+@interface ClassThatIsWeakImportAndMissing (Category) <SmallProtocol> @end
+@implementation ClassThatIsWeakImportAndMissing (Category)
+-(void)unload2_category_method { }
+@end

@@ -4,7 +4,10 @@
 #include "swift-class-def.m"
 
 
-// _objc_swiftMetadataInitializer hooks for the classes in swift-class-def.m
+SWIFT_CLASS(SwiftSuper, NSObject, initSuper);
+SWIFT_CLASS(SwiftSub, SwiftSuper, initSub);
+
+// _objc_swiftMetadataInitializer hooks for the fake Swift classes
 
 Class initSuper(Class cls __unused, void *arg __unused)
 {
@@ -34,11 +37,6 @@ Class initSub(Class cls, void *arg)
 {
     testprintf("initSub callback\n");
     
-    extern uintptr_t OBJC_CLASS_$_SwiftSuper;
-    extern uintptr_t OBJC_CLASS_$_SwiftSub;
-    Class RawSwiftSuper = (Class)&OBJC_CLASS_$_SwiftSuper;
-    Class RawSwiftSub = (Class)&OBJC_CLASS_$_SwiftSub;
-
     testassert(SubInits == 0);
     SubInits++;
     testassert(arg == nil);

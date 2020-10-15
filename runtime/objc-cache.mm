@@ -99,6 +99,18 @@ static void cache_collect_free(struct bucket_t *data, mask_t capacity);
 static int _collecting_in_critical(void);
 static void _garbage_make_room(void);
 
+#if DEBUG_TASK_THREADS
+static kern_return_t objc_task_threads
+(
+	task_t target_task,
+	thread_act_array_t *act_list,
+	mach_msg_type_number_t *act_listCnt
+);
+#endif
+
+#if DEBUG_TASK_THREADS
+#undef HAVE_TASK_RESTARTABLE_RANGES
+#endif
 
 /***********************************************************************
 * Cache statistics for OBJC_PRINT_CACHE_SETUP
@@ -465,17 +477,15 @@ unsigned cache_t::capacity()
 }
 
 
-#if CACHE_END_MARKER
-
-size_t cache_t::bytesForCapacity(uint32_t cap) 
+size_t cache_t::bytesForCapacity(uint32_t cap)
 {
-    // fixme put end marker inline when capacity+1 malloc is inefficient
-    return sizeof(bucket_t) * (cap + 1);
+    return sizeof(bucket_t) * cap;
 }
 
-bucket_t *cache_t::endMarker(struct bucket_t *b, uint32_t cap) 
+#if CACHE_END_MARKER
+
+bucket_t *cache_t::endMarker(struct bucket_t *b, uint32_t cap)
 {
-    // bytesForCapacity() chooses whether the end marker is inline or not
     return (bucket_t *)((uintptr_t)b + bytesForCapacity(cap)) - 1;
 }
 
@@ -483,7 +493,6 @@ bucket_t *allocateBuckets(mask_t newCapacity)
 {
     // Allocate one extra bucket to mark the end of the list.
     // This can't overflow mask_t because newCapacity is a power of 2.
-    // fixme instead put the end mark inline when +1 is malloc-inefficient
     bucket_t *newBuckets = (bucket_t *)
         calloc(cache_t::bytesForCapacity(newCapacity), 1);
 
@@ -504,11 +513,6 @@ bucket_t *allocateBuckets(mask_t newCapacity)
 }
 
 #else
-
-size_t cache_t::bytesForCapacity(uint32_t cap) 
-{
-    return sizeof(bucket_t) * cap;
-}
 
 bucket_t *allocateBuckets(mask_t newCapacity)
 {
@@ -662,7 +666,7 @@ void cache_t::insert(Class cls, SEL sel, IMP imp, id receiver)
         if (!capacity) capacity = INIT_CACHE_SIZE;
         reallocate(oldCapacity, capacity, /* freeOld */false);
     }
-    else if (fastpath(newOccupied <= capacity / 4 * 3)) {
+    else if (fastpath(newOccupied + CACHE_END_MARKER <= capacity / 4 * 3)) {
         // Cache is less than 3/4 full. Use it as-is.
     }
     else {

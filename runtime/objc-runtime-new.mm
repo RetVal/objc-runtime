@@ -33,6 +33,7 @@
 #include "objc-runtime-new.h"
 #include "objc-file.h"
 #include "objc-cache.h"
+#include "objc-zalloc.h"
 #include <Block.h>
 #include <objc/message.h>
 #include <mach/shared_region.h>
@@ -45,7 +46,7 @@ static void free_class(Class cls);
 static IMP addMethod(Class cls, SEL name, IMP imp, const char *types, bool replace);
 static void adjustCustomFlagsForMethodChange(Class cls, method_t *meth);
 static method_t *search_method_list(const method_list_t *mlist, SEL sel);
-static bool method_lists_contains_any(method_list_t **mlists, method_list_t **end,
+template<typename T> static bool method_lists_contains_any(T *mlists, T *end,
         SEL sels[], size_t selcount);
 static void flushCaches(Class cls);
 static void initializeTaggedPointerObfuscator(void);
@@ -198,6 +199,72 @@ static ExplicitInitDenseSet<Class> allocatedClasses;
 **********************************************************************/
 static Class _firstRealizedClass = nil;
 
+/***********************************************************************
+* didInitialAttachCategories
+* Whether the initial attachment of categories present at startup has
+* been done.
+**********************************************************************/
+static bool didInitialAttachCategories = false;
+
+/***********************************************************************
+* didCallDyldNotifyRegister
+* Whether the call to _dyld_objc_notify_register has completed.
+**********************************************************************/
+bool didCallDyldNotifyRegister = false;
+
+
+/***********************************************************************
+* smallMethodIMPMap
+* The map from small method pointers to replacement IMPs.
+*
+* Locking: runtimeLock must be held when accessing this map.
+**********************************************************************/
+namespace objc {
+    static objc::LazyInitDenseMap<const method_t *, IMP> smallMethodIMPMap;
+}
+
+static IMP method_t_remappedImp_nolock(const method_t *m) {
+    runtimeLock.assertLocked();
+    auto *map = objc::smallMethodIMPMap.get(false);
+    if (!map)
+        return nullptr;
+    auto iter = map->find(m);
+    if (iter == map->end())
+        return nullptr;
+    return iter->second;
+}
+
+IMP method_t::remappedImp(bool needsLock) const {
+    ASSERT(isSmall());
+    if (needsLock) {
+        mutex_locker_t guard(runtimeLock);
+        return method_t_remappedImp_nolock(this);
+    } else {
+        return method_t_remappedImp_nolock(this);
+    }
+}
+
+void method_t::remapImp(IMP imp) {
+    ASSERT(isSmall());
+    runtimeLock.assertLocked();
+    auto *map = objc::smallMethodIMPMap.get(true);
+    (*map)[this] = imp;
+}
+
+objc_method_description *method_t::getSmallDescription() const {
+    static objc::LazyInitDenseMap<const method_t *, objc_method_description *> map;
+
+    mutex_locker_t guard(runtimeLock);
+
+    auto &ptr = (*map.get(true))[this];
+    if (!ptr) {
+        ptr = (objc_method_description *)malloc(sizeof *ptr);
+        ptr->name = name();
+        ptr->types = (char *)types();
+    }
+    return ptr;
+}
+
 /*
   Low two bits of mlist->entsize is used as the fixed-up marker.
   PREOPTIMIZED VERSION:
@@ -244,7 +311,8 @@ bool method_list_t::isUniqued() const {
 }
 
 bool method_list_t::isFixedUp() const {
-    return flags() == fixed_up_method_list;
+    // Ignore any flags in the top bits, just look at the bottom two.
+    return (flags() & 0x3) == fixed_up_method_list;
 }
 
 void method_list_t::setFixedUp() {
@@ -274,12 +342,12 @@ void protocol_t::clearIsCanonical() {
 }
 
 
-method_list_t **method_array_t::endCategoryMethodLists(Class cls) 
+const method_list_t_authed_ptr<method_list_t> *method_array_t::endCategoryMethodLists(Class cls) const
 {
-    method_list_t **mlists = beginLists();
-    method_list_t **mlistsEnd = endLists();
-    
-    if (mlists == mlistsEnd  ||  !cls->data()->ro->baseMethods()) 
+    auto mlists = beginLists();
+    auto mlistsEnd = endLists();
+
+    if (mlists == mlistsEnd  ||  !cls->data()->ro()->baseMethods())
     {
         // No methods, or no base methods. 
         // Everything here is a category method.
@@ -394,10 +462,10 @@ static class_ro_t *make_ro_writeable(class_rw_t *rw)
     if (rw->flags & RW_COPIED_RO) {
         // already writeable, do nothing
     } else {
-        rw->ro = rw->ro->duplicate();
+        rw->set_ro(rw->ro()->duplicate());
         rw->flags |= RW_COPIED_RO;
     }
-    return (class_ro_t *)rw->ro;
+    return const_cast<class_ro_t *>(rw->ro());
 }
 
 
@@ -522,7 +590,7 @@ printReplacements(Class cls, const locstamped_category_t *cats_list, uint32_t ca
         if (!mlist) continue;
 
         for (const auto& meth : *mlist) {
-            SEL s = sel_registerName(sel_cname(meth.name));
+            SEL s = sel_registerName(sel_cname(meth.name()));
 
             // Search for replaced methods in method lookup order.
             // Complain about the first duplicate only.
@@ -535,23 +603,23 @@ printReplacements(Class cls, const locstamped_category_t *cats_list, uint32_t ca
                 if (!mlist2) continue;
 
                 for (const auto& meth2 : *mlist2) {
-                    SEL s2 = sel_registerName(sel_cname(meth2.name));
+                    SEL s2 = sel_registerName(sel_cname(meth2.name()));
                     if (s == s2) {
                         logReplacedMethod(cls->nameForLogging(), s, 
                                           cls->isMetaClass(), cat->name, 
-                                          meth2.imp, meth.imp);
+                                          meth2.imp(false), meth.imp(false));
                         goto complained;
                     }
                 }
             }
 
             // Look for method in cls
-            for (const auto& meth2 : cls->data()->methods) {
-                SEL s2 = sel_registerName(sel_cname(meth2.name));
+            for (const auto& meth2 : cls->data()->methods()) {
+                SEL s2 = sel_registerName(sel_cname(meth2.name()));
                 if (s == s2) {
                     logReplacedMethod(cls->nameForLogging(), s, 
                                       cls->isMetaClass(), cat->name, 
-                                      meth2.imp, meth.imp);
+                                      meth2.imp(false), meth.imp(false));
                     goto complained;
                 }
             }
@@ -762,7 +830,7 @@ class Mixin {
 
         cls = classNSObject();
         if (Domain != Scope::Classes && !isNSObjectSwizzled(NO)) {
-            for (const auto &meth2: as_objc_class(cls)->data()->methods) {
+            for (const auto &meth2: as_objc_class(cls)->data()->methods()) {
                 if (meth == &meth2) {
                     setNSObjectSwizzled(cls, NO);
                     break;
@@ -772,7 +840,7 @@ class Mixin {
 
         cls = metaclassNSObject();
         if (Domain != Scope::Instances && !isNSObjectSwizzled(YES)) {
-            for (const auto &meth2: as_objc_class(cls)->data()->methods) {
+            for (const auto &meth2: as_objc_class(cls)->data()->methods()) {
                 if (meth == &meth2) {
                     setNSObjectSwizzled(cls, YES);
                     break;
@@ -791,7 +859,7 @@ class Mixin {
             setCustom = YES;
         } else if (cls == NSOClass) {
             // NSObject is default but we need to check categories
-            auto &methods = as_objc_class(cls)->data()->methods;
+            auto &methods = as_objc_class(cls)->data()->methods();
             setCustom = Traits::scanMethodLists(methods.beginCategoryMethodLists(),
                                                   methods.endCategoryMethodLists(cls));
         } else if (!isMeta && !as_objc_class(cls)->superclass) {
@@ -803,7 +871,7 @@ class Mixin {
             inherited = YES;
         } else {
             // Not NSObject.
-            auto &methods = as_objc_class(cls)->data()->methods;
+            auto &methods = as_objc_class(cls)->data()->methods();
             setCustom = Traits::scanMethodLists(methods.beginLists(),
                                                   methods.endLists());
         }
@@ -878,7 +946,7 @@ public:
     static void
     scanChangedMethod(Class cls, const method_t *meth)
     {
-        if (fastpath(!Traits::isInterestingSelector(meth->name))) {
+        if (fastpath(!Traits::isInterestingSelector(meth->name()))) {
             return;
         }
 
@@ -924,7 +992,8 @@ struct AWZScanner : scanner::Mixin<AWZScanner, AWZ, PrintCustomAWZ, scanner::Sco
     static bool isInterestingSelector(SEL sel) {
         return sel == @selector(alloc) || sel == @selector(allocWithZone:);
     }
-    static bool scanMethodLists(method_list_t **mlists, method_list_t **end) {
+    template<typename T>
+    static bool scanMethodLists(T *mlists, T *end) {
         SEL sels[2] = { @selector(alloc), @selector(allocWithZone:), };
         return method_lists_contains_any(mlists, end, sels, 2);
     }
@@ -958,7 +1027,8 @@ struct RRScanner : scanner::Mixin<RRScanner, RR, PrintCustomRR
                sel == @selector(allowsWeakReference) ||
                sel == @selector(retainWeakReference);
     }
-    static bool scanMethodLists(method_list_t **mlists, method_list_t **end) {
+    template <typename T>
+    static bool scanMethodLists(T *mlists, T *end) {
         SEL sels[8] = {
             @selector(retain),
             @selector(release),
@@ -993,7 +1063,8 @@ struct CoreScanner : scanner::Mixin<CoreScanner, Core, PrintCustomCore> {
                sel == @selector(isKindOfClass:) ||
                sel == @selector(respondsToSelector:);
     }
-    static bool scanMethodLists(method_list_t **mlists, method_list_t **end) {
+    template <typename T>
+    static bool scanMethodLists(T *mlists, T *end) {
         SEL sels[5] = {
             @selector(new),
             @selector(self),
@@ -1162,7 +1233,7 @@ static UnattachedCategories unattachedCategories;
 
 static bool isBundleClass(Class cls)
 {
-    return cls->data()->ro->flags & RO_FROM_BUNDLE;
+    return cls->data()->ro()->flags & RO_FROM_BUNDLE;
 }
 
 
@@ -1179,19 +1250,25 @@ fixupMethodList(method_list_t *mlist, bool bundleCopy, bool sort)
     
         // Unique selectors in list.
         for (auto& meth : *mlist) {
-            const char *name = sel_cname(meth.name);
-            meth.name = sel_registerNameNoLock(name, bundleCopy);
+            const char *name = sel_cname(meth.name());
+            meth.name() = sel_registerNameNoLock(name, bundleCopy);
         }
     }
 
     // Sort by selector address.
-    if (sort) {
+    // Don't try to sort small lists, as they're immutable.
+    // Don't try to sort big lists of nonstandard size, as stable_sort
+    // won't copy the entries properly.
+    if (sort && !mlist->isSmallList() && mlist->entsize() == method_t::bigSize) {
         method_t::SortBySELAddress sorter;
-        std::stable_sort(mlist->begin(), mlist->end(), sorter);
+        std::stable_sort(&mlist->begin()->big(), &mlist->end()->big(), sorter);
     }
     
-    // Mark method list as uniqued and sorted
-    mlist->setFixedUp();
+    // Mark method list as uniqued and sorted.
+    // Can't mark small lists, since they're immutable.
+    if (!mlist->isSmallList()) {
+        mlist->setFixedUp();
+    }
 }
 
 
@@ -1235,6 +1312,39 @@ prepareMethodLists(Class cls, method_list_t **addedLists, int addedCount,
     }
 }
 
+class_rw_ext_t *
+class_rw_t::extAlloc(const class_ro_t *ro, bool deepCopy)
+{
+    runtimeLock.assertLocked();
+
+    auto rwe = objc::zalloc<class_rw_ext_t>();
+
+    rwe->version = (ro->flags & RO_META) ? 7 : 0;
+
+    method_list_t *list = ro->baseMethods();
+    if (list) {
+        if (deepCopy) list = list->duplicate();
+        rwe->methods.attachLists(&list, 1);
+    }
+
+    // See comments in objc_duplicateClass
+    // property lists and protocol lists historically
+    // have not been deep-copied
+    //
+    // This is probably wrong and ought to be fixed some day
+    property_list_t *proplist = ro->baseProperties;
+    if (proplist) {
+        rwe->properties.attachLists(&proplist, 1);
+    }
+
+    protocol_list_t *protolist = ro->baseProtocols;
+    if (protolist) {
+        rwe->protocols.attachLists(&protolist, 1);
+    }
+
+    set_ro_or_rwe(rwe, ro);
+    return rwe;
+}
 
 // Attach method lists and properties and protocols from categories to a class.
 // Assumes the categories in cats are all loaded and sorted by load order, 
@@ -1272,7 +1382,7 @@ attachCategories(Class cls, const locstamped_category_t *cats_list, uint32_t cat
     uint32_t protocount = 0;
     bool fromBundle = NO;
     bool isMeta = (flags & ATTACH_METACLASS);
-    auto rw = cls->data();
+    auto rwe = cls->data()->extAllocIfNeeded();
 
     for (uint32_t i = 0; i < cats_count; i++) {
         auto& entry = cats_list[i];
@@ -1281,7 +1391,7 @@ attachCategories(Class cls, const locstamped_category_t *cats_list, uint32_t cat
         if (mlist) {
             if (mcount == ATTACH_BUFSIZ) {
                 prepareMethodLists(cls, mlists, mcount, NO, fromBundle);
-                rw->methods.attachLists(mlists, mcount);
+                rwe->methods.attachLists(mlists, mcount);
                 mcount = 0;
             }
             mlists[ATTACH_BUFSIZ - ++mcount] = mlist;
@@ -1292,7 +1402,7 @@ attachCategories(Class cls, const locstamped_category_t *cats_list, uint32_t cat
             entry.cat->propertiesForMeta(isMeta, entry.hi);
         if (proplist) {
             if (propcount == ATTACH_BUFSIZ) {
-                rw->properties.attachLists(proplists, propcount);
+                rwe->properties.attachLists(proplists, propcount);
                 propcount = 0;
             }
             proplists[ATTACH_BUFSIZ - ++propcount] = proplist;
@@ -1301,7 +1411,7 @@ attachCategories(Class cls, const locstamped_category_t *cats_list, uint32_t cat
         protocol_list_t *protolist = entry.cat->protocolsForMeta(isMeta);
         if (protolist) {
             if (protocount == ATTACH_BUFSIZ) {
-                rw->protocols.attachLists(protolists, protocount);
+                rwe->protocols.attachLists(protolists, protocount);
                 protocount = 0;
             }
             protolists[ATTACH_BUFSIZ - ++protocount] = protolist;
@@ -1310,13 +1420,13 @@ attachCategories(Class cls, const locstamped_category_t *cats_list, uint32_t cat
 
     if (mcount > 0) {
         prepareMethodLists(cls, mlists + ATTACH_BUFSIZ - mcount, mcount, NO, fromBundle);
-        rw->methods.attachLists(mlists + ATTACH_BUFSIZ - mcount, mcount);
+        rwe->methods.attachLists(mlists + ATTACH_BUFSIZ - mcount, mcount);
         if (flags & ATTACH_EXISTING) flushCaches(cls);
     }
 
-    rw->properties.attachLists(proplists + ATTACH_BUFSIZ - propcount, propcount);
+    rwe->properties.attachLists(proplists + ATTACH_BUFSIZ - propcount, propcount);
 
-    rw->protocols.attachLists(protolists + ATTACH_BUFSIZ - protocount, protocount);
+    rwe->protocols.attachLists(protolists + ATTACH_BUFSIZ - protocount, protocount);
 }
 
 
@@ -1332,7 +1442,8 @@ static void methodizeClass(Class cls, Class previously)
 
     bool isMeta = cls->isMetaClass();
     auto rw = cls->data();
-    auto ro = rw->ro;
+    auto ro = rw->ro();
+    auto rwe = rw->ext();
 
     // Methodizing for the first time
     if (PrintConnecting) {
@@ -1343,18 +1454,21 @@ static void methodizeClass(Class cls, Class previously)
     // Install methods and properties that the class implements itself.
     method_list_t *list = ro->baseMethods();
     if (list) {
+        if (list->isSmallList() && !_dyld_is_memory_immutable(list, list->byteSize()))
+            _objc_fatal("CLASS: class '%s' %p small method list %p is not in immutable memory",
+                        cls->nameForLogging(), cls, list);
         prepareMethodLists(cls, &list, 1, YES, isBundleClass(cls));
-        rw->methods.attachLists(&list, 1);
+        if (rwe) rwe->methods.attachLists(&list, 1);
     }
 
     property_list_t *proplist = ro->baseProperties;
-    if (proplist) {
-        rw->properties.attachLists(&proplist, 1);
+    if (rwe && proplist) {
+        rwe->properties.attachLists(&proplist, 1);
     }
 
     protocol_list_t *protolist = ro->baseProtocols;
-    if (protolist) {
-        rw->protocols.attachLists(&protolist, 1);
+    if (rwe && protolist) {
+        rwe->protocols.attachLists(&protolist, 1);
     }
 
     // Root classes get bonus method implementations if they don't have 
@@ -1382,12 +1496,12 @@ static void methodizeClass(Class cls, Class previously)
 
 #if DEBUG
     // Debug: sanity-check all SELs; log method list contents
-    for (const auto& meth : rw->methods) {
+    for (const auto& meth : rw->methods()) {
         if (PrintConnecting) {
             _objc_inform("METHOD %c[%s %s]", isMeta ? '+' : '-', 
-                         cls->nameForLogging(), sel_getName(meth.name));
+                         cls->nameForLogging(), sel_getName(meth.name()));
         }
-        ASSERT(sel_registerName(sel_getName(meth.name)) == meth.name); 
+        ASSERT(sel_registerName(sel_getName(meth.name())) == meth.name());
     }
 #endif
 }
@@ -1704,10 +1818,10 @@ static void addFutureNamedClass(const char *name, Class cls)
         _objc_inform("FUTURE: reserving %p for %s", (void*)cls, name);
     }
 
-    class_rw_t *rw = (class_rw_t *)calloc(sizeof(class_rw_t), 1);
+    class_rw_t *rw = objc::zalloc<class_rw_t>();
     class_ro_t *ro = (class_ro_t *)calloc(sizeof(class_ro_t), 1);
     ro->name = strdupIfMutable(name);
-    rw->ro = ro;
+    rw->set_ro(ro);
     cls->setData(rw);
     cls->data()->flags = RO_FUTURE;
 
@@ -2222,16 +2336,8 @@ static NEVER_INLINE Protocol *getProtocol(const char *name)
         if (result) return result;
     }
 
-    // Try table from dyld shared cache
-    // Temporarily check that we are using the new table.  Eventually this check
-    // will always be true.
-    // FIXME: Remove this check when we can
-    if (sharedCacheSupportsProtocolRoots()) {
-        result = getPreoptimizedProtocol(name);
-        if (result) return result;
-    }
-
-    return nil;
+    // Try table from dyld3 closure and dyld shared cache
+    return getPreoptimizedProtocol(name);
 }
 
 
@@ -2345,7 +2451,7 @@ static void reconcileInstanceVariables(Class cls, Class supercls, const class_ro
     */
 
     // Non-fragile ivars - reconcile this class with its superclass
-    const class_ro_t *super_ro = supercls->data()->ro;
+    const class_ro_t *super_ro = supercls->data()->ro();
     
     if (DebugNonFragileIvars) {
         // Debugging: Force non-fragile ivars to slide.
@@ -2367,7 +2473,7 @@ static void reconcileInstanceVariables(Class cls, Class supercls, const class_ro
         {
             uint32_t oldStart = ro->instanceStart;
             class_ro_t *ro_w = make_ro_writeable(rw);
-            ro = rw->ro;
+            ro = rw->ro();
             
             // Find max ivar alignment in class.
             // default to word size to simplify ivar update
@@ -2418,7 +2524,7 @@ static void reconcileInstanceVariables(Class cls, Class supercls, const class_ro
                          super_ro->instanceSize);
         }
         class_ro_t *ro_w = make_ro_writeable(rw);
-        ro = rw->ro;
+        ro = rw->ro();
         moveIvars(ro_w, super_ro->instanceSize);
         gdb_objc_class_changed(cls, OBJC_CLASS_IVARS_CHANGED, ro->name);
     } 
@@ -2437,11 +2543,9 @@ static Class realizeClassWithoutSwift(Class cls, Class previously)
 {
     runtimeLock.assertLocked();
 
-    const class_ro_t *ro;
     class_rw_t *rw;
     Class supercls;
     Class metacls;
-    bool isMeta;
 
     if (!cls) return nil;
     if (cls->isRealized()) return cls;
@@ -2449,26 +2553,25 @@ static Class realizeClassWithoutSwift(Class cls, Class previously)
 
     // fixme verify class is not in an un-dlopened part of the shared cache?
 
-    ro = (const class_ro_t *)cls->data();
+    auto ro = (const class_ro_t *)cls->data();
+    auto isMeta = ro->flags & RO_META;
     if (ro->flags & RO_FUTURE) {
         // This was a future class. rw data is already allocated.
         rw = cls->data();
-        ro = cls->data()->ro;
+        ro = cls->data()->ro();
+        ASSERT(!isMeta);
         cls->changeInfo(RW_REALIZED|RW_REALIZING, RW_FUTURE);
     } else {
         // Normal class. Allocate writeable class data.
-        rw = (class_rw_t *)calloc(sizeof(class_rw_t), 1);
-        rw->ro = ro;
-        rw->flags = RW_REALIZED|RW_REALIZING;
+        rw = objc::zalloc<class_rw_t>();
+        rw->set_ro(ro);
+        rw->flags = RW_REALIZED|RW_REALIZING|isMeta;
         cls->setData(rw);
     }
 
-    isMeta = ro->flags & RO_META;
 #if FAST_CACHE_META
     if (isMeta) cls->cache.setBit(FAST_CACHE_META);
 #endif
-    rw->version = isMeta ? 7 : 0;  // old runtime went up to 6
-
 
     // Choose an index for this class.
     // Sets cls->instancesRequireRawIsa if indexes no more indexes are available
@@ -2943,6 +3046,83 @@ map_images(unsigned count, const char * const paths[],
 }
 
 
+static void load_categories_nolock(header_info *hi) {
+    bool hasClassProperties = hi->info()->hasCategoryClassProperties();
+
+    size_t count;
+    auto processCatlist = [&](category_t * const *catlist) {
+        for (unsigned i = 0; i < count; i++) {
+            category_t *cat = catlist[i];
+            Class cls = remapClass(cat->cls);
+            locstamped_category_t lc{cat, hi};
+
+            if (!cls) {
+                // Category's target class is missing (probably weak-linked).
+                // Ignore the category.
+                if (PrintConnecting) {
+                    _objc_inform("CLASS: IGNORING category \?\?\?(%s) %p with "
+                                 "missing weak-linked target class",
+                                 cat->name, cat);
+                }
+                continue;
+            }
+
+            // Process this category.
+            if (cls->isStubClass()) {
+                // Stub classes are never realized. Stub classes
+                // don't know their metaclass until they're
+                // initialized, so we have to add categories with
+                // class methods or properties to the stub itself.
+                // methodizeClass() will find them and add them to
+                // the metaclass as appropriate.
+                if (cat->instanceMethods ||
+                    cat->protocols ||
+                    cat->instanceProperties ||
+                    cat->classMethods ||
+                    cat->protocols ||
+                    (hasClassProperties && cat->_classProperties))
+                {
+                    objc::unattachedCategories.addForClass(lc, cls);
+                }
+            } else {
+                // First, register the category with its target class.
+                // Then, rebuild the class's method lists (etc) if
+                // the class is realized.
+                if (cat->instanceMethods ||  cat->protocols
+                    ||  cat->instanceProperties)
+                {
+                    if (cls->isRealized()) {
+                        attachCategories(cls, &lc, 1, ATTACH_EXISTING);
+                    } else {
+                        objc::unattachedCategories.addForClass(lc, cls);
+                    }
+                }
+
+                if (cat->classMethods  ||  cat->protocols
+                    ||  (hasClassProperties && cat->_classProperties))
+                {
+                    if (cls->ISA()->isRealized()) {
+                        attachCategories(cls->ISA(), &lc, 1, ATTACH_EXISTING | ATTACH_METACLASS);
+                    } else {
+                        objc::unattachedCategories.addForClass(lc, cls->ISA());
+                    }
+                }
+            }
+        }
+    };
+
+    processCatlist(hi->catlist(&count));
+    processCatlist(hi->catlist2(&count));
+}
+
+static void loadAllCategories() {
+    mutex_locker_t lock(runtimeLock);
+
+    for (auto *hi = FirstHeader; hi != NULL; hi = hi->getNext()) {
+        load_categories_nolock(hi);
+    }
+}
+
 /***********************************************************************
 * load_images
 * Process +load in the given images which are being mapped in by dyld.
@@ -2955,6 +3135,11 @@ extern void prepare_load_methods(const headerType *mhdr);
 void
 load_images(const char *path __unused, const struct mach_header *mh)
 {
+    if (!didInitialAttachCategories && didCallDyldNotifyRegister) {
+        didInitialAttachCategories = true;
+        loadAllCategories();
+    }
+
     // Return without taking locks if there are no +load methods here.
     if (!hasLoadMethods((const headerType *)mh)) return;
 
@@ -3091,9 +3276,9 @@ Class readClass(Class cls, bool headerIsBundle, bool headerIsPreoptimized)
         }
         
         class_rw_t *rw = newCls->data();
-        const class_ro_t *old_ro = rw->ro;
+        const class_ro_t *old_ro = rw->ro();
         memcpy(newCls, cls, sizeof(objc_class));
-        rw->ro = (class_ro_t *)newCls->data();
+        rw->set_ro((class_ro_t *)newCls->data());
         newCls->setData(rw);
         freeIfMutable((char *)old_ro->name);
         free((void *)old_ro);
@@ -3427,7 +3612,6 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
     ts.log("IMAGE TIMES: fix up objc_msgSend_fixup");
 #endif
 
-    bool cacheSupportsProtocolRoots = sharedCacheSupportsProtocolRoots();
 
     // Discover protocols. Fix up protocol refs.
     for (EACH_HEADER) {
@@ -3443,7 +3627,7 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
         // in the shared cache is marked with isCanonical() and that may not
         // be true if some non-shared cache binary was chosen as the canonical
         // definition
-        if (launchTime && isPreoptimized && cacheSupportsProtocolRoots) {
+        if (launchTime && isPreoptimized) {
             if (PrintProtocols) {
                 _objc_inform("PROTOCOLS: Skipping reading protocols in image: %s",
                              hi->fname());
@@ -3470,7 +3654,7 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
         // shared cache definition of a protocol.  We can skip the check on
         // launch, but have to visit @protocol refs for shared cache images
         // loaded later.
-        if (launchTime && cacheSupportsProtocolRoots && hi->isPreoptimized())
+        if (launchTime && hi->isPreoptimized())
             continue;
         protocol_t **protolist = _getObjc2ProtocolRefs(hi, &count);
         for (i = 0; i < count; i++) {
@@ -3480,72 +3664,14 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
 
     ts.log("IMAGE TIMES: fix up @protocol references");
 
-    // Discover categories.
-    for (EACH_HEADER) {
-        bool hasClassProperties = hi->info()->hasCategoryClassProperties();
-
-        auto processCatlist = [&](category_t * const *catlist) {
-            for (i = 0; i < count; i++) {
-                category_t *cat = catlist[i];
-                Class cls = remapClass(cat->cls);
-                locstamped_category_t lc{cat, hi};
-                
-                if (!cls) {
-                    // Category's target class is missing (probably weak-linked).
-                    // Ignore the category.
-                    if (PrintConnecting) {
-                        _objc_inform("CLASS: IGNORING category \?\?\?(%s) %p with "
-                                     "missing weak-linked target class",
-                                     cat->name, cat);
-                    }
-                    continue;
-                }
-                
-                // Process this category.
-                if (cls->isStubClass()) {
-                    // Stub classes are never realized. Stub classes
-                    // don't know their metaclass until they're
-                    // initialized, so we have to add categories with
-                    // class methods or properties to the stub itself.
-                    // methodizeClass() will find them and add them to
-                    // the metaclass as appropriate.
-                    if (cat->instanceMethods ||
-                        cat->protocols ||
-                        cat->instanceProperties ||
-                        cat->classMethods ||
-                        cat->protocols ||
-                        (hasClassProperties && cat->_classProperties))
-                    {
-                        objc::unattachedCategories.addForClass(lc, cls);
-                    }
-                } else {
-                    // First, register the category with its target class.
-                    // Then, rebuild the class's method lists (etc) if
-                    // the class is realized.
-                    if (cat->instanceMethods ||  cat->protocols
-                        ||  cat->instanceProperties)
-                    {
-                        if (cls->isRealized()) {
-                            attachCategories(cls, &lc, 1, ATTACH_EXISTING);
-                        } else {
-                            objc::unattachedCategories.addForClass(lc, cls);
-                        }
-                    }
-                    
-                    if (cat->classMethods  ||  cat->protocols
-                        ||  (hasClassProperties && cat->_classProperties))
-                    {
-                        if (cls->ISA()->isRealized()) {
-                            attachCategories(cls->ISA(), &lc, 1, ATTACH_EXISTING | ATTACH_METACLASS);
-                        } else {
-                            objc::unattachedCategories.addForClass(lc, cls->ISA());
-                        }
-                    }
-                }
-            }
-        };
-        processCatlist(_getObjc2CategoryList(hi, &count));
-        processCatlist(_getObjc2CategoryList2(hi, &count));
+    // Discover categories. Only do this after the initial category
+    // attachment has been done. For categories present at startup,
+    // discovery is deferred until the first load_images call after
+    // the call to _dyld_objc_notify_register completes. rdar://problem/53119145
+    if (didInitialAttachCategories) {
+        for (EACH_HEADER) {
+            load_categories_nolock(hi);
+        }
     }
 
     ts.log("IMAGE TIMES: discover categories");
@@ -3558,8 +3684,7 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
 
     // Realize non-lazy classes (for +load methods and static instances)
     for (EACH_HEADER) {
-        classref_t const *classlist = 
-            _getObjc2NonlazyClassList(hi, &count);
+        classref_t const *classlist = hi->nlclslist(&count);
         for (i = 0; i < count; i++) {
             Class cls = remapClass(classlist[i]);
             if (!cls) continue;
@@ -3739,7 +3864,7 @@ void _unload_image(header_info *hi)
 
     // Ignore __objc_catlist2. We don't support unloading Swift
     // and we never will.
-    category_t * const *catlist = _getObjc2CategoryList(hi, &count);
+    category_t * const *catlist = hi->catlist(&count);
     for (i = 0; i < count; i++) {
         category_t *cat = catlist[i];
         Class cls = remapClass(cat->cls);
@@ -3769,7 +3894,7 @@ void _unload_image(header_info *hi)
         if (cls) classes.insert(cls);
     }
 
-    classlist = _getObjc2NonlazyClassList(hi, &count);
+    classlist = hi->nlclslist(&count);
     for (i = 0; i < count; i++) {
         Class cls = remapClass(classlist[i]);
         if (cls) classes.insert(cls);
@@ -3804,14 +3929,19 @@ struct objc_method_description *
 method_getDescription(Method m)
 {
     if (!m) return nil;
-    return (struct objc_method_description *)m;
+    return m->getDescription();
 }
 
 
 IMP 
 method_getImplementation(Method m)
 {
-    return m ? m->imp : nil;
+    return m ? m->imp(true) : nil;
+}
+
+IMPAndSEL _method_getImplementationAndName(Method m)
+{
+    return { m->imp(true), m->name() };
 }
 
 
@@ -3827,8 +3957,8 @@ method_getName(Method m)
 {
     if (!m) return nil;
 
-    ASSERT(m->name == sel_registerName(sel_getName(m->name)));
-    return m->name;
+    ASSERT(m->name() == sel_registerName(sel_getName(m->name())));
+    return m->name();
 }
 
 
@@ -3842,7 +3972,7 @@ const char *
 method_getTypeEncoding(Method m)
 {
     if (!m) return nil;
-    return m->types;
+    return m->types();
 }
 
 
@@ -3859,8 +3989,8 @@ _method_setImplementation(Class cls, method_t *m, IMP imp)
     if (!m) return nil;
     if (!imp) return nil;
 
-    IMP old = m->imp;
-    m->imp = imp;
+    IMP old = m->imp(false);
+    m->setImp(imp);
 
     // Cache updates are slow if cls is nil (i.e. unknown)
     // RR/AWZ updates are slow if cls is nil (i.e. unknown)
@@ -3889,9 +4019,9 @@ void method_exchangeImplementations(Method m1, Method m2)
 
     mutex_locker_t lock(runtimeLock);
 
-    IMP m1_imp = m1->imp;
-    m1->imp = m2->imp;
-    m2->imp = m1_imp;
+    IMP m1_imp = m1->imp(false);
+    m1->setImp(m2->imp(false));
+    m2->setImp(m1_imp);
 
 
     // RR/AWZ updates are slow because class is unknown
@@ -4052,7 +4182,7 @@ fixupProtocolMethodList(protocol_t *proto, method_list_t *mlist,
     fixupMethodList(mlist, true/*always copy for simplicity*/,
                     !extTypes/*sort if no extended method types*/);
     
-    if (extTypes) {
+    if (extTypes && !mlist->isSmallList()) {
         // Sort method list and extended method types together.
         // fixupMethodList() can't do this.
         // fixme COW stomp
@@ -4063,8 +4193,8 @@ fixupProtocolMethodList(protocol_t *proto, method_list_t *mlist,
                                          required, instance, prefix, junk);
         for (uint32_t i = 0; i < count; i++) {
             for (uint32_t j = i+1; j < count; j++) {
-                method_t& mi = mlist->get(i);
-                method_t& mj = mlist->get(j);
+                auto& mi = mlist->get(i).big();
+                auto& mj = mlist->get(j).big();
                 if (mi.name > mj.name) {
                     std::swap(mi, mj);
                     std::swap(extTypes[prefix+i], extTypes[prefix+j]);
@@ -4303,7 +4433,9 @@ protocol_getMethodDescription(Protocol *p, SEL aSel,
     Method m = 
         protocol_getMethod(newprotocol(p), aSel, 
                            isRequiredMethod, isInstanceMethod, true);
-    if (m) return *method_getDescription(m);
+    // method_getDescription is inefficient for small methods. Don't bother
+    // trying to use it, just make our own.
+    if (m) return (struct objc_method_description){m->name(), (char *)m->types()};
     else return (struct objc_method_description){nil, nil};
 }
 
@@ -4408,8 +4540,8 @@ protocol_copyMethodDescriptionList(Protocol *p,
         result = (struct objc_method_description *)
             calloc(mlist->count + 1, sizeof(struct objc_method_description));
         for (const auto& meth : *mlist) {
-            result[count].name = meth.name;
-            result[count].types = (char *)meth.types;
+            result[count].name = meth.name();
+            result[count].types = (char *)meth.types();
             count++;
         }
     }
@@ -4694,15 +4826,15 @@ static void
 protocol_addMethod_nolock(method_list_t*& list, SEL name, const char *types)
 {
     if (!list) {
-        list = (method_list_t *)calloc(sizeof(method_list_t), 1);
-        list->entsizeAndFlags = sizeof(list->first);
+        list = (method_list_t *)calloc(method_list_t::byteSize(sizeof(struct method_t::big), 1), 1);
+        list->entsizeAndFlags = sizeof(struct method_t::big);
         list->setFixedUp();
     } else {
         size_t size = list->byteSize() + list->entsize();
         list = (method_list_t *)realloc(list, size);
     }
 
-    method_t& meth = list->get(list->count++);
+    auto &meth = list->get(list->count++).big();
     meth.name = name;
     meth.types = types ? strdupIfMutable(types) : "";
     meth.imp = nil;
@@ -4750,15 +4882,15 @@ protocol_addProperty_nolock(property_list_t *&plist, const char *name,
                             unsigned int count)
 {
     if (!plist) {
-        plist = (property_list_t *)calloc(sizeof(property_list_t), 1);
+        plist = (property_list_t *)calloc(property_list_t::byteSize(sizeof(property_t), 1), 1);
         plist->entsizeAndFlags = sizeof(property_t);
+        plist->count = 1;
     } else {
-        plist = (property_list_t *)
-            realloc(plist, sizeof(property_list_t) 
-                    + plist->count * plist->entsize());
+        plist->count++;
+        plist = (property_list_t *)realloc(plist, plist->byteSize());
     }
 
-    property_t& prop = plist->get(plist->count++);
+    property_t& prop = plist->get(plist->count - 1);
     prop.name = strdupIfMutable(name);
     prop.attributes = copyPropertyAttributeString(attrs, count);
 }
@@ -4969,7 +5101,7 @@ objc_copyProtocolList(unsigned int *outCount)
     // Find all the protocols from the pre-optimized images.  These protocols
     // won't be in the protocol map.
     objc::DenseMap<const char*, Protocol*> preoptimizedProtocols;
-    if (sharedCacheSupportsProtocolRoots()) {
+    {
         header_info *hi;
         for (hi = FirstHeader; hi; hi = hi->getNext()) {
             if (!hi->hasPreoptimizedProtocols())
@@ -5055,16 +5187,17 @@ class_copyMethodList(Class cls, unsigned int *outCount)
     }
 
     mutex_locker_t lock(runtimeLock);
+    const auto methods = cls->data()->methods();
     
     ASSERT(cls->isRealized());
 
-    count = cls->data()->methods.count();
+    count = methods.count();
 
     if (count > 0) {
         result = (Method *)malloc((count + 1) * sizeof(Method));
         
         count = 0;
-        for (auto& meth : cls->data()->methods) {
+        for (auto& meth : methods) {
             result[count++] = &meth;
         }
         result[count] = nil;
@@ -5096,7 +5229,7 @@ class_copyIvarList(Class cls, unsigned int *outCount)
 
     ASSERT(cls->isRealized());
     
-    if ((ivars = cls->data()->ro->ivars)  &&  ivars->count) {
+    if ((ivars = cls->data()->ro()->ivars)  &&  ivars->count) {
         result = (Ivar *)malloc((ivars->count+1) * sizeof(Ivar));
         
         for (auto& ivar : *ivars) {
@@ -5134,12 +5267,13 @@ class_copyPropertyList(Class cls, unsigned int *outCount)
     auto rw = cls->data();
 
     property_t **result = nil;
-    unsigned int count = rw->properties.count();
+    auto const properties = rw->properties();
+    unsigned int count = properties.count();
     if (count > 0) {
         result = (property_t **)malloc((count + 1) * sizeof(property_t *));
 
         count = 0;
-        for (auto& prop : rw->properties) {
+        for (auto& prop : properties) {
             result[count++] = &prop;
         }
         result[count] = nil;
@@ -5168,12 +5302,12 @@ objc_class::getLoadMethod()
     ASSERT(!isMetaClass());
     ASSERT(ISA()->isMetaClass());
 
-    mlist = ISA()->data()->ro->baseMethods();
+    mlist = ISA()->data()->ro()->baseMethods();
     if (mlist) {
         for (const auto& meth : *mlist) {
-            const char *name = sel_cname(meth.name);
+            const char *name = sel_cname(meth.name());
             if (0 == strcmp(name, "load")) {
-                return meth.imp;
+                return meth.imp(false);
             }
         }
     }
@@ -5241,9 +5375,9 @@ _category_getLoadMethod(Category cat)
     mlist = cat->classMethods;
     if (mlist) {
         for (const auto& meth : *mlist) {
-            const char *name = sel_cname(meth.name);
+            const char *name = sel_cname(meth.name());
             if (0 == strcmp(name, "load")) {
-                return meth.imp;
+                return meth.imp(false);
             }
         }
     }
@@ -5283,18 +5417,19 @@ class_copyProtocolList(Class cls, unsigned int *outCount)
     }
 
     mutex_locker_t lock(runtimeLock);
+    const auto protocols = cls->data()->protocols();
 
     checkIsKnownClass(cls);
 
     ASSERT(cls->isRealized());
     
-    count = cls->data()->protocols.count();
+    count = protocols.count();
 
     if (count > 0) {
         result = (Protocol **)malloc((count+1) * sizeof(Protocol *));
 
         count = 0;
-        for (const auto& proto : cls->data()->protocols) {
+        for (const auto& proto : protocols) {
             result[count++] = (Protocol *)remapProtocol(proto);
         }
         result[count] = nil;
@@ -5377,7 +5512,7 @@ copyClassNamesForImage_nolock(header_info *hi, unsigned int *outCount)
     for (size_t i = 0; i < count; i++) {
         Class cls = remapClass(classlist[i]);
         if (cls) {
-            names[i-shift] = cls->demangledName();
+            names[i-shift] = cls->demangledName(/* needs lock */false);
         } else {
             shift++;  // ignored weak-linked class
         }
@@ -5495,7 +5630,13 @@ objc_class::nameForLogging()
 {
     // Handle the easy case directly.
     if (isRealized()  ||  isFuture()) {
-        if (data()->demangledName) return data()->demangledName;
+        if (!isAnySwift()) {
+            return data()->ro()->name;
+        }
+        auto rwe = data()->ext();
+        if (rwe && rwe->demangledName) {
+            return rwe->demangledName;
+        }
     }
 
     char *result;
@@ -5518,26 +5659,46 @@ objc_class::nameForLogging()
 mutex_t DemangleCacheLock;
 static objc::DenseSet<const char *> *DemangleCache;
 const char *
-objc_class::demangledName()
+objc_class::demangledName(bool needsLock)
 {
+    if (!needsLock) {
+        runtimeLock.assertLocked();
+    }
+
     // Return previously demangled name if available.
     if (isRealized()  ||  isFuture()) {
-        if (data()->demangledName) return data()->demangledName;
+        // Swift metaclasses don't have the is-Swift bit.
+        // We can't take this shortcut for them.
+        if (!isMetaClass() && !isAnySwift()) {
+            return data()->ro()->name;
+        }
+        auto rwe = data()->ext();
+        if (rwe && rwe->demangledName) {
+            return rwe->demangledName;
+        }
     }
 
     // Try demangling the mangled name.
     const char *mangled = mangledName();
     char *de = copySwiftV1DemangledName(mangled);
+    class_rw_ext_t *rwe;
+
     if (isRealized()  ||  isFuture()) {
-        // Class is already realized or future. 
+        if (needsLock) {
+            mutex_locker_t lock(runtimeLock);
+            rwe = data()->extAllocIfNeeded();
+        } else {
+            rwe = data()->extAllocIfNeeded();
+        }
+        // Class is already realized or future.
         // Save demangling result in rw data.
         // We may not own runtimeLock so use an atomic operation instead.
         if (! OSAtomicCompareAndSwapPtrBarrier(nil, (void*)(de ?: mangled), 
-                                               (void**)&data()->demangledName)) 
+                                               (void**)&rwe->demangledName))
         {
             if (de) free(de);
         }
-        return data()->demangledName;
+        return rwe->demangledName;
     }
 
     // Class is not yet realized.
@@ -5557,7 +5718,6 @@ objc_class::demangledName()
     // Only objc_copyClassNamesForImage() should get here.
     // fixme lldb's calls to class_getName() can also get here when
     // interrogating the dyld shared cache. (rdar://27258517)
-    // fixme runtimeLock.assertLocked();
     // fixme ASSERT(realize);
 
     const char *cached;
@@ -5583,7 +5743,7 @@ const char *class_getName(Class cls)
     if (!cls) return "nil";
     // fixme lldb calls class_getName() on unrealized classes (rdar://27258517)
     // ASSERT(cls->isRealized()  ||  cls->isFuture());
-    return cls->demangledName();
+    return cls->demangledName(/* needs lock */true);
 }
 
 /***********************************************************************
@@ -5608,7 +5768,11 @@ class_getVersion(Class cls)
 {
     if (!cls) return 0;
     ASSERT(cls->isRealized());
-    return cls->data()->version;
+    auto rwe = cls->data()->ext();
+    if (rwe) {
+        return rwe->version;
+    }
+    return cls->isMetaClass() ? 7 : 0;
 }
 
 
@@ -5622,7 +5786,13 @@ class_setVersion(Class cls, int version)
 {
     if (!cls) return;
     ASSERT(cls->isRealized());
-    cls->data()->version = version;
+    auto rwe = cls->data()->ext();
+    if (!rwe) {
+        mutex_locker_t lock(runtimeLock);
+        rwe = cls->data()->extAllocIfNeeded();
+    }
+
+    rwe->version = version;
 }
 
 /***********************************************************************
@@ -5633,25 +5803,26 @@ findMethodInSortedMethodList(SEL key, const method_list_t *list)
 {
     ASSERT(list);
 
-    const method_t * const first = &list->first;
-    const method_t *base = first;
-    const method_t *probe;
+    auto first = list->begin();
+    auto base = first;
+    decltype(first) probe;
+
     uintptr_t keyValue = (uintptr_t)key;
     uint32_t count;
     
     for (count = list->count; count != 0; count >>= 1) {
         probe = base + (count >> 1);
         
-        uintptr_t probeValue = (uintptr_t)probe->name;
+        uintptr_t probeValue = (uintptr_t)probe->name();
         
         if (keyValue == probeValue) {
             // `probe` is a match.
             // Rewind looking for the *first* occurrence of this value.
             // This is required for correct category overrides.
-            while (probe > first && keyValue == (uintptr_t)probe[-1].name) {
+            while (probe > first && keyValue == (uintptr_t)(probe - 1)->name()) {
                 probe--;
             }
-            return (method_t *)probe;
+            return &*probe;
         }
         
         if (keyValue > probeValue) {
@@ -5667,14 +5838,14 @@ ALWAYS_INLINE static method_t *
 search_method_list_inline(const method_list_t *mlist, SEL sel)
 {
     int methodListIsFixedUp = mlist->isFixedUp();
-    int methodListHasExpectedSize = mlist->entsize() == sizeof(method_t);
+    int methodListHasExpectedSize = mlist->isExpectedSize();
     
     if (fastpath(methodListIsFixedUp && methodListHasExpectedSize)) {
         return findMethodInSortedMethodList(sel, mlist);
     } else {
         // Linear search of unsorted method list
         for (auto& meth : *mlist) {
-            if (meth.name == sel) return &meth;
+            if (meth.name() == sel) return &meth;
         }
     }
 
@@ -5682,7 +5853,7 @@ search_method_list_inline(const method_list_t *mlist, SEL sel)
     // sanity-check negative results
     if (mlist->isFixedUp()) {
         for (auto& meth : *mlist) {
-            if (meth.name == sel) {
+            if (meth.name() == sel) {
                 _objc_fatal("linear search worked when binary search did not");
             }
         }
@@ -5701,14 +5872,15 @@ search_method_list(const method_list_t *mlist, SEL sel)
 /***********************************************************************
  * method_lists_contains_any
  **********************************************************************/
+template<typename T>
 static NEVER_INLINE bool
-method_lists_contains_any(method_list_t **mlists, method_list_t **end,
+method_lists_contains_any(T *mlists, T *end,
                           SEL sels[], size_t selcount)
 {
     while (mlists < end) {
         const method_list_t *mlist = *mlists++;
         int methodListIsFixedUp = mlist->isFixedUp();
-        int methodListHasExpectedSize = mlist->entsize() == sizeof(method_t);
+        int methodListHasExpectedSize = mlist->entsize() == sizeof(struct method_t::big);
 
         if (fastpath(methodListIsFixedUp && methodListHasExpectedSize)) {
             for (size_t i = 0; i < selcount; i++) {
@@ -5719,7 +5891,7 @@ method_lists_contains_any(method_list_t **mlists, method_list_t **end,
         } else {
             for (auto& meth : *mlist) {
                 for (size_t i = 0; i < selcount; i++) {
-                    if (meth.name == sels[i]) {
+                    if (meth.name() == sels[i]) {
                         return true;
                     }
                 }
@@ -5743,8 +5915,9 @@ getMethodNoSuper_nolock(Class cls, SEL sel)
     // fixme nil cls? 
     // fixme nil sel?
 
-    for (auto mlists = cls->data()->methods.beginLists(), 
-              end = cls->data()->methods.endLists(); 
+    auto const methods = cls->data()->methods();
+    for (auto mlists = methods.beginLists(),
+              end = methods.endLists();
          mlists != end;
          ++mlists)
     {
@@ -6016,8 +6189,6 @@ IMP lookUpImpOrForward(id inst, SEL sel, Class cls, int behavior)
     // To make these harder we want to make sure this is a class that was
     // either built into the binary or legitimately registered through
     // objc_duplicateClass, objc_initializeClassPair or objc_allocateClassPair.
-    //
-    // TODO: this check is quite costly during process startup.
     checkIsKnownClass(cls);
 
     if (slowpath(!cls->isRealized())) {
@@ -6049,7 +6220,7 @@ IMP lookUpImpOrForward(id inst, SEL sel, Class cls, int behavior)
         // curClass method list.
         Method meth = getMethodNoSuper_nolock(curClass, sel);
         if (meth) {
-            imp = meth->imp;
+            imp = meth->imp(false);
             goto done;
         }
 
@@ -6122,8 +6293,8 @@ IMP lookupMethodInClassAndLoadCache(Class cls, SEL sel)
 
     if (meth) {
         // Hit in method list. Cache it.
-        cache_fill(cls, sel, meth->imp, nil);
-        return meth->imp;
+        cache_fill(cls, sel, meth->imp(false), nil);
+        return meth->imp(false);
     } else {
         // Miss in method list. Cache objc_msgForward.
         cache_fill(cls, sel, _objc_msgForward_impcache, nil);
@@ -6148,7 +6319,7 @@ objc_property_t class_getProperty(Class cls, const char *name)
     ASSERT(cls->isRealized());
 
     for ( ; cls; cls = cls->superclass) {
-        for (auto& prop : cls->data()->properties) {
+        for (auto& prop : cls->data()->properties()) {
             if (0 == strcmp(name, prop.name)) {
                 return (objc_property_t)&prop;
             }
@@ -6290,7 +6461,7 @@ adjustCustomFlagsForMethodChange(Class cls, method_t *meth)
 const uint8_t *
 class_getIvarLayout(Class cls)
 {
-    if (cls) return cls->data()->ro->ivarLayout;
+    if (cls) return cls->data()->ro()->ivarLayout;
     else return nil;
 }
 
@@ -6304,7 +6475,7 @@ class_getIvarLayout(Class cls)
 const uint8_t *
 class_getWeakIvarLayout(Class cls)
 {
-    if (cls) return cls->data()->ro->weakIvarLayout;
+    if (cls) return cls->data()->ro()->weakIvarLayout;
     else return nil;
 }
 
@@ -6388,7 +6559,7 @@ static ivar_t *getIvar(Class cls, const char *name)
 
     const ivar_list_t *ivars;
     ASSERT(cls->isRealized());
-    if ((ivars = cls->data()->ro->ivars)) {
+    if ((ivars = cls->data()->ro()->ivars)) {
         for (auto& ivar : *ivars) {
             if (!ivar.offset) continue;  // anonymous bitfield
 
@@ -6413,7 +6584,7 @@ Class _class_getClassForIvar(Class cls, Ivar ivar)
     mutex_locker_t lock(runtimeLock);
 
     for ( ; cls; cls = cls->superclass) {
-        if (auto ivars = cls->data()->ro->ivars) {
+        if (auto ivars = cls->data()->ro()->ivars) {
             if (ivars->containsIvar(ivar)) {
                 return cls;
             }
@@ -6463,7 +6634,7 @@ BOOL class_conformsToProtocol(Class cls, Protocol *proto_gen)
     
     ASSERT(cls->isRealized());
     
-    for (const auto& proto_ref : cls->data()->protocols) {
+    for (const auto& proto_ref : cls->data()->protocols()) {
         protocol_t *p = remapProtocol(proto_ref);
         if (p == proto || protocol_conformsToProtocol_nolock(p, proto)) {
             return YES;
@@ -6495,23 +6666,26 @@ addMethod(Class cls, SEL name, IMP imp, const char *types, bool replace)
     if ((m = getMethodNoSuper_nolock(cls, name))) {
         // already exists
         if (!replace) {
-            result = m->imp;
+            result = m->imp(false);
         } else {
             result = _method_setImplementation(cls, m, imp);
         }
     } else {
+        auto rwe = cls->data()->extAllocIfNeeded();
+
         // fixme optimize
         method_list_t *newlist;
-        newlist = (method_list_t *)calloc(sizeof(*newlist), 1);
+        newlist = (method_list_t *)calloc(method_list_t::byteSize(method_t::bigSize, 1), 1);
         newlist->entsizeAndFlags = 
-            (uint32_t)sizeof(method_t) | fixed_up_method_list;
+            (uint32_t)sizeof(struct method_t::big) | fixed_up_method_list;
         newlist->count = 1;
-        newlist->first.name = name;
-        newlist->first.types = strdupIfMutable(types);
-        newlist->first.imp = imp;
+        auto &first = newlist->begin()->big();
+        first.name = name;
+        first.types = strdupIfMutable(types);
+        first.imp = imp;
 
         prepareMethodLists(cls, &newlist, 1, NO, NO);
-        cls->data()->methods.attachLists(&newlist, 1);
+        rwe->methods.attachLists(&newlist, 1);
         flushCaches(cls);
 
         result = nil;
@@ -6540,13 +6714,11 @@ addMethods(Class cls, const SEL *names, const IMP *imps, const char **types,
     ASSERT(cls->isRealized());
     
     method_list_t *newlist;
-    size_t newlistSize = method_list_t::byteSize(sizeof(method_t), count);
+    size_t newlistSize = method_list_t::byteSize(sizeof(struct method_t::big), count);
     newlist = (method_list_t *)calloc(newlistSize, 1);
     newlist->entsizeAndFlags =
-        (uint32_t)sizeof(method_t) | fixed_up_method_list;
+        (uint32_t)sizeof(struct method_t::big) | fixed_up_method_list;
     newlist->count = 0;
-    
-    method_t *newlistMethods = &newlist->first;
     
     SEL *failedNames = nil;
     uint32_t failedCount = 0;
@@ -6563,29 +6735,31 @@ addMethods(Class cls, const SEL *names, const IMP *imps, const char **types,
                     failedNames = (SEL *)calloc(sizeof(*failedNames),
                                                 count + 1);
                 }
-                failedNames[failedCount] = m->name;
+                failedNames[failedCount] = m->name();
                 failedCount++;
             } else {
                 _method_setImplementation(cls, m, imps[i]);
             }
         } else {
-            method_t *newmethod = &newlistMethods[newlist->count];
-            newmethod->name = names[i];
-            newmethod->types = strdupIfMutable(types[i]);
-            newmethod->imp = imps[i];
+            auto &newmethod = newlist->end()->big();
+            newmethod.name = names[i];
+            newmethod.types = strdupIfMutable(types[i]);
+            newmethod.imp = imps[i];
             newlist->count++;
         }
     }
     
     if (newlist->count > 0) {
+        auto rwe = cls->data()->extAllocIfNeeded();
+
         // fixme resize newlist because it may have been over-allocated above.
         // Note that realloc() alone doesn't work due to ptrauth.
         
         method_t::SortBySELAddress sorter;
-        std::stable_sort(newlist->begin(), newlist->end(), sorter);
+        std::stable_sort(&newlist->begin()->big(), &newlist->end()->big(), sorter);
         
         prepareMethodLists(cls, &newlist, 1, NO, NO);
-        cls->data()->methods.attachLists(&newlist, 1);
+        rwe->methods.attachLists(&newlist, 1);
         flushCaches(cls);
     } else {
         // Attaching the method list to the class consumes it. If we don't
@@ -6685,13 +6859,13 @@ class_addIvar(Class cls, const char *name, size_t size,
     // fixme allocate less memory here
     
     ivar_list_t *oldlist, *newlist;
-    if ((oldlist = (ivar_list_t *)cls->data()->ro->ivars)) {
+    if ((oldlist = (ivar_list_t *)cls->data()->ro()->ivars)) {
         size_t oldsize = oldlist->byteSize();
         newlist = (ivar_list_t *)calloc(oldsize + oldlist->entsize(), 1);
         memcpy(newlist, oldlist, oldsize);
         free(oldlist);
     } else {
-        newlist = (ivar_list_t *)calloc(sizeof(ivar_list_t), 1);
+        newlist = (ivar_list_t *)calloc(ivar_list_t::byteSize(sizeof(ivar_t), 1), 1);
         newlist->entsizeAndFlags = (uint32_t)sizeof(ivar_t);
     }
 
@@ -6735,6 +6909,7 @@ BOOL class_addProtocol(Class cls, Protocol *protocol_gen)
     if (class_conformsToProtocol(cls, protocol_gen)) return NO;
 
     mutex_locker_t lock(runtimeLock);
+    auto rwe = cls->data()->extAllocIfNeeded();
 
     ASSERT(cls->isRealized());
     
@@ -6744,7 +6919,7 @@ BOOL class_addProtocol(Class cls, Protocol *protocol_gen)
     protolist->count = 1;
     protolist->list[0] = (protocol_ref_t)protocol;
 
-    cls->data()->protocols.attachLists(&protolist, 1);
+    rwe->protocols.attachLists(&protolist, 1);
 
     // fixme metaclass?
 
@@ -6779,17 +6954,18 @@ _class_addProperty(Class cls, const char *name,
     }
     else {
         mutex_locker_t lock(runtimeLock);
+        auto rwe = cls->data()->extAllocIfNeeded();
         
         ASSERT(cls->isRealized());
         
         property_list_t *proplist = (property_list_t *)
-            malloc(sizeof(*proplist));
+            malloc(property_list_t::byteSize(sizeof(property_t), 1));
         proplist->count = 1;
-        proplist->entsizeAndFlags = sizeof(proplist->first);
-        proplist->first.name = strdupIfMutable(name);
-        proplist->first.attributes = copyPropertyAttributeString(attrs, count);
+        proplist->entsizeAndFlags = sizeof(property_t);
+        proplist->begin()->name = strdupIfMutable(name);
+        proplist->begin()->attributes = copyPropertyAttributeString(attrs, count);
         
-        cls->data()->properties.attachLists(&proplist, 1);
+        rwe->properties.attachLists(&proplist, 1);
         
         return YES;
     }
@@ -6910,6 +7086,10 @@ objc_duplicateClass(Class original, const char *name,
 
     checkIsKnownClass(original);
 
+    auto orig_rw  = original->data();
+    auto orig_rwe = orig_rw->ext();
+    auto orig_ro  = orig_rw->ro();
+
     ASSERT(original->isRealized());
     ASSERT(!original->isMetaClass());
 
@@ -6920,23 +7100,31 @@ objc_duplicateClass(Class original, const char *name,
 
     duplicate->cache.initializeToEmpty();
 
-    class_rw_t *rw = (class_rw_t *)calloc(sizeof(*original->data()), 1);
-    rw->flags = (original->data()->flags | RW_COPIED_RO | RW_REALIZING);
-    rw->version = original->data()->version;
+    class_rw_t *rw = objc::zalloc<class_rw_t>();
+    rw->flags = (orig_rw->flags | RW_COPIED_RO | RW_REALIZING);
     rw->firstSubclass = nil;
     rw->nextSiblingClass = nil;
 
     duplicate->bits = original->bits;
     duplicate->setData(rw);
 
-    rw->ro = original->data()->ro->duplicate();
-    *(char **)&rw->ro->name = strdupIfMutable(name);
+    auto ro = orig_ro->duplicate();
+    *(char **)&ro->name = strdupIfMutable(name);
+    rw->set_ro(ro);
 
-    rw->methods = original->data()->methods.duplicate();
+    if (orig_rwe) {
+        auto rwe = rw->extAllocIfNeeded();
+        rwe->version = orig_rwe->version;
+        orig_rwe->methods.duplicateInto(rwe->methods);
 
-    // fixme dies when categories are added to the base
-    rw->properties = original->data()->properties;
-    rw->protocols = original->data()->protocols;
+        // fixme dies when categories are added to the base
+        rwe->properties = orig_rwe->properties;
+        rwe->protocols = orig_rwe->protocols;
+    } else if (ro->baseMethods()) {
+        // if we have base methods, we need to make a deep copy
+        // which requires a class_rw_ext_t to be allocated
+        rw->deepCopy(ro);
+    }
 
     duplicate->chooseClassArrayIndex();
 
@@ -6949,13 +7137,12 @@ objc_duplicateClass(Class original, const char *name,
 
     // Don't methodize class - construction above is correct
 
-    addNamedClass(duplicate, duplicate->data()->ro->name);
+    addNamedClass(duplicate, ro->name);
     addClassTableEntry(duplicate, /*addMeta=*/false);
     
     if (PrintConnecting) {
         _objc_inform("CLASS: realizing class '%s' (duplicate of %s) %p %p", 
-                     name, original->nameForLogging(), 
-                     (void*)duplicate, duplicate->data()->ro);
+                     name, original->nameForLogging(), (void*)duplicate, ro);
     }
 
     duplicate->clearInfo(RW_REALIZING);
@@ -6976,35 +7163,35 @@ static void objc_initializeClassPair_internal(Class superclass, const char *name
     runtimeLock.assertLocked();
 
     class_ro_t *cls_ro_w, *meta_ro_w;
+    class_rw_t *cls_rw_w, *meta_rw_w;
     
-    cls->setData((class_rw_t *)calloc(sizeof(class_rw_t), 1));
-    meta->setData((class_rw_t *)calloc(sizeof(class_rw_t), 1));
+    cls_rw_w   = objc::zalloc<class_rw_t>();
+    meta_rw_w  = objc::zalloc<class_rw_t>();
     cls_ro_w   = (class_ro_t *)calloc(sizeof(class_ro_t), 1);
     meta_ro_w  = (class_ro_t *)calloc(sizeof(class_ro_t), 1);
-    cls->data()->ro = cls_ro_w;
-    meta->data()->ro = meta_ro_w;
+
+    cls->setData(cls_rw_w);
+    cls_rw_w->set_ro(cls_ro_w);
+    meta->setData(meta_rw_w);
+    meta_rw_w->set_ro(meta_ro_w);
 
     // Set basic info
 
-    cls->data()->flags = RW_CONSTRUCTING | RW_COPIED_RO | RW_REALIZED | RW_REALIZING;
-    meta->data()->flags = RW_CONSTRUCTING | RW_COPIED_RO | RW_REALIZED | RW_REALIZING;
-    cls->data()->version = 0;
-    meta->data()->version = 7;
+    cls_rw_w->flags = RW_CONSTRUCTING | RW_COPIED_RO | RW_REALIZED | RW_REALIZING;
+    meta_rw_w->flags = RW_CONSTRUCTING | RW_COPIED_RO | RW_REALIZED | RW_REALIZING | RW_META;
 
     cls_ro_w->flags = 0;
     meta_ro_w->flags = RO_META;
-    if (!superclass) {
-        cls_ro_w->flags |= RO_ROOT;
-        meta_ro_w->flags |= RO_ROOT;
-    }
     if (superclass) {
         uint32_t flagsToCopy = RW_FORBIDS_ASSOCIATED_OBJECTS;
-        cls->data()->flags |= superclass->data()->flags & flagsToCopy;
+        cls_rw_w->flags |= superclass->data()->flags & flagsToCopy;
         cls_ro_w->instanceStart = superclass->unalignedInstanceSize();
         meta_ro_w->instanceStart = superclass->ISA()->unalignedInstanceSize();
         cls->setInstanceSize(cls_ro_w->instanceStart);
         meta->setInstanceSize(meta_ro_w->instanceStart);
     } else {
+        cls_ro_w->flags |= RO_ROOT;
+        meta_ro_w->flags |= RO_ROOT;
         cls_ro_w->instanceStart = 0;
         meta_ro_w->instanceStart = (uint32_t)sizeof(objc_class);
         cls->setInstanceSize((uint32_t)sizeof(id));  // just an isa
@@ -7149,7 +7336,7 @@ void objc_registerClassPair(Class cls)
         (cls->ISA()->data()->flags & RW_CONSTRUCTED)) 
     {
         _objc_inform("objc_registerClassPair: class '%s' was already "
-                     "registered!", cls->data()->ro->name);
+                     "registered!", cls->data()->ro()->name);
         return;
     }
 
@@ -7158,7 +7345,7 @@ void objc_registerClassPair(Class cls)
     {
         _objc_inform("objc_registerClassPair: class '%s' was not "
                      "allocated with objc_allocateClassPair!", 
-                     cls->data()->ro->name);
+                     cls->data()->ro()->name);
         return;
     }
 
@@ -7167,7 +7354,7 @@ void objc_registerClassPair(Class cls)
     cls->changeInfo(RW_CONSTRUCTED, RW_CONSTRUCTING | RW_REALIZING);
 
     // Add to named class table.
-    addNamedClass(cls, cls->data()->ro->name);
+    addNamedClass(cls, cls->data()->ro()->name);
 }
 
 
@@ -7258,14 +7445,17 @@ static void free_class(Class cls)
     if (! cls->isRealized()) return;
 
     auto rw = cls->data();
-    auto ro = rw->ro;
+    auto rwe = rw->ext();
+    auto ro = rw->ro();
 
     cache_delete(cls);
-    
-    for (auto& meth : rw->methods) {
-        try_free(meth.types);
+
+    if (rwe) {
+        for (auto& meth : rwe->methods) {
+            try_free(meth.types());
+        }
+        rwe->methods.tryFree();
     }
-    rw->methods.tryFree();
     
     const ivar_list_t *ivars = ro->ivars;
     if (ivars) {
@@ -7277,19 +7467,22 @@ static void free_class(Class cls)
         try_free(ivars);
     }
 
-    for (auto& prop : rw->properties) {
-        try_free(prop.name);
-        try_free(prop.attributes);
-    }
-    rw->properties.tryFree();
+    if (rwe) {
+        for (auto& prop : rwe->properties) {
+            try_free(prop.name);
+            try_free(prop.attributes);
+        }
+        rwe->properties.tryFree();
 
-    rw->protocols.tryFree();
+        rwe->protocols.tryFree();
+    }
     
     try_free(ro->ivarLayout);
     try_free(ro->weakIvarLayout);
     try_free(ro->name);
     try_free(ro);
-    try_free(rw);
+    objc::zfree(rwe);
+    objc::zfree(rw);
     try_free(cls);
 }
 
@@ -7307,25 +7500,25 @@ void objc_disposeClassPair(Class cls)
         // disposing still-unregistered class is OK!
         _objc_inform("objc_disposeClassPair: class '%s' was not "
                      "allocated with objc_allocateClassPair!", 
-                     cls->data()->ro->name);
+                     cls->data()->ro()->name);
         return;
     }
 
     if (cls->isMetaClass()) {
         _objc_inform("objc_disposeClassPair: class '%s' is a metaclass, "
-                     "not a class!", cls->data()->ro->name);
+                     "not a class!", cls->data()->ro()->name);
         return;
     }
 
     // Shouldn't have any live subclasses.
     if (cls->data()->firstSubclass) {
         _objc_inform("objc_disposeClassPair: class '%s' still has subclasses, "
-                     "including '%s'!", cls->data()->ro->name, 
+                     "including '%s'!", cls->data()->ro()->name,
                      cls->data()->firstSubclass->nameForLogging());
     }
     if (cls->ISA()->data()->firstSubclass) {
         _objc_inform("objc_disposeClassPair: class '%s' still has subclasses, "
-                     "including '%s'!", cls->data()->ro->name, 
+                     "including '%s'!", cls->data()->ro()->name,
                      cls->ISA()->data()->firstSubclass->nameForLogging());
     }
 

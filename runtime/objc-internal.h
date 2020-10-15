@@ -287,6 +287,8 @@ enum
     OBJC_TAG_UIColor           = 17,
     OBJC_TAG_CGColor           = 18,
     OBJC_TAG_NSIndexSet        = 19,
+    OBJC_TAG_NSMethodSignature = 20,
+    OBJC_TAG_UTTypeRecord      = 21,
 
     OBJC_TAG_First60BitPayload = 0, 
     OBJC_TAG_Last60BitPayload  = 6, 
@@ -944,7 +946,7 @@ typedef enum {
         }                                                                       \
     }                                                                           \
     -(NSUInteger)retainCount {                                                  \
-        return (_rc_ivar + 2) >> 1;                                             \
+        return (NSUInteger)(_rc_ivar + 2) >> 1;                                 \
     }                                                                           \
     -(BOOL)_tryRetain {                                                         \
         __typeof__(_rc_ivar) _prev;                                             \
@@ -966,12 +968,12 @@ typedef enum {
         } else if (_rc_ivar < -2) {                                             \
             __builtin_trap(); /* BUG: over-release elsewhere */                 \
         }                                                                       \
-        return _rc_ivar & 1;                                                    \
+        return (_rc_ivar & 1) != 0;                                             \
     }
 
 #define _OBJC_SUPPORTED_INLINE_REFCNT_LOGIC(_rc_ivar, _dealloc2main)            \
     _OBJC_SUPPORTED_INLINE_REFCNT_LOGIC_BLOCK(_rc_ivar, (^(id _self_ __attribute__((unused))) { \
-        if (_dealloc2main && !pthread_main_np()) {                              \
+        if ((_dealloc2main) && !pthread_main_np()) {                            \
             return _OBJC_DEALLOC_OBJECT_LATER;                                  \
         } else {                                                                \
             return _OBJC_DEALLOC_OBJECT_NOW;                                    \

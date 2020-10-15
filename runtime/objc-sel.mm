@@ -27,11 +27,6 @@
 #include "objc-cache.h"
 #include "DenseMapExtras.h"
 
-#if SUPPORT_PREOPT
-static const objc_selopt_t *builtins = NULL;
-static bool useDyldSelectorLookup = false;
-#endif
-
 
 static objc::ExplicitInitDenseSet<const char *> namedSelectors;
 static SEL search_builtins(const char *key);
@@ -44,31 +39,12 @@ static SEL search_builtins(const char *key);
 void sel_init(size_t selrefCount)
 {
 #if SUPPORT_PREOPT
-    // If dyld finds a known shared cache selector, then it must be also looking
-    // in the shared cache table.
-    if (_dyld_get_objc_selector("retain") != nil)
-        useDyldSelectorLookup = true;
-    else
-        builtins = preoptimizedSelectors();
-
-    if (PrintPreopt && useDyldSelectorLookup) {
+    if (PrintPreopt) {
         _objc_inform("PREOPTIMIZATION: using dyld selector opt");
     }
-
-    if (PrintPreopt  &&  builtins) {
-        uint32_t occupied = builtins->occupied;
-        uint32_t capacity = builtins->capacity;
-        
-        _objc_inform("PREOPTIMIZATION: using selopt at %p", builtins);
-        _objc_inform("PREOPTIMIZATION: %u selectors", occupied);
-        _objc_inform("PREOPTIMIZATION: %u/%u (%u%%) hash table occupancy",
-                     occupied, capacity,
-                     (unsigned)(occupied/(double)capacity*100));
-    }
-	namedSelectors.init(useDyldSelectorLookup ? 0 : (unsigned)selrefCount);
-#else
-	namedSelectors.init((unsigned)selrefCount);
 #endif
+
+  namedSelectors.init((unsigned)selrefCount);
 
     // Register selectors used by libobjc
 
@@ -110,17 +86,8 @@ BOOL sel_isMapped(SEL sel)
 static SEL search_builtins(const char *name) 
 {
 #if SUPPORT_PREOPT
-  if (builtins) {
-      SEL result = 0;
-      if ((result = (SEL)builtins->get(name)))
-          return result;
-
-      if ((result = (SEL)_dyld_get_objc_selector(name)))
-          return result;
-  } else if (useDyldSelectorLookup) {
-      if (SEL result = (SEL)_dyld_get_objc_selector(name))
-          return result;
-  }
+  if (SEL result = (SEL)_dyld_get_objc_selector(name))
+    return result;
 #endif
     return nil;
 }

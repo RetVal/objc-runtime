@@ -114,7 +114,7 @@ END
 
 extern char **environ;
 
-id dummyIMP(id self, SEL _cmd, ...) { (void)_cmd; return self; }
+id dummyIMP(id self, SEL _cmd) { (void)_cmd; return self; }
 
 char *dupeName(Class cls) {
     char *name;
@@ -150,8 +150,8 @@ struct TestCase TestCases[] = {
     TESTCASE(free(class_copyProtocolList(cls, NULL))),
     TESTCASE(class_getProperty(cls, "x")),
     TESTCASE(free(class_copyPropertyList(cls, NULL))),
-    TESTCASE(class_addMethod(cls, @selector(nop), dummyIMP, "v@:")),
-    TESTCASE(class_replaceMethod(cls, @selector(nop), dummyIMP, "v@:")),
+    TESTCASE(class_addMethod(cls, @selector(nop), (IMP)dummyIMP, "v@:")),
+    TESTCASE(class_replaceMethod(cls, @selector(nop), (IMP)dummyIMP, "v@:")),
     TESTCASE(class_addIvar(cls, "x", sizeof(int), sizeof(int), @encode(int))),
     TESTCASE(class_addProtocol(cls, @protocol(P))),
     TESTCASE(class_addProperty(cls, "x", NULL, 0)),

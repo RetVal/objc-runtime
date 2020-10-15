@@ -2,6 +2,7 @@
 
 #include "test.h"
 #include <objc/NSObject.h>
+#include <objc/objc-internal.h>
 
 #if __has_feature(ptrauth_calls)
 typedef IMP __ptrauth_objc_method_list_imp MethodListIMP;
@@ -16,12 +17,18 @@ static int PlusInitializes;
 static int Allocs;
 static int AllocWithZones;
 static int Inits;
+static int PlusNew;
+static int Self;
+static int PlusSelf;
 
 id (*RealRetain)(id self, SEL _cmd);
 void (*RealRelease)(id self, SEL _cmd);
 id (*RealAutorelease)(id self, SEL _cmd);
 id (*RealAlloc)(id self, SEL _cmd);
 id (*RealAllocWithZone)(id self, SEL _cmd, void *zone);
+id (*RealPlusNew)(id self, SEL _cmd);
+id (*RealSelf)(id self);
+id (*RealPlusSelf)(id self);
 
 id HackRetain(id self, SEL _cmd) { Retains++; return RealRetain(self, _cmd); }
 void HackRelease(id self, SEL _cmd) { Releases++; return RealRelease(self, _cmd); }
@@ -33,6 +40,10 @@ id HackAllocWithZone(Class self, SEL _cmd, void *zone) { AllocWithZones++; retur
 void HackPlusInitialize(id self __unused, SEL _cmd __unused) { PlusInitializes++; }
 
 id HackInit(id self, SEL _cmd __unused) { Inits++; return self; }
+
+id HackPlusNew(id self, SEL _cmd __unused) { PlusNew++; return RealPlusNew(self, _cmd); }
+id HackSelf(id self) { Self++; return RealSelf(self); }
+id HackPlusSelf(id self) { PlusSelf++; return RealPlusSelf(self); }
 
 
 int main(int argc __unused, char **argv)
@@ -54,6 +65,30 @@ int main(int argc __unused, char **argv)
     method_setImplementation(meth, (IMP)HackAllocWithZone);
 #else
     ((MethodListIMP *)meth)[2] = (IMP)HackAllocWithZone;
+#endif
+
+    meth = class_getClassMethod(cls, @selector(new));
+    RealPlusNew = (typeof(RealPlusNew))method_getImplementation(meth);
+#if SWIZZLE_CORE
+    method_setImplementation(meth, (IMP)HackPlusNew);
+#else
+    ((MethodListIMP *)meth)[2] = (IMP)HackPlusNew;
+#endif
+
+    meth = class_getClassMethod(cls, @selector(self));
+    RealPlusSelf = (typeof(RealPlusSelf))method_getImplementation(meth);
+#if SWIZZLE_CORE
+    method_setImplementation(meth, (IMP)HackPlusSelf);
+#else
+    ((MethodListIMP *)meth)[2] = (IMP)HackPlusSelf;
+#endif
+
+    meth = class_getInstanceMethod(cls, @selector(self));
+    RealSelf = (typeof(RealSelf))method_getImplementation(meth);
+#if SWIZZLE_CORE
+    method_setImplementation(meth, (IMP)HackSelf);
+#else
+    ((MethodListIMP *)meth)[2] = (IMP)HackSelf;
 #endif
 
     meth = class_getInstanceMethod(cls, @selector(release));
@@ -172,6 +207,25 @@ int main(int argc __unused, char **argv)
     testprintf("unswizzled release should be bypassed\n");
     testassert(Releases == 0);
 #endif
+
+    PlusNew = 0;
+    Self = 0;
+    PlusSelf = 0;
+    Class nso = objc_opt_self([NSObject class]);
+    obj = objc_opt_new(nso);
+    obj = objc_opt_self(obj);
+#if SWIZZLE_CORE
+    testprintf("swizzled Core should be called\n");
+    testassert(PlusNew == 1);
+    testassert(Self == 1);
+    testassert(PlusSelf == 1);
+#else
+    testprintf("unswizzled CORE should be bypassed\n");
+    testassert(PlusNew == 0);
+    testassert(Self == 0);
+    testassert(PlusSelf == 0);
+#endif
+    testassert([obj isKindOfClass:nso]);
 
     succeed(basename(argv[0]));
 }

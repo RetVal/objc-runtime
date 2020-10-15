@@ -492,11 +492,16 @@ map_images_nolock(unsigned mhCount, const char * const mhPaths[],
             if (mhdr->filetype == MH_EXECUTE) {
                 // Size some data structures based on main executable's size
 #if __OBJC2__
-                size_t count;
-                _getObjc2SelectorRefs(hi, &count);
-                selrefCount += count;
-                _getObjc2MessageRefs(hi, &count);
-                selrefCount += count;
+                // If dyld3 optimized the main executable, then there shouldn't
+                // be any selrefs needed in the dynamic map so we can just init
+                // to a 0 sized map
+                if ( !hi->hasPreoptimizedSelectors() ) {
+                  size_t count;
+                  _getObjc2SelectorRefs(hi, &count);
+                  selrefCount += count;
+                  _getObjc2MessageRefs(hi, &count);
+                  selrefCount += count;
+                }
 #else
                 _getObjcSelectorRefs(hi, &selrefCount);
 #endif
@@ -926,6 +931,10 @@ void _objc_init(void)
     _imp_implementationWithBlock_init();
 
     _dyld_objc_notify_register(&map_images, load_images, unmap_image);
+
+#if __OBJC2__
+    didCallDyldNotifyRegister = true;
+#endif
 }
 
 

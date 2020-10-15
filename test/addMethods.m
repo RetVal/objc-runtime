@@ -7,7 +7,8 @@
 
 // Macros for array construction.
 // ten IMPs
-#define IMPS10 fn0, fn1, fn2, fn3, fn4, fn5, fn6, fn7, fn8, fn9
+#define IMPS10 (IMP)fn0, (IMP)fn1, (IMP)fn2, (IMP)fn3, (IMP)fn4, \
+               (IMP)fn5, (IMP)fn6, (IMP)fn7, (IMP)fn8, (IMP)fn9
 // ten method types
 #define TYPES10 "", "", "", "", "", "", "", "", "", ""
 // ten selectors of the form name0..name9
@@ -182,11 +183,11 @@ int main()
     
     // similar to dummyIMPs but with different values in each slot
     IMP dummyIMPs2[130] = {
-        fn5, fn6, fn7, fn8, fn9,
+        (IMP)fn5, (IMP)fn6, (IMP)fn7, (IMP)fn8, (IMP)fn9,
         IMPS10, IMPS10, IMPS10, IMPS10, IMPS10,
         IMPS10, IMPS10, IMPS10, IMPS10, IMPS10,
         IMPS10, IMPS10,
-        fn0, fn1, fn2, fn3, fn4,
+        (IMP)fn0, (IMP)fn1, (IMP)fn2, (IMP)fn3, (IMP)fn4,
     };
     
     const char *dummyTypes[130] = {

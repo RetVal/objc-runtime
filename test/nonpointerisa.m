@@ -114,10 +114,6 @@ void check_nonpointer(id obj, Class cls)
 }
 
 
-@interface OS_object <NSObject>
-+(id)alloc;
-@end
-
 @interface Fake_OS_object : NSObject {
     int refcnt;
     int xref_cnt;
@@ -130,7 +126,7 @@ void check_nonpointer(id obj, Class cls)
     if (!initialized) {
         initialized = true;
         testprintf("Nonpointer during +initialize\n");
-        testassert(NONPOINTER(self));
+        testassert(!NONPOINTER(self));
         id o = [Fake_OS_object new];
         check_nonpointer(o, self);
         [o release];
@@ -138,7 +134,7 @@ void check_nonpointer(id obj, Class cls)
 }
 @end
 
-@interface Sub_OS_object : OS_object @end
+@interface Sub_OS_object : NSObject @end
 
 @implementation Sub_OS_object
 @end
@@ -147,6 +143,9 @@ void check_nonpointer(id obj, Class cls)
 
 int main()
 {
+    Class OS_object = objc_getClass("OS_object");
+    class_setSuperclass([Sub_OS_object class], OS_object);
+
     uintptr_t isa;
 
 #if SUPPORT_PACKED_ISA
@@ -192,7 +191,6 @@ int main()
     isa = ISA(index_o);
     objc_setAssociatedObject(index_o, assoc, assoc, OBJC_ASSOCIATION_ASSIGN);
     testassert(__builtin_popcountl(isa ^ ISA(index_o)) == 1);
-
 
     testprintf("Isa without index\n");
     id raw_o = [OS_object alloc];

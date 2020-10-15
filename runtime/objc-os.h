@@ -1076,6 +1076,7 @@ ustrdupMaybeNil(const uint8_t *str)
     (unsigned  char)(((uint32_t)(v))>>8),   \
     (unsigned  char)(((uint32_t)(v))>>0)
 
+#ifndef __BUILDING_OBJCDT__
 // fork() safety requires careful tracking of all locks.
 // Our custom lock types check this in debug builds.
 // Disallow direct use of all other lock types.
@@ -1083,6 +1084,6 @@ typedef __darwin_pthread_mutex_t pthread_mutex_t UNAVAILABLE_ATTRIBUTE;
 typedef __darwin_pthread_rwlock_t pthread_rwlock_t UNAVAILABLE_ATTRIBUTE;
 typedef int32_t OSSpinLock UNAVAILABLE_ATTRIBUTE;
 typedef struct os_unfair_lock_s os_unfair_lock UNAVAILABLE_ATTRIBUTE;
-
+#endif
 
 #endif

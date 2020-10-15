@@ -169,6 +169,63 @@ LExit$0:
 #define FrameWithNoSaves 0x04000000  // frame, no non-volatile saves
 
 
+//////////////////////////////////////////////////////////////////////
+//
+// SAVE_REGS
+//
+// Create a stack frame and save all argument registers in preparation
+// for a function call.
+//////////////////////////////////////////////////////////////////////
+
+.macro SAVE_REGS
+
+    // push frame
+    SignLR
+    stp    fp, lr, [sp, #-16]!
+    mov    fp, sp
+
+    // save parameter registers: x0..x8, q0..q7
+    sub    sp, sp, #(10*8 + 8*16)
+    stp    q0, q1, [sp, #(0*16)]
+    stp    q2, q3, [sp, #(2*16)]
+    stp    q4, q5, [sp, #(4*16)]
+    stp    q6, q7, [sp, #(6*16)]
+    stp    x0, x1, [sp, #(8*16+0*8)]
+    stp    x2, x3, [sp, #(8*16+2*8)]
+    stp    x4, x5, [sp, #(8*16+4*8)]
+    stp    x6, x7, [sp, #(8*16+6*8)]
+    str    x8,     [sp, #(8*16+8*8)]
+
+.endmacro
+
+
+//////////////////////////////////////////////////////////////////////
+//
+// RESTORE_REGS
+//
+// Restore all argument registers and pop the stack frame created by
+// SAVE_REGS.
+//////////////////////////////////////////////////////////////////////
+
+.macro RESTORE_REGS
+
+    ldp    q0, q1, [sp, #(0*16)]
+    ldp    q2, q3, [sp, #(2*16)]
+    ldp    q4, q5, [sp, #(4*16)]
+    ldp    q6, q7, [sp, #(6*16)]
+    ldp    x0, x1, [sp, #(8*16+0*8)]
+    ldp    x2, x3, [sp, #(8*16+2*8)]
+    ldp    x4, x5, [sp, #(8*16+4*8)]
+    ldp    x6, x7, [sp, #(8*16+6*8)]
+    ldr    x8,     [sp, #(8*16+8*8)]
+
+    mov    sp, fp
+    ldp    fp, lr, [sp], #16
+    AuthenticateLR
+
+.endmacro
+
+
 /********************************************************************
  *
  * CacheLookup NORMAL|GETIMP|LOOKUP <function>
@@ -494,22 +551,7 @@ LLookup_Nil:
 
 .macro MethodTableLookup
 	
-	// push frame
-	SignLR
-	stp	fp, lr, [sp, #-16]!
-	mov	fp, sp
-
-	// save parameter registers: x0..x8, q0..q7
-	sub	sp, sp, #(10*8 + 8*16)
-	stp	q0, q1, [sp, #(0*16)]
-	stp	q2, q3, [sp, #(2*16)]
-	stp	q4, q5, [sp, #(4*16)]
-	stp	q6, q7, [sp, #(6*16)]
-	stp	x0, x1, [sp, #(8*16+0*8)]
-	stp	x2, x3, [sp, #(8*16+2*8)]
-	stp	x4, x5, [sp, #(8*16+4*8)]
-	stp	x6, x7, [sp, #(8*16+6*8)]
-	str	x8,     [sp, #(8*16+8*8)]
+	SAVE_REGS
 
 	// lookUpImpOrForward(obj, sel, cls, LOOKUP_INITIALIZE | LOOKUP_RESOLVER)
 	// receiver and selector already in x0 and x1
@@ -519,21 +561,8 @@ LLookup_Nil:
 
 	// IMP in x0
 	mov	x17, x0
-	
-	// restore registers and return
-	ldp	q0, q1, [sp, #(0*16)]
-	ldp	q2, q3, [sp, #(2*16)]
-	ldp	q4, q5, [sp, #(4*16)]
-	ldp	q6, q7, [sp, #(6*16)]
-	ldp	x0, x1, [sp, #(8*16+0*8)]
-	ldp	x2, x3, [sp, #(8*16+2*8)]
-	ldp	x4, x5, [sp, #(8*16+4*8)]
-	ldp	x6, x7, [sp, #(8*16+6*8)]
-	ldr	x8,     [sp, #(8*16+8*8)]
 
-	mov	sp, fp
-	ldp	fp, lr, [sp], #16
-	AuthenticateLR
+	RESTORE_REGS
 
 .endmacro
 
@@ -615,11 +644,37 @@ LGetImpMiss:
 
 	
 	ENTRY _method_invoke
+
+	// See if this is a small method.
+	tbnz	p1, #0, L_method_invoke_small
+
+	// We can directly load the IMP from big methods.
 	// x1 is method triplet instead of SEL
 	add	p16, p1, #METHOD_IMP
 	ldr	p17, [x16]
 	ldr	p1, [x1, #METHOD_NAME]
 	TailCallMethodListImp x17, x16
+
+L_method_invoke_small:
+	// Small methods require a call to handle swizzling.
+	SAVE_REGS
+	mov	p0, p1
+	bl	__method_getImplementationAndName
+	// ARM64_32 packs both return values into x0, with SEL in the high bits and IMP in the low.
+	// ARM64 just returns them in x0 and x1.
+	mov	x17, x0
+#if __LP64__
+	mov	x16, x1
+#endif
+	RESTORE_REGS
+#if __LP64__
+	mov	x1, x16
+#else
+	lsr	x1, x17, #32
+	mov	w17, w17
+#endif
+	TailCallFunctionPointer x17
+
 	END_ENTRY _method_invoke
 
 #endif

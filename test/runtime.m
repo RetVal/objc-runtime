@@ -126,7 +126,14 @@ int main()
     count = objc_getClassList(list, count0-1);
     testassert(list[count0-1] == NULL);
     testassert(count == count0);
-    
+
+    // So that demangling works, fake what would have happened with Swift
+    // and force the "Swift" bit on the class
+    ((uintptr_t *)objc_getClass(SwiftV1MangledName))[4] |= 2;
+    ((uintptr_t *)objc_getClass(SwiftV1MangledName2))[4] |= 2;
+    ((uintptr_t *)objc_getClass(SwiftV1MangledName3))[4] |= 2;
+    ((uintptr_t *)objc_getClass(SwiftV1MangledName4))[4] |= 2;
+
     count = objc_getClassList(list, count0);
     testassert(count == count0);
 
@@ -205,6 +212,14 @@ int main()
     testassert(list2[count] == NULL);
     free(list2);
     free(objc_copyClassList(NULL));
+    
+    // Make sure metaclasses get demangled too.
+    testassert(strcmp(class_getName([TestRoot class]), class_getName(object_getClass([TestRoot class]))) == 0);
+    testassert(strcmp(class_getName([Sub class]), class_getName(object_getClass([Sub class]))) == 0);
+    testassert(strcmp(class_getName([SwiftV1Class class]), class_getName(object_getClass([SwiftV1Class class]))) == 0);
+    testassert(strcmp(class_getName([SwiftV1Class2 class]), class_getName(object_getClass([SwiftV1Class2 class]))) == 0);
+    testassert(strcmp(class_getName([SwiftV1Class3 class]), class_getName(object_getClass([SwiftV1Class3 class]))) == 0);
+    testassert(strcmp(class_getName([SwiftV1Class4 class]), class_getName(object_getClass([SwiftV1Class4 class]))) == 0);
 
     succeed(__FILE__);
 }

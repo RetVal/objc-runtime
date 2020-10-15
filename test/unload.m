@@ -4,15 +4,14 @@
 TEST_BUILD
     $C{COMPILE}   $DIR/unload4.m -o unload4.dylib -dynamiclib
     $C{COMPILE_C} $DIR/unload3.c -o unload3.dylib -dynamiclib
-    $C{COMPILE}   $DIR/unload2.m -o unload2.bundle -bundle $C{FORCE_LOAD_ARCLITE}
+    $C{COMPILE}   $DIR/unload2.m -o unload2.bundle -bundle $C{FORCE_LOAD_ARCLITE} -Xlinker -undefined -Xlinker dynamic_lookup
     $C{COMPILE}   $DIR/unload.m -o unload.exe -framework Foundation
 END
 */
 
 /*
-i386 Mac doesn't have libarclite
 TEST_BUILD_OUTPUT
-ld: warning: ignoring file .* which is not the architecture being linked \(i386\).*
+ld: warning: -undefined dynamic_lookup is deprecated on .*
 OR
 END
  */
@@ -72,8 +71,10 @@ void cycle(void)
 
     Class small = objc_getClass("SmallClass");
     Class big = objc_getClass("BigClass");
+    Class missing = objc_getClass("SubclassOfMissingWeakImport");
     testassert(small);
     testassert(big);
+    testassert(!missing);
 
     name = class_getImageName(small);
     testassert(name);

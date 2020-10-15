@@ -6,7 +6,7 @@
 
 #if TARGET_OS_OSX
 #   define RealBool 0
-#elif TARGET_OS_IOS
+#elif TARGET_OS_IOS || TARGET_OS_BRIDGE
 #   if (__arm__ && !__armv7k__) || __i386__
 #       define RealBool 0
 #   else

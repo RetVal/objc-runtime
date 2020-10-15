@@ -10,6 +10,7 @@ END
 #include "test.h"
 #include "testroot.i"
 
+#include <libkern/OSCacheControl.h>
 #include <sys/stat.h>
 #include <objc/objc.h>
 #include <objc/runtime.h>
@@ -1465,6 +1466,10 @@ uintptr_t fnaddr(void *fn) { return (uintptr_t)fn & ~(uintptr_t)1; }
 uintptr_t fnaddr(void *fn) { return (uintptr_t)fn; }
 #endif
 
+void flushICache(uintptr_t addr) {
+  sys_icache_invalidate((void *)addr, sizeof(insn_t));
+}
+
 insn_t set(uintptr_t dst, insn_t newvalue)
 {
     uintptr_t start = dst & ~(PAGE_MAX_SIZE-1);
@@ -1474,6 +1479,7 @@ insn_t set(uintptr_t dst, insn_t newvalue)
     *(insn_t *)dst = newvalue;
     err = mprotect((void*)start, PAGE_MAX_SIZE, PROT_READ|PROT_EXEC);
     if (err) fail("mprotect(%p, R-X) failed (%d)", start, errno);
+    flushICache(dst);
     return oldvalue;
 }
 
@@ -1552,11 +1558,12 @@ uintptr_t *disassemble(uintptr_t symbol, uintptr_t symbolEnd,
     if (fstat(placeholder, &st) < 0) {
         fail("couldn't stat asm-placeholder.exe (%d)", errno);
     }
-    char *buf = (char *)malloc(st.st_size);
-    if (pread(placeholder, buf, st.st_size, 0) != st.st_size) {
+    ssize_t sz = (ssize_t)st.st_size;
+    char *buf = (char *)malloc(sz);
+    if (pread(placeholder, buf, sz, 0) != sz) {
         fail("couldn't read asm-placeholder.exe (%d)", errno);
     }
-    if (pwrite(fd, buf, st.st_size, 0) != st.st_size) {
+    if (pwrite(fd, buf, sz, 0) != sz) {
         fail("couldn't write asm temp file %s (%d)", tempname, errno);
     }
     free(buf);

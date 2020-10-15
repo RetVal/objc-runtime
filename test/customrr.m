@@ -2,7 +2,7 @@
 // TEST_CONFIG MEM=mrc
 /*
 TEST_BUILD
-    $C{COMPILE} $DIR/customrr.m -fvisibility=default -o customrr.exe
+    $C{COMPILE} $DIR/customrr.m -fvisibility=default -o customrr.exe -fno-objc-convert-messages-to-runtime-calls
     $C{COMPILE} -bundle -bundle_loader customrr.exe $DIR/customrr-cat1.m -o customrr-cat1.bundle
     $C{COMPILE} -bundle -bundle_loader customrr.exe $DIR/customrr-cat2.m -o customrr-cat2.bundle
 END
@@ -374,12 +374,21 @@ int main(int argc __unused, char **argv)
     objc_autorelease(obj);
     testassert(Autoreleases == 0);
 
+#if SUPPORT_NONPOINTER_ISA
+    objc_retain(cls);
+    testassert(PlusRetains == 0);
+    objc_release(cls);
+    testassert(PlusReleases == 0);
+    objc_autorelease(cls);
+    testassert(PlusAutoreleases == 0);
+#else
     objc_retain(cls);
     testassert(PlusRetains == 1);
     objc_release(cls);
     testassert(PlusReleases == 1);
     objc_autorelease(cls);
     testassert(PlusAutoreleases == 1);
+#endif
 
     objc_retain(inh);
     testassert(Retains == 0);
@@ -388,12 +397,21 @@ int main(int argc __unused, char **argv)
     objc_autorelease(inh);
     testassert(Autoreleases == 0);
 
+#if SUPPORT_NONPOINTER_ISA
+    objc_retain(icl);
+    testassert(PlusRetains == 0);
+    objc_release(icl);
+    testassert(PlusReleases == 0);
+    objc_autorelease(icl);
+    testassert(PlusAutoreleases == 0);
+#else
     objc_retain(icl);
     testassert(PlusRetains == 2);
     objc_release(icl);
     testassert(PlusReleases == 2);
     objc_autorelease(icl);
     testassert(PlusAutoreleases == 2);
+#endif
     
     objc_retain(ovr);
     testassert(SubRetains == 1);
@@ -409,13 +427,21 @@ int main(int argc __unused, char **argv)
     objc_autorelease(ocl);
     testassert(SubPlusAutoreleases == 1);
 
+#if SUPPORT_NONPOINTER_ISA
+    objc_retain((Class)&OBJC_CLASS_$_UnrealizedSubC1);
+    testassert(PlusRetains == 1);
+    objc_release((Class)&OBJC_CLASS_$_UnrealizedSubC2);
+    testassert(PlusReleases == 1);
+    objc_autorelease((Class)&OBJC_CLASS_$_UnrealizedSubC3);
+    testassert(PlusAutoreleases == 1);
+#else
     objc_retain((Class)&OBJC_CLASS_$_UnrealizedSubC1);
     testassert(PlusRetains == 3);
     objc_release((Class)&OBJC_CLASS_$_UnrealizedSubC2);
     testassert(PlusReleases == 3);
     objc_autorelease((Class)&OBJC_CLASS_$_UnrealizedSubC3);
     testassert(PlusAutoreleases == 3);
-
+#endif
 
     testprintf("unrelated addMethod does not clobber\n");
     zero();

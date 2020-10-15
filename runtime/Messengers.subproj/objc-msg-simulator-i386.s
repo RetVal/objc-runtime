@@ -192,6 +192,47 @@ LExit$0:
 #define FrameWithNoSaves 0x01000000  // frame, no non-volatile saves
 
 
+//////////////////////////////////////////////////////////////////////
+//
+// SAVE_REGS
+//
+// Create a stack frame and save all argument registers in preparation
+// for a function call.
+//////////////////////////////////////////////////////////////////////
+
+.macro SAVE_REGS
+
+	pushl	%ebp
+	movl	%esp, %ebp
+
+	subl	$$(8+5*16), %esp
+
+	movdqa  %xmm3, 4*16(%esp)
+	movdqa  %xmm2, 3*16(%esp)
+	movdqa  %xmm1, 2*16(%esp)
+	movdqa  %xmm0, 1*16(%esp)
+
+.endmacro
+
+
+//////////////////////////////////////////////////////////////////////
+//
+// RESTORE_REGS
+//
+// Restore all argument registers and pop the stack frame created by
+// SAVE_REGS.
+//////////////////////////////////////////////////////////////////////
+
+.macro RESTORE_REGS
+
+	movdqa  4*16(%esp), %xmm3
+	movdqa  3*16(%esp), %xmm2
+	movdqa  2*16(%esp), %xmm1
+	movdqa  1*16(%esp), %xmm0
+
+	leave
+
+.endmacro
 /////////////////////////////////////////////////////////////////////
 //
 // CacheLookup	return-type, caller
@@ -314,10 +355,7 @@ LExit$0:
 /////////////////////////////////////////////////////////////////////
 
 .macro MethodTableLookup
-	pushl	%ebp
-	movl	%esp, %ebp
-
-	subl	$$(8+5*16), %esp
+	SAVE_REGS
 
 .if $0 == NORMAL
 	movl	self+4(%ebp), %eax
@@ -326,11 +364,6 @@ LExit$0:
 	movl	self_stret+4(%ebp), %eax
 	movl    selector_stret+4(%ebp), %ecx
 .endif
-	
-	movdqa  %xmm3, 4*16(%esp)
-	movdqa  %xmm2, 3*16(%esp)
-	movdqa  %xmm1, 2*16(%esp)
-	movdqa  %xmm0, 1*16(%esp)
 	
 	// lookUpImpOrForward(obj, sel, cls, LOOKUP_INITIALIZE | LOOKUP_RESOLVER)
 	movl	$$3,  12(%esp)		// LOOKUP_INITIALIZE | LOOKUP_RESOLVER
@@ -341,18 +374,13 @@ LExit$0:
 
 	// imp in eax
 
-	movdqa  4*16(%esp), %xmm3
-	movdqa  3*16(%esp), %xmm2
-	movdqa  2*16(%esp), %xmm1
-	movdqa  1*16(%esp), %xmm0
-
 .if $0 == NORMAL
 	test	%eax, %eax	// set ne for stret forwarding
 .else
 	cmp	%eax, %eax	// set eq for nonstret forwarding
 .endif
 
-	leave
+	RESTORE_REGS
 
 .endmacro
 
@@ -906,23 +934,55 @@ L_forward_stret_handler:
 
 	ENTRY _method_invoke
 
+	// See if this is a small method.
+	testb	$1, selector(%esp)
+	jnz	L_method_invoke_small
+
+	// We can directly load the IMP from big methods.
 	movl	selector(%esp), %ecx
 	movl	method_name(%ecx), %edx
 	movl	method_imp(%ecx), %eax
 	movl	%edx, selector(%esp)
 	jmp	*%eax
-	
+
+L_method_invoke_small:
+	// Small methods require a call to handle swizzling.
+	SAVE_REGS
+
+	movl	selector+4(%ebp), %eax
+	movl	%eax, 0(%esp)
+	call	__method_getImplementationAndName
+	RESTORE_REGS
+	movl	%edx, selector(%esp)
+	jmp	*%eax
+
 	END_ENTRY _method_invoke
 
 
 	ENTRY _method_invoke_stret
 
+	// See if this is a small method.
+	testb	$1, selector_stret(%esp)
+	jnz	L_method_invoke_stret_small
+
+	// We can directly load the IMP from big methods.
 	movl	selector_stret(%esp), %ecx
 	movl	method_name(%ecx), %edx
 	movl	method_imp(%ecx), %eax
 	movl	%edx, selector_stret(%esp)
 	jmp	*%eax
 	
+L_method_invoke_stret_small:
+	// Small methods require a call to handle swizzling.
+	SAVE_REGS
+
+	movl	selector_stret+4(%ebp), %eax
+	movl	%eax, 0(%esp)
+	call	__method_getImplementationAndName
+	RESTORE_REGS
+	movl	%edx, selector_stret(%esp)
+	jmp	*%eax
+
 	END_ENTRY _method_invoke_stret
 	
 

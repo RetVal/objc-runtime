@@ -222,6 +222,40 @@ LExit$0:
 .endmacro
 
 
+//////////////////////////////////////////////////////////////////////
+//
+// SAVE_REGS
+//
+// Create a stack frame and save all argument registers in preparation
+// for a function call.
+//////////////////////////////////////////////////////////////////////
+
+.macro SAVE_REGS
+
+	stmfd	sp!, {r0-r3,r7,lr}
+	add	r7, sp, #16
+	sub	sp, #8			// align stack
+	FP_SAVE
+
+.endmacro
+
+
+//////////////////////////////////////////////////////////////////////
+//
+// RESTORE_REGS
+//
+// Restore all argument registers and pop the stack frame created by
+// SAVE_REGS.
+//////////////////////////////////////////////////////////////////////
+
+.macro RESTORE_REGS
+
+	FP_RESTORE
+	add	sp, #8			// align stack
+	ldmfd	sp!, {r0-r3,r7,lr}
+
+.endmacro
+
 /////////////////////////////////////////////////////////////////////
 //
 // CacheLookup	NORMAL|STRET <function>
@@ -666,10 +700,7 @@ LNilReceiver:
 	
 .macro MethodTableLookup
 	
-	stmfd	sp!, {r0-r3,r7,lr}
-	add	r7, sp, #16
-	sub	sp, #8			// align stack
-	FP_SAVE
+	SAVE_REGS
 
 	// lookUpImpOrForward(obj, sel, cls, LOOKUP_INITIALIZE | LOOKUP_RESOLVER)
 .if $0 == NORMAL
@@ -690,9 +721,7 @@ LNilReceiver:
 	tst	r12, r12		// set ne for stret forwarding
 .endif
 
-	FP_RESTORE
-	add	sp, #8			// align stack
-	ldmfd	sp!, {r0-r3,r7,lr}
+	RESTORE_REGS
 
 .endmacro
 
@@ -819,18 +848,55 @@ LNilReceiver:
 
 
 	ENTRY _method_invoke
+
+	// See if this is a small method.
+	lsls	r12, r1, #31
+	bne.w	L_method_invoke_small
+
+	// We can directly load the IMP from big methods.
 	// r1 is method triplet instead of SEL
 	ldr	r12, [r1, #METHOD_IMP]
 	ldr	r1, [r1, #METHOD_NAME]
 	bx	r12
+
+L_method_invoke_small:
+	// Small methods require a call to handle swizzling.
+	SAVE_REGS
+	mov	r0, r1
+	bl	__method_getImplementationAndName
+	mov	r12, r0
+	mov	r9, r1
+	RESTORE_REGS
+	mov	r1, r9
+	bx	r12
+
+
 	END_ENTRY _method_invoke
 
 
 	ENTRY _method_invoke_stret
+
+	// See if this is a small method.
+	lsls	r12, r2, #31
+	bne.w	L_method_invoke_stret_small
+
+	// We can directly load the IMP from big methods.
 	// r2 is method triplet instead of SEL
 	ldr	r12, [r2, #METHOD_IMP]
 	ldr	r2, [r2, #METHOD_NAME]
 	bx	r12
+
+L_method_invoke_stret_small:
+	// Small methods require a call to handle swizzling.
+	SAVE_REGS
+	mov	r0, r2
+	bl	__method_getImplementationAndName
+	mov	r12, r0
+	mov	r9, r1
+	RESTORE_REGS
+	mov	r2, r9
+	bx	r12
+
 	END_ENTRY _method_invoke_stret
 	
 

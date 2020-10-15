@@ -143,6 +143,19 @@ static inline void testwarn(const char *msg, ...)
 
 static inline void testnoop() { }
 
+// Are we running in dyld3 mode?
+// Note: checks by looking for the DYLD_USE_CLOSURES environment variable.
+// This is is always set by our test script, but this won't give the right
+// answer when being run manually unless that variable is set.
+static inline bool testdyld3(void) {
+    static int dyld = 0;
+    if (dyld == 0) {
+        const char *useClosures = getenv("DYLD_USE_CLOSURES");
+        dyld = useClosures && useClosures[0] == '1' ? 3 : 2;
+    }
+    return dyld == 3;
+}
+
 // Prevent deprecation warnings from some runtime functions.
 
 static inline void test_objc_flush_caches(Class cls)

@@ -55,9 +55,11 @@
 
 struct objc_class;
 struct objc_object;
+struct category_t;
 
 typedef struct objc_class *Class;
 typedef struct objc_object *id;
+typedef struct classref *classref_t;
 
 namespace {
     struct SideTable;
@@ -241,14 +243,6 @@ typedef struct old_property *objc_property_t;
 #include "objc-loadmethod.h"
 
 
-#if SUPPORT_PREOPT  &&  __cplusplus
-#include <objc-shared-cache.h>
-using objc_selopt_t = const objc_opt::objc_selopt_t;
-#else
-struct objc_selopt_t;
-#endif
-
-
 #define STRINGIFY(x) #x
 #define STRINGIFY2(x) STRINGIFY(x)
 
@@ -358,6 +352,22 @@ private:
     // from this location.
     intptr_t info_offset;
 
+    // Offset from this location to the non-lazy class list
+    intptr_t nlclslist_offset;
+    uintptr_t nlclslist_count;
+
+    // Offset from this location to the non-lazy category list
+    intptr_t nlcatlist_offset;
+    uintptr_t nlcatlist_count;
+
+    // Offset from this location to the category list
+    intptr_t catlist_offset;
+    uintptr_t catlist_count;
+
+    // Offset from this location to the category list 2
+    intptr_t catlist2_offset;
+    uintptr_t catlist2_count;
+
     // Do not add fields without editing ObjCModernAbstraction.hpp
 public:
 
@@ -382,6 +392,30 @@ public:
 
     void setinfo(const objc_image_info *info) {
         info_offset = (intptr_t)info - (intptr_t)&info_offset;
+    }
+
+    const classref_t *nlclslist(size_t *outCount) const;
+
+    void set_nlclslist(const void *list) {
+        nlclslist_offset = (intptr_t)list - (intptr_t)&nlclslist_offset;
+    }
+
+    category_t * const *nlcatlist(size_t *outCount) const;
+
+    void set_nlcatlist(const void *list) {
+        nlcatlist_offset = (intptr_t)list - (intptr_t)&nlcatlist_offset;
+    }
+
+    category_t * const *catlist(size_t *outCount) const;
+
+    void set_catlist(const void *list) {
+        catlist_offset = (intptr_t)list - (intptr_t)&catlist_offset;
+    }
+
+    category_t * const *catlist2(size_t *outCount) const;
+
+    void set_catlist2(const void *list) {
+        catlist2_offset = (intptr_t)list - (intptr_t)&catlist2_offset;
     }
 
     bool isLoaded() {
@@ -423,6 +457,8 @@ public:
     bool hasPreoptimizedClasses() const;
 
     bool hasPreoptimizedProtocols() const;
+
+    bool hasPreoptimizedSectionLookups() const;
 
 #if !__OBJC2__
     struct old_protocol **proto_refs;
@@ -478,6 +514,11 @@ static inline bool sectnameStartsWith(const char *sectname, const char *prefix){
 }
 
 
+#if __OBJC2__
+extern bool didCallDyldNotifyRegister;
+#endif
+
+
 /* selectors */
 extern void sel_init(size_t selrefCount);
 extern SEL sel_registerNameNoLock(const char *str, bool copy);
@@ -492,9 +533,6 @@ extern bool isPreoptimized(void);
 extern bool noMissingWeakSuperclasses(void);
 extern header_info *preoptimizedHinfoForHeader(const headerType *mhdr);
 
-extern objc_selopt_t *preoptimizedSelectors(void);
-
-extern bool sharedCacheSupportsProtocolRoots(void);
 extern Protocol *getPreoptimizedProtocol(const char *name);
 extern Protocol *getSharedCachePreoptimizedProtocol(const char *name);
 
@@ -520,6 +558,14 @@ lookUpImpOrNil(id obj, SEL sel, Class cls, int behavior = 0)
 }
 
 extern IMP lookupMethodInClassAndLoadCache(Class cls, SEL sel);
+
+struct IMPAndSEL {
+    IMP imp;
+    SEL sel;
+};
+
+extern IMPAndSEL _method_getImplementationAndName(Method m);
+
 extern BOOL class_respondsToSelector_inst(id inst, SEL sel, Class cls);
 extern Class class_initialize(Class cls, id inst);
 
@@ -966,7 +1012,7 @@ class ChainedHookFunction {
     std::atomic<Fn> hook{nil};
 
 public:
-    ChainedHookFunction(Fn f) : hook{f} { };
+    constexpr ChainedHookFunction(Fn f) : hook{f} { };
 
     Fn get() {
         return hook.load(std::memory_order_acquire);
@@ -985,10 +1031,10 @@ public:
 
 
 // A small vector for use as a global variable. Only supports appending and
-// iteration. Stores a single element inline, and multiple elements in a heap
+// iteration. Stores up to N elements inline, and multiple elements in a heap
 // allocation. There is no attempt to amortize reallocation cost; this is
-// intended to be used in situation where zero or one element is common, two
-// might happen, and three or more is very rare.
+// intended to be used in situation where a small number of elements is
+// common, more might happen, and significantly more is very rare.
 //
 // This does not clean up its allocation, and thus cannot be used as a local
 // variable or member of something with limited lifetime.
@@ -1001,7 +1047,7 @@ protected:
     unsigned count{0};
     union {
         T inlineElements[InlineCount];
-        T *elements;
+        T *elements{nullptr};
     };
     
 public:

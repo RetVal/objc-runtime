@@ -98,7 +98,7 @@
 		3044E26323D4626F006763E3 /* dyld_priv.h in Headers */ = {isa = PBXBuildFile; fileRef = 3044E22023D4626F006763E3 /* dyld_priv.h */; };
 		3044E26423D4626F006763E3 /* OSCrossEndian.h in Headers */ = {isa = PBXBuildFile; fileRef = 3044E22223D4626F006763E3 /* OSCrossEndian.h */; };
 		3044E26C23D47C0E006763E3 /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = 3044E26B23D47C0E006763E3 /* main.m */; };
-		3044E27223D47C4F006763E3 /* libobjc.A.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = D2AAC0630554660B00DB518D /* libobjc.A.dylib */; };
+		309850AD25383A9700054FB3 /* libobjc.A.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = D2AAC0630554660B00DB518D /* libobjc.A.dylib */; };
 		393CEAC00DC69E3E000B69DE /* objc-references.mm in Sources */ = {isa = PBXBuildFile; fileRef = 393CEABF0DC69E3E000B69DE /* objc-references.mm */; };
 		393CEAC60DC69E67000B69DE /* objc-references.h in Headers */ = {isa = PBXBuildFile; fileRef = 393CEAC50DC69E67000B69DE /* objc-references.h */; };
 		39ABD72312F0B61800D1054C /* objc-weak.h in Headers */ = {isa = PBXBuildFile; fileRef = 39ABD71F12F0B61800D1054C /* objc-weak.h */; };
@@ -397,7 +397,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				3044E27223D47C4F006763E3 /* libobjc.A.dylib in Frameworks */,
+				309850AD25383A9700054FB3 /* libobjc.A.dylib in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -969,7 +969,6 @@
 		08FB7793FE84155DC02AAC07 /* Project object */ = {
 			isa = PBXProject;
 			attributes = {
-				BuildIndependentTargetsInParallel = NO;
 				LastUpgradeCheck = 1130;
 				TargetAttributes = {
 					3044E26823D47C0E006763E3 = {

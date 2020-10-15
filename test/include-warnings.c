@@ -1,6 +1,6 @@
 /*
 TEST_BUILD
-    $C{COMPILE} $DIR/include-warnings.c -o include-warnings.exe -Wsystem-headers -Weverything -Wno-undef -Wno-old-style-cast -Wno-nullability-extension 2>&1 | grep -v 'In file' | grep objc || true
+    $C{COMPILE} $DIR/include-warnings.c -o include-warnings.exe -Wsystem-headers -Weverything -Wno-undef -Wno-old-style-cast -Wno-nullability-extension -Wno-c++98-compat 2>&1 | grep -v 'In file' | grep objc || true
 END
 
 TEST_RUN_OUTPUT
@@ -15,5 +15,7 @@ END
 // -Wno-old-style-cast is tough to avoid in mixed C/C++ code.
 // -Wno-nullability-extension disables a warning about non-portable
 //   _Nullable etc which we already handle correctly in objc-abi.h.
+// -Wno-c++98-compat disables warnings about things that already
+//   have guards against C++98.
 
 #include "includes.c"

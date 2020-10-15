@@ -24,6 +24,8 @@
 #ifndef _OBJC_RUNTIME_NEW_H
 #define _OBJC_RUNTIME_NEW_H
 
+#include "PointerUnion.h"
+
 // class_data_bits_t is the class_t->data field (class_rw_t pointer plus flags)
 // The extra bits are optimized for the retain/release and alloc/dealloc paths.
 
@@ -91,6 +93,10 @@
 #define RW_FORBIDS_ASSOCIATED_OBJECTS       (1<<20)
 // class has started realizing but not yet completed it
 #define RW_REALIZING          (1<<19)
+
+// class is a metaclass (copied from ro)
+#define RW_META               RO_META // (1<<0)
+
 
 // NOTE: MORE RW_ FLAGS DEFINED BELOW
 
@@ -233,6 +239,19 @@ private:
 
 public:
     inline SEL sel() const { return _sel.load(memory_order::memory_order_relaxed); }
+
+    inline IMP rawImp(objc_class *cls) const {
+        uintptr_t imp = _imp.load(memory_order::memory_order_relaxed);
+        if (!imp) return nil;
+#if CACHE_IMP_ENCODING == CACHE_IMP_ENCODING_PTRAUTH
+#elif CACHE_IMP_ENCODING == CACHE_IMP_ENCODING_ISA_XOR
+        imp ^= (uintptr_t)cls;
+#elif CACHE_IMP_ENCODING == CACHE_IMP_ENCODING_NONE
+#else
+#error Unknown method cache IMP encoding.
+#endif
+        return (IMP)imp;
+    }
 
     inline IMP imp(Class cls) const {
         uintptr_t imp = _imp.load(memory_order::memory_order_relaxed);
@@ -392,6 +411,27 @@ public:
 typedef struct classref * classref_t;
 
 
+/***********************************************************************
+* RelativePointer<T>
+* A pointer stored as an offset from the address of that offset.
+*
+* The target address is computed by taking the address of this struct
+* and adding the offset stored within it. This is a 32-bit signed
+* offset giving ±2GB of range.
+**********************************************************************/
+template <typename T>
+struct RelativePointer: nocopy_t {
+    int32_t offset;
+
+    T get() const {
+        uintptr_t base = (uintptr_t)&offset;
+        uintptr_t signExtendedOffset = (uintptr_t)(intptr_t)offset;
+        uintptr_t pointer = base + signExtendedOffset;
+        return (T)pointer;
+    }
+};
+
+
 #ifdef __PTRAUTH_INTRINSICS__
 #   define StubClassInitializerPtrauth __ptrauth(ptrauth_key_function_pointer, 1, 0xc671)
 #else
@@ -402,20 +442,27 @@ struct stub_class_t {
     _objc_swiftMetadataInitializer StubClassInitializerPtrauth initializer;
 };
 
+// A pointer modifier that does nothing to the pointer.
+struct PointerModifierNop {
+    template <typename ListType, typename T>
+    static T *modify(const ListType &list, T *ptr) { return ptr; }
+};
+
 /***********************************************************************
-* entsize_list_tt<Element, List, FlagMask>
+* entsize_list_tt<Element, List, FlagMask, PointerModifier>
 * Generic implementation of an array of non-fragile structs.
 *
 * Element is the struct type (e.g. method_t)
 * List is the specialization of entsize_list_tt (e.g. method_list_t)
 * FlagMask is used to stash extra bits in the entsize field
 *   (e.g. method list fixup markers)
+* PointerModifier is applied to the element pointers retrieved from
+* the array.
 **********************************************************************/
-template <typename Element, typename List, uint32_t FlagMask>
+template <typename Element, typename List, uint32_t FlagMask, typename PointerModifier = PointerModifierNop>
 struct entsize_list_tt {
     uint32_t entsizeAndFlags;
     uint32_t count;
-    Element first;
 
     uint32_t entsize() const {
         return entsizeAndFlags & ~FlagMask;
@@ -426,7 +473,7 @@ struct entsize_list_tt {
 
     Element& getOrEnd(uint32_t i) const { 
         ASSERT(i <= count);
-        return *(Element *)((uint8_t *)&first + i*entsize()); 
+        return *PointerModifier::modify(*this, (Element *)((uint8_t *)this + sizeof(*this) + i*entsize()));
     }
     Element& get(uint32_t i) const { 
         ASSERT(i < count);
@@ -438,15 +485,7 @@ struct entsize_list_tt {
     }
     
     static size_t byteSize(uint32_t entsize, uint32_t count) {
-        return sizeof(entsize_list_tt) + (count-1)*entsize;
-    }
-
-    List *duplicate() const {
-        auto *dup = (List *)calloc(this->byteSize(), 1);
-        dup->entsizeAndFlags = this->entsizeAndFlags;
-        dup->count = this->count;
-        std::copy(begin(), end(), dup->begin());
-        return dup;
+        return sizeof(entsize_list_tt) + count*entsize;
     }
 
     struct iterator;
@@ -535,18 +574,109 @@ struct entsize_list_tt {
 
 
 struct method_t {
-    SEL name;
-    const char *types;
-    MethodListIMP imp;
+    static const uint32_t smallMethodListFlag = 0x80000000;
+
+    method_t(const method_t &other) = delete;
+
+    // The representation of a "big" method. This is the traditional
+    // representation of three pointers storing the selector, types
+    // and implementation.
+    struct big {
+        SEL name;
+        const char *types;
+        MethodListIMP imp;
+    };
+
+private:
+    bool isSmall() const {
+        return ((uintptr_t)this & 1) == 1;
+    }
+
+    // The representation of a "small" method. This stores three
+    // relative offsets to the name, types, and implementation.
+    struct small {
+        RelativePointer<SEL *> name;
+        RelativePointer<const char *> types;
+        RelativePointer<IMP> imp;
+    };
+
+    small &small() const {
+        ASSERT(isSmall());
+        return *(struct small *)((uintptr_t)this & ~(uintptr_t)1);
+    }
+
+    IMP remappedImp(bool needsLock) const;
+    void remapImp(IMP imp);
+    objc_method_description *getSmallDescription() const;
+
+public:
+    static const auto bigSize = sizeof(struct big);
+    static const auto smallSize = sizeof(struct small);
+
+    // The pointer modifier used with method lists. When the method
+    // list contains small methods, set the bottom bit of the pointer.
+    // We use that bottom bit elsewhere to distinguish between big
+    // and small methods.
+    struct pointer_modifier {
+        template <typename ListType>
+        static method_t *modify(const ListType &list, method_t *ptr) {
+            if (list.flags() & smallMethodListFlag)
+                return (method_t *)((uintptr_t)ptr | 1);
+            return ptr;
+        }
+    };
+
+    big &big() const {
+        ASSERT(!isSmall());
+        return *(struct big *)this;
+    }
+
+    SEL &name() const {
+        return isSmall() ? *small().name.get() : big().name;
+    }
+    const char *types() const {
+        return isSmall() ? small().types.get() : big().types;
+    }
+    IMP imp(bool needsLock) const {
+        if (isSmall()) {
+            IMP imp = remappedImp(needsLock);
+            if (!imp)
+                imp = ptrauth_sign_unauthenticated(small().imp.get(),
+                                                   ptrauth_key_function_pointer, 0);
+            return imp;
+        }
+        return big().imp;
+    }
+
+    void setImp(IMP imp) {
+        if (isSmall()) {
+            remapImp(imp);
+        } else {
+            big().imp = imp;
+        }
+        
+    }
+
+    objc_method_description *getDescription() const {
+        return isSmall() ? getSmallDescription() : (struct objc_method_description *)this;
+    }
 
     struct SortBySELAddress :
-        public std::binary_function<const method_t&,
-                                    const method_t&, bool>
+    public std::binary_function<const struct method_t::big&,
+                                const struct method_t::big&, bool>
     {
-        bool operator() (const method_t& lhs,
-                         const method_t& rhs)
+        bool operator() (const struct method_t::big& lhs,
+                         const struct method_t::big& rhs)
         { return lhs.name < rhs.name; }
     };
+
+    method_t &operator=(const method_t &other) {
+        ASSERT(!isSmall());
+        big().name = other.name();
+        big().types = other.types();
+        big().imp = other.imp(false);
+        return *this;
+    }
 };
 
 struct ivar_t {
@@ -577,7 +707,15 @@ struct property_t {
 };
 
 // Two bits of entsize are used for fixup markers.
-struct method_list_t : entsize_list_tt<method_t, method_list_t, 0x3> {
+// Reserve the top half of entsize for more flags. We never
+// need entry sizes anywhere close to 64kB.
+//
+// Currently there is one flag defined: the small method list flag,
+// method_t::smallMethodListFlag. Other flags are currently ignored.
+// (NOTE: these bits are only ignored on runtimes that support small
+// method lists. Older runtimes will treat them as part of the entry
+// size!)
+struct method_list_t : entsize_list_tt<method_t, method_list_t, 0xffff0003, method_t::pointer_modifier> {
     bool isUniqued() const;
     bool isFixedUp() const;
     void setFixedUp();
@@ -587,6 +725,31 @@ struct method_list_t : entsize_list_tt<method_t, method_list_t, 0x3> {
             (uint32_t)(((uintptr_t)meth - (uintptr_t)this) / entsize());
         ASSERT(i < count);
         return i;
+    }
+
+    bool isSmallList() const {
+        return flags() & method_t::smallMethodListFlag;
+    }
+
+    bool isExpectedSize() const {
+        if (isSmallList())
+            return entsize() == method_t::smallSize;
+        else
+            return entsize() == method_t::bigSize;
+    }
+
+    method_list_t *duplicate() const {
+        method_list_t *dup;
+        if (isSmallList()) {
+            dup = (method_list_t *)calloc(byteSize(method_t::bigSize, count), 1);
+            dup->entsizeAndFlags = method_t::bigSize;
+        } else {
+            dup = (method_list_t *)calloc(this->byteSize(), 1);
+            dup->entsizeAndFlags = this->entsizeAndFlags;
+        }
+        dup->count = this->count;
+        std::copy(begin(), end(), dup->begin());
+        return dup;
     }
 };
 
@@ -701,7 +864,7 @@ struct class_ro_t {
     const uint8_t * ivarLayout;
     
     const char * name;
-    method_list_t * baseMethodList;
+    WrappedPtr<method_list_t, PtrauthStrip> baseMethodList;
     protocol_list_t * baseProtocols;
     const ivar_list_t * ivars;
 
@@ -739,11 +902,13 @@ struct class_ro_t {
 
 
 /***********************************************************************
-* list_array_tt<Element, List>
+* list_array_tt<Element, List, Ptr>
 * Generic implementation for metadata that can be augmented by categories.
 *
 * Element is the underlying metadata type (e.g. method_t)
 * List is the metadata's list type (e.g. method_list_t)
+* List is a template applied to Element to make Element*. Useful for
+* applying qualifiers to the pointer type.
 *
 * A list_array_tt has one of three values:
 * - empty
@@ -753,11 +918,11 @@ struct class_ro_t {
 * countLists/beginLists/endLists iterate the metadata lists
 * count/begin/end iterate the underlying metadata elements
 **********************************************************************/
-template <typename Element, typename List>
+template <typename Element, typename List, template<typename> class Ptr>
 class list_array_tt {
     struct array_t {
         uint32_t count;
-        List* lists[0];
+        Ptr<List> lists[0];
 
         static size_t byteSize(uint32_t count) {
             return sizeof(array_t) + count*sizeof(lists[0]);
@@ -769,12 +934,12 @@ class list_array_tt {
 
  protected:
     class iterator {
-        List **lists;
-        List **listsEnd;
+        const Ptr<List> *lists;
+        const Ptr<List> *listsEnd;
         typename List::iterator m, mEnd;
 
      public:
-        iterator(List **begin, List **end) 
+        iterator(const Ptr<List> *begin, const Ptr<List> *end)
             : lists(begin), listsEnd(end)
         {
             if (begin != end) {
@@ -814,7 +979,7 @@ class list_array_tt {
 
  private:
     union {
-        List* list;
+        Ptr<List> list;
         uintptr_t arrayAndFlag;
     };
 
@@ -822,7 +987,7 @@ class list_array_tt {
         return arrayAndFlag & 1;
     }
 
-    array_t *array() {
+    array_t *array() const {
         return (array_t *)(arrayAndFlag & ~1);
     }
 
@@ -830,9 +995,28 @@ class list_array_tt {
         arrayAndFlag = (uintptr_t)array | 1;
     }
 
- public:
+    void validate() {
+        for (auto cursor = beginLists(), end = endLists(); cursor != end; cursor++)
+            cursor->validate();
+    }
 
-    uint32_t count() {
+ public:
+    list_array_tt() : list(nullptr) { }
+    list_array_tt(List *l) : list(l) { }
+    list_array_tt(const list_array_tt &other) {
+        *this = other;
+    }
+
+    list_array_tt &operator =(const list_array_tt &other) {
+        if (other.hasArray()) {
+            arrayAndFlag = other.arrayAndFlag;
+        } else {
+            list = other.list;
+        }
+        return *this;
+    }
+
+    uint32_t count() const {
         uint32_t result = 0;
         for (auto lists = beginLists(), end = endLists(); 
              lists != end;
@@ -843,12 +1027,12 @@ class list_array_tt {
         return result;
     }
 
-    iterator begin() {
+    iterator begin() const {
         return iterator(beginLists(), endLists());
     }
 
-    iterator end() {
-        List **e = endLists();
+    iterator end() const {
+        auto e = endLists();
         return iterator(e, e);
     }
 
@@ -863,7 +1047,7 @@ class list_array_tt {
         }
     }
 
-    List** beginLists() {
+    const Ptr<List>* beginLists() const {
         if (hasArray()) {
             return array()->lists;
         } else {
@@ -871,7 +1055,7 @@ class list_array_tt {
         }
     }
 
-    List** endLists() {
+    const Ptr<List>* endLists() const {
         if (hasArray()) {
             return array()->lists + array()->count;
         } else if (list) {
@@ -888,27 +1072,34 @@ class list_array_tt {
             // many lists -> many lists
             uint32_t oldCount = array()->count;
             uint32_t newCount = oldCount + addedCount;
-            setArray((array_t *)realloc(array(), array_t::byteSize(newCount)));
+            array_t *newArray = (array_t *)malloc(array_t::byteSize(newCount));
+            newArray->count = newCount;
             array()->count = newCount;
-            memmove(array()->lists + addedCount, array()->lists, 
-                    oldCount * sizeof(array()->lists[0]));
-            memcpy(array()->lists, addedLists, 
-                   addedCount * sizeof(array()->lists[0]));
+
+            for (int i = oldCount - 1; i >= 0; i--)
+                newArray->lists[i + addedCount] = array()->lists[i];
+            for (unsigned i = 0; i < addedCount; i++)
+                newArray->lists[i] = addedLists[i];
+            free(array());
+            setArray(newArray);
+            validate();
         }
         else if (!list  &&  addedCount == 1) {
             // 0 lists -> 1 list
             list = addedLists[0];
+            validate();
         } 
         else {
             // 1 list -> many lists
-            List* oldList = list;
+            Ptr<List> oldList = list;
             uint32_t oldCount = oldList ? 1 : 0;
             uint32_t newCount = oldCount + addedCount;
             setArray((array_t *)malloc(array_t::byteSize(newCount)));
             array()->count = newCount;
             if (oldList) array()->lists[addedCount] = oldList;
-            memcpy(array()->lists, addedLists, 
-                   addedCount * sizeof(array()->lists[0]));
+            for (unsigned i = 0; i < addedCount; i++)
+                array()->lists[i] = addedLists[i];
+            validate();
         }
     }
 
@@ -924,91 +1115,108 @@ class list_array_tt {
         }
     }
 
-    template<typename Result>
-    Result duplicate() {
-        Result result;
-
+    template<typename Other>
+    void duplicateInto(Other &other) {
         if (hasArray()) {
             array_t *a = array();
-            result.setArray((array_t *)memdup(a, a->byteSize()));
+            other.setArray((array_t *)memdup(a, a->byteSize()));
             for (uint32_t i = 0; i < a->count; i++) {
-                result.array()->lists[i] = a->lists[i]->duplicate();
+                other.array()->lists[i] = a->lists[i]->duplicate();
             }
         } else if (list) {
-            result.list = list->duplicate();
+            other.list = list->duplicate();
         } else {
-            result.list = nil;
+            other.list = nil;
         }
-
-        return result;
     }
 };
 
 
+DECLARE_AUTHED_PTR_TEMPLATE(method_list_t)
+
 class method_array_t : 
-    public list_array_tt<method_t, method_list_t> 
+    public list_array_tt<method_t, method_list_t, method_list_t_authed_ptr>
 {
-    typedef list_array_tt<method_t, method_list_t> Super;
+    typedef list_array_tt<method_t, method_list_t, method_list_t_authed_ptr> Super;
 
  public:
-    method_list_t **beginCategoryMethodLists() {
+    method_array_t() : Super() { }
+    method_array_t(method_list_t *l) : Super(l) { }
+
+    const method_list_t_authed_ptr<method_list_t> *beginCategoryMethodLists() const {
         return beginLists();
     }
     
-    method_list_t **endCategoryMethodLists(Class cls);
-
-    method_array_t duplicate() {
-        return Super::duplicate<method_array_t>();
-    }
+    const method_list_t_authed_ptr<method_list_t> *endCategoryMethodLists(Class cls) const;
 };
 
 
 class property_array_t : 
-    public list_array_tt<property_t, property_list_t> 
+    public list_array_tt<property_t, property_list_t, RawPtr>
 {
-    typedef list_array_tt<property_t, property_list_t> Super;
+    typedef list_array_tt<property_t, property_list_t, RawPtr> Super;
 
  public:
-    property_array_t duplicate() {
-        return Super::duplicate<property_array_t>();
-    }
+    property_array_t() : Super() { }
+    property_array_t(property_list_t *l) : Super(l) { }
 };
 
 
 class protocol_array_t : 
-    public list_array_tt<protocol_ref_t, protocol_list_t> 
+    public list_array_tt<protocol_ref_t, protocol_list_t, RawPtr>
 {
-    typedef list_array_tt<protocol_ref_t, protocol_list_t> Super;
+    typedef list_array_tt<protocol_ref_t, protocol_list_t, RawPtr> Super;
 
  public:
-    protocol_array_t duplicate() {
-        return Super::duplicate<protocol_array_t>();
-    }
+    protocol_array_t() : Super() { }
+    protocol_array_t(protocol_list_t *l) : Super(l) { }
 };
 
+struct class_rw_ext_t {
+    DECLARE_AUTHED_PTR_TEMPLATE(class_ro_t)
+    class_ro_t_authed_ptr<const class_ro_t> ro;
+    method_array_t methods;
+    property_array_t properties;
+    protocol_array_t protocols;
+    char *demangledName;
+    uint32_t version;
+};
 
 struct class_rw_t {
     // Be warned that Symbolication knows the layout of this structure.
     uint32_t flags;
-    uint16_t version;
     uint16_t witness;
+#if SUPPORT_INDEXED_ISA
+    uint16_t index;
+#endif
 
-    const class_ro_t *ro;
-
-    method_array_t methods;
-    property_array_t properties;
-    protocol_array_t protocols;
+    explicit_atomic<uintptr_t> ro_or_rw_ext;
 
     Class firstSubclass;
     Class nextSiblingClass;
 
-    char *demangledName;
+private:
+    using ro_or_rw_ext_t = objc::PointerUnion<const class_ro_t, class_rw_ext_t, PTRAUTH_STR("class_ro_t"), PTRAUTH_STR("class_rw_ext_t")>;
 
-#if SUPPORT_INDEXED_ISA
-    uint32_t index;
-#endif
+    const ro_or_rw_ext_t get_ro_or_rwe() const {
+        return ro_or_rw_ext_t{ro_or_rw_ext};
+    }
 
-    void setFlags(uint32_t set) 
+    void set_ro_or_rwe(const class_ro_t *ro) {
+        ro_or_rw_ext_t{ro, &ro_or_rw_ext}.storeAt(ro_or_rw_ext, memory_order_relaxed);
+    }
+
+    void set_ro_or_rwe(class_rw_ext_t *rwe, const class_ro_t *ro) {
+        // the release barrier is so that the class_rw_ext_t::ro initialization
+        // is visible to lockless readers
+        rwe->ro = ro;
+        ro_or_rw_ext_t{rwe, &ro_or_rw_ext}.storeAt(ro_or_rw_ext, memory_order_release);
+    }
+
+    class_rw_ext_t *extAlloc(const class_ro_t *ro, bool deep = false);
+
+public:
+    void setFlags(uint32_t set)
     {
         __c11_atomic_fetch_or((_Atomic(uint32_t) *)&flags, set, __ATOMIC_RELAXED);
     }
@@ -1028,6 +1236,67 @@ struct class_rw_t {
             oldf = flags;
             newf = (oldf | set) & ~clear;
         } while (!OSAtomicCompareAndSwap32Barrier(oldf, newf, (volatile int32_t *)&flags));
+    }
+
+    class_rw_ext_t *ext() const {
+        return get_ro_or_rwe().dyn_cast<class_rw_ext_t *>(&ro_or_rw_ext);
+    }
+
+    class_rw_ext_t *extAllocIfNeeded() {
+        auto v = get_ro_or_rwe();
+        if (fastpath(v.is<class_rw_ext_t *>())) {
+            return v.get<class_rw_ext_t *>(&ro_or_rw_ext);
+        } else {
+            return extAlloc(v.get<const class_ro_t *>(&ro_or_rw_ext));
+        }
+    }
+
+    class_rw_ext_t *deepCopy(const class_ro_t *ro) {
+        return extAlloc(ro, true);
+    }
+
+    const class_ro_t *ro() const {
+        auto v = get_ro_or_rwe();
+        if (slowpath(v.is<class_rw_ext_t *>())) {
+            return v.get<class_rw_ext_t *>(&ro_or_rw_ext)->ro;
+        }
+        return v.get<const class_ro_t *>(&ro_or_rw_ext);
+    }
+
+    void set_ro(const class_ro_t *ro) {
+        auto v = get_ro_or_rwe();
+        if (v.is<class_rw_ext_t *>()) {
+            v.get<class_rw_ext_t *>(&ro_or_rw_ext)->ro = ro;
+        } else {
+            set_ro_or_rwe(ro);
+        }
+    }
+
+    const method_array_t methods() const {
+        auto v = get_ro_or_rwe();
+        if (v.is<class_rw_ext_t *>()) {
+            return v.get<class_rw_ext_t *>(&ro_or_rw_ext)->methods;
+        } else {
+            return method_array_t{v.get<const class_ro_t *>(&ro_or_rw_ext)->baseMethods()};
+        }
+    }
+
+    const property_array_t properties() const {
+        auto v = get_ro_or_rwe();
+        if (v.is<class_rw_ext_t *>()) {
+            return v.get<class_rw_ext_t *>(&ro_or_rw_ext)->properties;
+        } else {
+            return property_array_t{v.get<const class_ro_t *>(&ro_or_rw_ext)->baseProperties};
+        }
+    }
+
+    const protocol_array_t protocols() const {
+        auto v = get_ro_or_rwe();
+        if (v.is<class_rw_ext_t *>()) {
+            return v.get<class_rw_ext_t *>(&ro_or_rw_ext)->protocols;
+        } else {
+            return protocol_array_t{v.get<const class_ro_t *>(&ro_or_rw_ext)->baseProtocols};
+        }
     }
 };
 
@@ -1087,7 +1356,7 @@ public:
         class_rw_t *maybe_rw = data();
         if (maybe_rw->flags & RW_REALIZED) {
             // maybe_rw is rw
-            return maybe_rw->ro;
+            return maybe_rw->ro();
         } else {
             // maybe_rw is actually ro
             return (class_ro_t *)maybe_rw;
@@ -1359,12 +1628,12 @@ struct objc_class : objc_object {
     // Return YES if the class's ivars are managed by ARC, 
     // or the class is MRC but has ARC-style weak ivars.
     bool hasAutomaticIvars() {
-        return data()->ro->flags & (RO_IS_ARC | RO_HAS_WEAK_WITHOUT_ARC);
+        return data()->ro()->flags & (RO_IS_ARC | RO_HAS_WEAK_WITHOUT_ARC);
     }
 
     // Return YES if the class's ivars are managed by ARC.
     bool isARC() {
-        return data()->ro->flags & RO_IS_ARC;
+        return data()->ro()->flags & RO_IS_ARC;
     }
 
 
@@ -1435,13 +1704,15 @@ struct objc_class : objc_object {
 #if FAST_CACHE_META
         return cache.getBit(FAST_CACHE_META);
 #else
-        return data()->ro->flags & RO_META;
+        return data()->flags & RW_META;
 #endif
     }
 
     // Like isMetaClass, but also valid on un-realized classes
     bool isMetaClassMaybeUnrealized() {
-        return bits.safe_ro()->flags & RO_META;
+        static_assert(offsetof(class_rw_t, flags) == offsetof(class_ro_t, flags), "flags alias");
+        static_assert(RO_META == RW_META, "flags alias");
+        return data()->flags & RW_META;
     }
 
     // NOT identical to this->ISA when this is a metaclass
@@ -1462,19 +1733,19 @@ struct objc_class : objc_object {
         ASSERT(this);
 
         if (isRealized()  ||  isFuture()) {
-            return data()->ro->name;
+            return data()->ro()->name;
         } else {
             return ((const class_ro_t *)data())->name;
         }
     }
     
-    const char *demangledName();
+    const char *demangledName(bool needsLock);
     const char *nameForLogging();
 
     // May be unaligned depending on class's ivars.
     uint32_t unalignedInstanceStart() const {
         ASSERT(isRealized());
-        return data()->ro->instanceStart;
+        return data()->ro()->instanceStart;
     }
 
     // Class's instance start rounded up to a pointer-size boundary.
@@ -1486,7 +1757,7 @@ struct objc_class : objc_object {
     // May be unaligned depending on class's ivars.
     uint32_t unalignedInstanceSize() const {
         ASSERT(isRealized());
-        return data()->ro->instanceSize;
+        return data()->ro()->instanceSize;
     }
 
     // Class's ivar size rounded up to a pointer-size boundary.
@@ -1508,9 +1779,10 @@ struct objc_class : objc_object {
     void setInstanceSize(uint32_t newSize) {
         ASSERT(isRealized());
         ASSERT(data()->flags & RW_REALIZING);
-        if (newSize != data()->ro->instanceSize) {
+        auto ro = data()->ro();
+        if (newSize != ro->instanceSize) {
             ASSERT(data()->flags & RW_COPIED_RO);
-            *const_cast<uint32_t *>(&data()->ro->instanceSize) = newSize;
+            *const_cast<uint32_t *>(&ro->instanceSize) = newSize;
         }
         cache.setFastInstanceSize(newSize);
     }
@@ -1548,8 +1820,8 @@ struct swift_class_t : objc_class {
 struct category_t {
     const char *name;
     classref_t cls;
-    struct method_list_t *instanceMethods;
-    struct method_list_t *classMethods;
+    WrappedPtr<method_list_t, PtrauthStrip> instanceMethods;
+    WrappedPtr<method_list_t, PtrauthStrip> classMethods;
     struct protocol_list_t *protocols;
     struct property_list_t *instanceProperties;
     // Fields below this point are not always present on disk.
