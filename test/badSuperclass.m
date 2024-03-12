@@ -26,7 +26,7 @@ int main()
     // Create a cycle in a superclass chain (Sub->supercls == Sub)
     // then attempt to walk that chain. Runtime should halt eventually.
     _objc_flush_caches(supercls);
-    ((Class *)(__bridge void *)subcls)[1] = subcls;
+    ((Class __ptrauth_objc_super_pointer *)(__bridge void *)subcls)[1] = subcls;
 #ifdef CACHE_FLUSH
     _objc_flush_caches(supercls);
 #else

@@ -5,7 +5,11 @@
 #include <objc/objc.h>
 
 #if TARGET_OS_OSX
-#   define RealBool 0
+#   if __x86_64__
+#       define RealBool 0
+#   else
+#       define RealBool 1
+#   endif
 #elif TARGET_OS_IOS || TARGET_OS_BRIDGE
 #   if (__arm__ && !__armv7k__) || __i386__
 #       define RealBool 0

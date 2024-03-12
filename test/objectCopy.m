@@ -11,6 +11,26 @@
 @implementation Test
 @end
 
+@interface TestSELs : NSObject {
+    SEL sel1, sel2, sel3;
+}
+@end
+@implementation TestSELs
+
+- (id)init {
+    sel1 = @selector(sel1);
+    sel2 = @selector(sel2);
+    sel3 = @selector(sel3);
+    return self;
+}
+
+- (void)compareWith: (TestSELs *)other {
+    testassert(sel1 == other->sel1);
+    testassert(sel2 == other->sel2);
+    testassert(sel3 == other->sel3);
+}
+
+@end
 
 int main()
 {
@@ -33,6 +53,10 @@ int main()
     testassert([o2 retainCount] == 1);
     testassert([o3 retainCount] == 1);
     testassert([o4 retainCount] == 1);
+
+    TestSELs *sels = [TestSELs new];
+    TestSELs *selsCopy = object_copy(sels, 0);
+    [sels compareWith: selsCopy];
 
     succeed(__FILE__);
 }

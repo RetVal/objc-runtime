@@ -5,7 +5,8 @@
 
 /*
 TEST_RUN_OUTPUT
-objc\[\d+\]: [Ii]nvalid or prematurely-freed autorelease pool 0x[0-9a-fA-F]+\.?
+objc\[\d+\]: [Ii]nvalid or prematurely-freed autorelease pool 0x[0-9a-fA-F]+\. Set a breakpoint .*
+objc\[\d+\]: Invalid autorelease pools are a fatal error
 objc\[\d+\]: HALTED
 END
 */

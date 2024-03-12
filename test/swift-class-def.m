@@ -1,4 +1,8 @@
+#include <ptrauth.h>
+#include <stdbool.h>
+#include <stdint.h>
 #include <sys/cdefs.h>
+#include <TargetConditionals.h>
 
 #if __LP64__
 #   define PTR " .quad " 
@@ -15,9 +19,26 @@
 #if __has_feature(ptrauth_calls)
 #   define SIGNED_METHOD_LIST_IMP "@AUTH(ia,0,addr) "
 #   define SIGNED_STUB_INITIALIZER "@AUTH(ia,0xc671,addr) "
+#   define SIGNED_METHOD_LIST "@AUTH(da,0xC310,addr) "
+#   define SIGNED_ISA "@AUTH(da, 0x6AE1, addr) "
+#   define SIGNED_SUPER "@AUTH(da, 0xB5AB, addr) "
+#   define SIGNED_RO  "@AUTH(da, 0x61F8, addr) "
 #else
 #   define SIGNED_METHOD_LIST_IMP
 #   define SIGNED_STUB_INITIALIZER
+#   define SIGNED_METHOD_LIST
+#   define SIGNED_ISA
+#   define SIGNED_SUPER
+#   define SIGNED_RO
+#endif
+
+#if TARGET_OS_EXCLAVEKIT
+// On ExclaveKit, all method lists are signed
+#   define SIGNED_OBJC_SEL "@AUTH(da,0x57c2,addr)"
+#   define SIGNED_METHOD_TYPES "@AUTH(da,0xdec6,addr)"
+#else
+#   define SIGNED_OBJC_SEL
+#   define SIGNED_METHOD_TYPES
 #endif
 
 #define str(x) #x
@@ -41,11 +62,11 @@ asm(                                               \
     ".section __DATA,__objc_data               \n" \
     ".align 3                                  \n" \
     "_OBJC_CLASS_$_" #name ":                  \n" \
-    PTR "_OBJC_METACLASS_$_" #name            "\n" \
-    PTR "_OBJC_CLASS_$_" #superclass          "\n" \
+    PTR "_OBJC_METACLASS_$_" #name SIGNED_ISA "\n" \
+    PTR "_OBJC_CLASS_$_" #superclass SIGNED_SUPER "\n" \
     PTR "__objc_empty_cache                    \n" \
     PTR "0 \n"                                     \
-    PTR "L_" #name "_ro + 2 \n"                    \
+    PTR "(L_" #name "_ro + 2)" SIGNED_RO "\n"      \
     /* Swift class fields. */                      \
     ".long 0 \n"   /* flags */                     \
     ".long 0 \n"   /* instanceAddressOffset */     \
@@ -82,11 +103,11 @@ asm(                                               \
     PTR "0 \n"                                     \
                                                    \
     "_OBJC_METACLASS_$_" #name ":              \n" \
-    PTR "_OBJC_METACLASS_$_" #superclass      "\n" \
-    PTR "_OBJC_METACLASS_$_" #superclass      "\n" \
+    PTR "_OBJC_METACLASS_$_" #superclass SIGNED_ISA "\n" \
+    PTR "_OBJC_METACLASS_$_" #superclass SIGNED_SUPER "\n" \
     PTR "__objc_empty_cache                    \n" \
     PTR "0 \n"                                     \
-    PTR "L_" #name "_meta_ro \n"                   \
+    PTR "L_" #name "_meta_ro" SIGNED_RO "\n"       \
     /* pad to OBJC_MAX_CLASS_SIZE */               \
     PTR "0 \n"                                     \
     PTR "0 \n"                                     \
@@ -123,7 +144,7 @@ asm(                                               \
     ONLY_LP64(".long 0 \n")                        \
     PTR "0 \n"                                     \
     PTR "L_" #name "_name \n"                      \
-    PTR "L_" #name "_methods \n"                   \
+    PTR "L_" #name "_methods" SIGNED_METHOD_LIST "\n" \
     PTR "0 \n"                                     \
     PTR "L_" #name "_ivars \n"                     \
     PTR "0 \n"                                     \
@@ -137,7 +158,7 @@ asm(                                               \
     ONLY_LP64(".long 0 \n")                        \
     PTR "0 \n"                                     \
     PTR "L_" #name "_name \n"                      \
-    PTR "L_" #name "_meta_methods \n"              \
+    PTR "L_" #name "_meta_methods" SIGNED_METHOD_LIST "\n" \
     PTR "0 \n"                                     \
     PTR "0 \n"                                     \
     PTR "0 \n"                                     \
@@ -147,8 +168,8 @@ asm(                                               \
     "L_" #name "_meta_methods: \n"                 \
     ".long 3*" PTRSIZE "\n"                        \
     ".long 1 \n"                                   \
-    PTR "L_" #name "_self \n"                      \
-    PTR "L_" #name "_self \n"                      \
+    PTR "L_" #name "_self" SIGNED_OBJC_SEL " \n"   \
+    PTR "L_" #name "_self" SIGNED_METHOD_TYPES "\n"\
     PTR "_nop" SIGNED_METHOD_LIST_IMP "\n"         \
                                                    \
     "L_" #name "_ivars: \n"                        \
@@ -176,9 +197,11 @@ asm(                                               \
 extern char OBJC_CLASS_$_ ## name;                 \
 Class Raw ## name = (Class)&OBJC_CLASS_$_ ## name
 
-#define SWIFT_STUB_CLASSREF(name)  \
-extern char OBJC_CLASS_$_ ## name; \
-static Class name ## Classref = (Class)(&OBJC_CLASS_$_ ## name + 1)
+#define SWIFT_STUB_CLASSREF(name)                                        \
+extern char OBJC_CLASS_$_ ## name;                                       \
+static Class name ## Classref = (Class)(&OBJC_CLASS_$_ ## name + 1);     \
+__attribute__((section("__DATA,__objc_stublist,regular,no_dead_strip"))) \
+void *name ## StubListPtr = &OBJC_CLASS_$_ ## name;
 
 #define SWIFT_STUB_CLASS(name, initializer)        \
 asm(                                               \
@@ -196,6 +219,29 @@ asm(                                               \
 extern char OBJC_CLASS_$_ ## name;                 \
 Class Raw ## name = (Class)&OBJC_CLASS_$_ ## name; \
 SWIFT_STUB_CLASSREF(name)
-    
 
-void fn(void) { }
+
+inline bool isRealized(Class cls)
+{
+    // check the is-realized bits directly
+
+// FAST_DATA_MASK taken from objc-runtime-new.h, must be updated here if it
+// ever changes there.
+#if __LP64__
+# if TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR
+#  define FAST_DATA_MASK          0x0000007ffffffff8UL
+# else
+#  define FAST_DATA_MASK          0x00007ffffffffff8UL
+# endif
+#else
+# define FAST_DATA_MASK        0xfffffffcUL
+#endif
+#define RW_REALIZED (1<<31)
+
+    uint32_t *rw = (uint32_t *)((uintptr_t *)cls)[4];  // class_t->data
+
+    rw = ptrauth_strip(rw, ptrauth_key_process_dependent_data);
+    rw = (uint32_t *)((uintptr_t)rw & FAST_DATA_MASK);
+
+    return ((uint32_t *)rw)[0] & RW_REALIZED;  // class_rw_t->flags
+}

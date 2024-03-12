@@ -158,7 +158,12 @@
 
 #include "objc-private.h"
 #include "objc-abi.h"
+#include "objc-malloc-instance.h"
 #include <objc/message.h>
+
+#if !TARGET_OS_EXCLAVEKIT
+#include <os/linker_set.h>
+#endif
 
 /***********************************************************************
 * Information about multi-thread support:
@@ -195,9 +200,9 @@ Class object_setClass(id obj, Class cls)
     // weakly-referenced object has an un-+initialized isa.
     // Unresolved future classes are not so protected.
     if (!cls->isFuture()  &&  !cls->isInitialized()) {
-        // use lookUpImpOrNil to indirectly provoke +initialize
+        // use lookUpImpOrNilTryCache to indirectly provoke +initialize
         // to avoid duplicating the code to actually send +initialize
-        lookUpImpOrNil(nil, @selector(initialize), cls, LOOKUP_INITIALIZE);
+        lookUpImpOrNilTryCache(nil, @selector(initialize), cls, LOOKUP_INITIALIZE);
     }
 
     return obj->changeIsa(cls);
@@ -281,7 +286,7 @@ _class_lookUpIvar(Class cls, Ivar ivar, ptrdiff_t& ivarOffset,
     // Preflight the hasAutomaticIvars check
     // because _class_getClassForIvar() may need to take locks.
     bool hasAutomaticIvars = NO;
-    for (Class c = cls; c; c = c->superclass) {
+    for (Class c = cls; c; c = c->getSuperclass()) {
         if (c->hasAutomaticIvars()) {
             hasAutomaticIvars = YES;
             break;
@@ -337,7 +342,7 @@ _class_getIvarMemoryManagement(Class cls, Ivar ivar)
 static ALWAYS_INLINE 
 void _object_setIvar(id obj, Ivar ivar, id value, bool assumeStrong)
 {
-    if (!obj  ||  !ivar  ||  obj->isTaggedPointer()) return;
+    if (!ivar || _objc_isTaggedPointerOrNil(obj)) return;
 
     ptrdiff_t offset;
     objc_ivar_memory_management_t memoryManagement;
@@ -371,7 +376,7 @@ void object_setIvarWithStrongDefault(id obj, Ivar ivar, id value)
 
 id object_getIvar(id obj, Ivar ivar)
 {
-    if (!obj  ||  !ivar  ||  obj->isTaggedPointer()) return nil;
+    if (!ivar || _objc_isTaggedPointerOrNil(obj)) return nil;
 
     ptrdiff_t offset;
     objc_ivar_memory_management_t memoryManagement;
@@ -393,7 +398,7 @@ Ivar _object_setInstanceVariable(id obj, const char *name, void *value,
 {
     Ivar ivar = nil;
 
-    if (obj  &&  name  &&  !obj->isTaggedPointer()) {
+    if (name && !_objc_isTaggedPointerOrNil(obj)) {
         if ((ivar = _class_getVariable(obj->ISA(), name))) {
             _object_setIvar(obj, ivar, (id)value, assumeStrong);
         }
@@ -415,7 +420,7 @@ Ivar object_setInstanceVariableWithStrongDefault(id obj, const char *name,
 
 Ivar object_getInstanceVariable(id obj, const char *name, void **value)
 {
-    if (obj  &&  name  &&  !obj->isTaggedPointer()) {
+    if (name && !_objc_isTaggedPointerOrNil(obj)) {
         Ivar ivar;
         if ((ivar = class_getInstanceVariable(obj->ISA(), name))) {
             if (value) *value = (void *)object_getIvar(obj, ivar);
@@ -440,7 +445,7 @@ static void object_cxxDestructFromClass(id obj, Class cls)
 
     // Call cls's dtor first, then superclasses's dtors.
 
-    for ( ; cls; cls = cls->superclass) {
+    for ( ; cls; cls = cls->getSuperclass()) {
         if (!cls->hasCxxDtor()) return; 
         dtor = (void(*)(id))
             lookupMethodInClassAndLoadCache(cls, SEL_cxx_destruct);
@@ -462,8 +467,7 @@ static void object_cxxDestructFromClass(id obj, Class cls)
 **********************************************************************/
 void object_cxxDestruct(id obj)
 {
-    if (!obj) return;
-    if (obj->isTaggedPointer()) return;
+    if (_objc_isTaggedPointerOrNil(obj)) return;
     object_cxxDestructFromClass(obj, obj->ISA());
 }
 
@@ -491,7 +495,7 @@ object_cxxConstructFromClass(id obj, Class cls, int flags)
     id (*ctor)(id);
     Class supercls;
 
-    supercls = cls->superclass;
+    supercls = cls->getSuperclass();
 
     // Call superclasses' ctors first, if any.
     if (supercls  &&  supercls->hasCxxCtor()) {
@@ -510,7 +514,7 @@ object_cxxConstructFromClass(id obj, Class cls, int flags)
     }
     if (fastpath((*ctor)(obj))) return obj;  // ctor called and succeeded - ok
 
-    supercls = cls->superclass; // this reload avoids a spill on the stack
+    supercls = cls->getSuperclass(); // this reload avoids a spill on the stack
 
     // This class's ctor was called and failed.
     // Call superclasses's dtors to clean up.
@@ -530,7 +534,7 @@ object_cxxConstructFromClass(id obj, Class cls, int flags)
 **********************************************************************/
 void fixupCopiedIvars(id newObject, id oldObject)
 {
-    for (Class cls = oldObject->ISA(); cls; cls = cls->superclass) {
+    for (Class cls = oldObject->ISA(); cls; cls = cls->getSuperclass()) {
         if (cls->hasAutomaticIvars()) {
             // Use alignedInstanceStart() because unaligned bytes at the start
             // of this class's ivars are not represented in the layout bitmap.
@@ -568,6 +572,20 @@ void fixupCopiedIvars(id newObject, id oldObject)
                 }
             }
         }
+
+        // If we have signed SEL ivars, locate and re-copy any such ivars with
+        // the appropriate re-signing.
+#if __has_feature(ptrauth_objc_interface_sel)
+        if (auto *ivars = cls->data()->ro()->ivars)
+            for (const auto &ivar : *ivars) {
+                if (ivar.type && ivar.type[0] == _C_SEL) {
+                    typedef void * __ptrauth_objc_sel AuthSEL;
+                    AuthSEL *oldSEL = (AuthSEL *)((char *)oldObject + *ivar.offset);
+                    AuthSEL *newSEL = (AuthSEL *)((char *)newObject + *ivar.offset);
+                    *newSEL = *oldSEL;
+                }
+            }
+#endif
     }
 }
 
@@ -620,12 +638,17 @@ BREAKPOINT_FUNCTION(
 /***********************************************************************
 * class_respondsToSelector.
 **********************************************************************/
+
+#if !TARGET_OS_EXCLAVEKIT
+
 BOOL class_respondsToMethod(Class cls, SEL sel)
 {
     OBJC_WARN_DEPRECATED;
 
     return class_respondsToSelector(cls, sel);
 }
+
+#endif // !TARGET_OS_EXCLAVEKIT
 
 
 BOOL class_respondsToSelector(Class cls, SEL sel)
@@ -636,12 +659,12 @@ BOOL class_respondsToSelector(Class cls, SEL sel)
 
 // inst is an instance of cls or a subclass thereof, or nil if none is known.
 // Non-nil inst is faster in some cases. See lookUpImpOrForward() for details.
-NEVER_INLINE BOOL
+NEVER_INLINE __attribute__((flatten)) BOOL
 class_respondsToSelector_inst(id inst, SEL sel, Class cls)
 {
     // Avoids +initialize because it historically did so.
     // We're not returning a callable IMP anyway.
-    return sel && cls && lookUpImpOrNil(inst, sel, cls, LOOKUP_RESOLVER);
+    return sel && cls && lookUpImpOrNilTryCache(inst, sel, cls, LOOKUP_RESOLVER);
 }
 
 
@@ -650,6 +673,9 @@ class_respondsToSelector_inst(id inst, SEL sel, Class cls)
 * Returns the IMP that would be invoked if [obj sel] were sent, 
 * where obj is an instance of class cls.
 **********************************************************************/
+
+#if !TARGET_OS_EXCLAVEKIT
+
 IMP class_lookupMethod(Class cls, SEL sel)
 {
     OBJC_WARN_DEPRECATED;
@@ -662,13 +688,18 @@ IMP class_lookupMethod(Class cls, SEL sel)
     return class_getMethodImplementation(cls, sel);
 }
 
+#endif // !TARGET_OS_EXCLAVEKIT
+
+__attribute__((flatten))
 IMP class_getMethodImplementation(Class cls, SEL sel)
 {
     IMP imp;
 
     if (!cls  ||  !sel) return nil;
 
-    imp = lookUpImpOrNil(nil, sel, cls, LOOKUP_INITIALIZE | LOOKUP_RESOLVER);
+    lockdebug::assert_no_locks_locked_except({ &loadMethodLock });
+
+    imp = lookUpImpOrNilTryCache(nil, sel, cls, LOOKUP_INITIALIZE | LOOKUP_RESOLVER);
 
     // Translate forwarding function to C-callable external version
     if (!imp) {
@@ -775,7 +806,7 @@ Class _calloc_class(size_t size)
 Class class_getSuperclass(Class cls)
 {
     if (!cls) return nil;
-    return cls->superclass;
+    return cls->getSuperclass();
 }
 
 BOOL class_isMetaClass(Class cls)
@@ -828,26 +859,25 @@ char * method_copyArgumentType(Method m, unsigned int index)
 }
 
 /***********************************************************************
-* _class_createInstancesFromZone
-* Batch-allocating version of _class_createInstanceFromZone.
+* _class_createInstances
+* Batch-allocating version of _class_createInstance.
 * Attempts to allocate num_requested objects, each with extraBytes.
 * Returns the number of allocated objects (possibly zero), with 
 * the allocated pointers in *results.
 **********************************************************************/
 unsigned
-_class_createInstancesFromZone(Class cls, size_t extraBytes, void *zone, 
-                               id *results, unsigned num_requested)
+_class_createInstances(Class cls, size_t extraBytes, id *results,
+                       unsigned num_requested)
 {
     unsigned num_allocated;
     if (!cls) return 0;
 
     size_t size = cls->instanceSize(extraBytes);
 
-    num_allocated = 
-        malloc_zone_batch_malloc((malloc_zone_t *)(zone ? zone : malloc_default_zone()), 
-                                 size, (void**)results, num_requested);
-    for (unsigned i = 0; i < num_allocated; i++) {
-        bzero(results[i], size);
+    for (num_allocated = 0; num_allocated < num_requested; ++num_allocated) {
+        results[num_allocated] = objc::malloc_instance(size, cls);
+        if (!results[num_allocated])
+            break;
     }
 
     // Construct each object, and delete any that fail construction.
@@ -878,20 +908,26 @@ _class_createInstancesFromZone(Class cls, size_t extraBytes, void *zone,
 void 
 inform_duplicate(const char *name, Class oldCls, Class newCls)
 {
-#if TARGET_OS_WIN32
-    (DebugDuplicateClasses ? _objc_fatal : _objc_inform)
-        ("Class %s is implemented in two different images.", name);
-#else
     const header_info *oldHeader = _headerForClass(oldCls);
     const header_info *newHeader = _headerForClass(newCls);
     const char *oldName = oldHeader ? oldHeader->fname() : "??";
     const char *newName = newHeader ? newHeader->fname() : "??";
+    const objc_duplicate_class **_dupi = NULL;
 
-    (DebugDuplicateClasses ? _objc_fatal : _objc_inform)
-        ("Class %s is implemented in both %s (%p) and %s (%p). "
+#if !TARGET_OS_EXCLAVEKIT
+    LINKER_SET_FOREACH(_dupi, const objc_duplicate_class **, "__objc_dupclass") {
+        const objc_duplicate_class *dupi = *_dupi;
+
+        if (strcmp(dupi->name, name) == 0) {
+            return;
+        }
+    }
+#endif // !TARGET_OS_EXCLAVEKIT
+
+    OBJC_DEBUG_OPTION_REPORT_ERROR(DebugDuplicateClasses,
+         "Class %s is implemented in both %s (%p) and %s (%p). "
          "One of the two will be used. Which one is undefined.",
          name, oldName, oldCls, newName, newCls);
-#endif
 }
 
 
@@ -925,14 +961,22 @@ copyPropertyAttributeString(const objc_property_attribute_t *attrs,
 
     result = (char *)malloc(len + 1);
     char *s = result;
+    char *end = result + len + 1;
     for (i = 0; i < count; i++) {
         if (attrs[i].value) {
             size_t namelen = strlen(attrs[i].name);
+            size_t remaining = end - s;
+            size_t sprintfLen;
             if (namelen > 1) {
-                s += sprintf(s, "\"%s\"%s,", attrs[i].name, attrs[i].value);
+                sprintfLen = snprintf(s, remaining, "\"%s\"%s,", attrs[i].name, attrs[i].value);
             } else {
-                s += sprintf(s, "%s%s,", attrs[i].name, attrs[i].value);
+                sprintfLen = snprintf(s, remaining, "%s%s,", attrs[i].name, attrs[i].value);
             }
+            if (sprintfLen > remaining)
+                _objc_fatal("Incorrect buffer calculation for property string. "
+                            "Partial string is %s, calculated length is %zu.",
+                            result, len);
+            s += sprintfLen;
         }
     }
 

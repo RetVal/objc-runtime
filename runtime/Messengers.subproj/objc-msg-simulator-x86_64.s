@@ -22,7 +22,7 @@
  */
 
 #include <TargetConditionals.h>
-#if __x86_64__  &&  TARGET_OS_SIMULATOR  &&  !TARGET_OS_IOSMAC
+#if __x86_64__  &&  TARGET_OS_SIMULATOR  &&  !TARGET_OS_MACCATALYST
 
 /********************************************************************
  ********************************************************************
@@ -133,6 +133,10 @@ _objc_restartableRanges:
 #define GETIMP 101
 #define LOOKUP 102
 
+#define MSGSEND 200
+#define METHOD_INVOKE 201
+#define METHOD_INVOKE_STRET 202
+
 
 /********************************************************************
  *
@@ -221,21 +225,28 @@ LExit$0:
 // for a function call.
 //////////////////////////////////////////////////////////////////////
 
-.macro SAVE_REGS
+.macro SAVE_REGS kind
 
+.if \kind != MSGSEND && \kind != METHOD_INVOKE && \kind != METHOD_INVOKE_STRET
+.abort Unknown kind.
+.endif
 	push	%rbp
 	mov	%rsp, %rbp
 
-	sub	$$0x80+8, %rsp		// +8 for alignment
+	sub	$0x80, %rsp
 
 	movdqa	%xmm0, -0x80(%rbp)
 	push	%rax			// might be xmm parameter count
 	movdqa	%xmm1, -0x70(%rbp)
 	push	%a1
 	movdqa	%xmm2, -0x60(%rbp)
+.if \kind == MSGSEND || \kind == METHOD_INVOKE_STRET
 	push	%a2
+.endif
 	movdqa	%xmm3, -0x50(%rbp)
+.if \kind == MSGSEND || \kind == METHOD_INVOKE
 	push	%a3
+.endif
 	movdqa	%xmm4, -0x40(%rbp)
 	push	%a4
 	movdqa	%xmm5, -0x30(%rbp)
@@ -243,6 +254,9 @@ LExit$0:
 	movdqa	%xmm6, -0x20(%rbp)
 	push	%a6
 	movdqa	%xmm7, -0x10(%rbp)
+.if \kind == MSGSEND
+	push	%r10
+.endif
 
 .endmacro
 
@@ -255,8 +269,12 @@ LExit$0:
 // SAVE_REGS.
 //////////////////////////////////////////////////////////////////////
 
-.macro RESTORE_REGS
+.macro RESTORE_REGS kind
 
+.if \kind == MSGSEND
+	pop	%r10
+	orq	$2, %r10 // for the sake of instrumentations, remember it was the slowpath
+.endif
 	movdqa	-0x80(%rbp), %xmm0
 	pop	%a6
 	movdqa	-0x70(%rbp), %xmm1
@@ -264,9 +282,13 @@ LExit$0:
 	movdqa	-0x60(%rbp), %xmm2
 	pop	%a4
 	movdqa	-0x50(%rbp), %xmm3
+.if \kind == MSGSEND || \kind == METHOD_INVOKE
 	pop	%a3
+.endif
 	movdqa	-0x40(%rbp), %xmm4
+.if \kind == MSGSEND || \kind == METHOD_INVOKE_STRET
 	pop	%a2
+.endif
 	movdqa	-0x30(%rbp), %xmm5
 	pop	%a1
 	movdqa	-0x20(%rbp), %xmm6
@@ -412,7 +434,7 @@ LExit$0:
 
 .macro MethodTableLookup
 
-	SAVE_REGS
+	SAVE_REGS MSGSEND
 
 	// lookUpImpOrForward(obj, sel, cls, LOOKUP_INITIALIZE | LOOKUP_RESOLVER)
 .if $0 == NORMAL
@@ -429,7 +451,7 @@ LExit$0:
 	// IMP is now in %rax
 	movq	%rax, %r11
 
-	RESTORE_REGS
+	RESTORE_REGS MSGSEND
 
 .if $0 == NORMAL
 	test	%r11, %r11		// set ne for stret forwarding
@@ -709,7 +731,7 @@ LCacheMiss:
 	ENTRY _objc_msgSendSuper2
 	UNWIND _objc_msgSendSuper2, NoFrame
 	
-	// objc_super->class is superclass of class to search
+	// objc_super->class is subclass of class to search
 	
 // search the cache (objc_super in %a1)
 	movq	class(%a1), %r10	// cls = objc_super->class
@@ -727,7 +749,7 @@ LCacheMiss:
 
 	ENTRY _objc_msgLookupSuper2
 	
-	// objc_super->class is superclass of class to search
+	// objc_super->class is subclass of class to search
 	
 // search the cache (objc_super in %a1)
 	movq	class(%a1), %r10	// cls = objc_super->class
@@ -1145,13 +1167,12 @@ LCacheMiss:
 
 L_method_invoke_small:
 	// Small methods require a call to handle swizzling.
-	SAVE_REGS
+	SAVE_REGS METHOD_INVOKE
 	movq	%a2, %a1
 	call	__method_getImplementationAndName
-	movq	%rdx, %r10
+	movq	%rdx, %a2
 	movq	%rax, %r11
-	RESTORE_REGS
-	movq	%r10, %a2
+	RESTORE_REGS METHOD_INVOKE
 	jmp	*%r11
 
 	END_ENTRY _method_invoke
@@ -1170,13 +1191,12 @@ L_method_invoke_small:
 
 L_method_invoke_stret_small:
 	// Small methods require a call to handle swizzling.
-	SAVE_REGS
+	SAVE_REGS METHOD_INVOKE_STRET
 	movq	%a3, %a1
 	call	__method_getImplementationAndName
-	movq	%rdx, %r10
+	movq	%rdx, %a3
 	movq	%rax, %r11
-	RESTORE_REGS
-	movq	%r10, %a3
+	RESTORE_REGS METHOD_INVOKE_STRET
 	jmp	*%r11
 
 	END_ENTRY _method_invoke_stret

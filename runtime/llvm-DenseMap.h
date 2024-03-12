@@ -903,7 +903,7 @@ private:
       return false;
     }
 
-    Buckets = static_cast<BucketT*>(operator new(sizeof(BucketT) * NumBuckets));
+    Buckets = static_cast<BucketT*>(alloc_overflow(sizeof(BucketT), NumBuckets));
     return true;
   }
 };
@@ -922,7 +922,7 @@ class SmallDenseMap
   // simplicity of referring to them.
   using BaseT = DenseMapBase<SmallDenseMap, KeyT, ValueT, ValueInfoT, KeyInfoT, BucketT>;
 
-  static_assert(powerof2(InlineBuckets),
+  static_assert(IsPowerOf2(InlineBuckets),
                 "InlineBuckets must be a power of 2.");
 
   unsigned Small : 1;
@@ -1209,8 +1209,9 @@ private:
 
   LargeRep allocateBuckets(unsigned Num) {
     ASSERT(Num > InlineBuckets && "Must allocate more buckets than are inline");
+
     LargeRep Rep = {
-      static_cast<BucketT*>(operator new(sizeof(BucketT) * Num)), Num
+      static_cast<BucketT*>(alloc_overflow(sizeof(BucketT), Num)), Num
     };
     return Rep;
   }

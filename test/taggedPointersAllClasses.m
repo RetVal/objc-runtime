@@ -19,13 +19,22 @@
 
 @end
 
+int expectedTag;
+uintptr_t expectedPayload;
+uintptr_t sawPayload;
+int sawTag;
+
+void impl(void *self, SEL cmd) {
+    (void)cmd;
+    testassert(expectedTag == _objc_getTaggedPointerTag(self));
+    testassert(expectedPayload == _objc_getTaggedPointerValue(self));
+    sawPayload = _objc_getTaggedPointerValue(self);
+    sawTag = _objc_getTaggedPointerTag(self);
+}
+
 int main()
 {
     Class classes[OBJC_TAG_Last52BitPayload + 1] = {};
-    
-    __block uintptr_t expectedPayload;
-    __block uintptr_t sawPayload;
-    __block int sawTag;
     
     for (int i = 0; i <= OBJC_TAG_Last52BitPayload; i++) {
         objc_tag_index_t tag = (objc_tag_index_t)i;
@@ -39,13 +48,7 @@ int main()
         classes[i] = objc_allocateClassPair([TagSuperclass class], name, 0);
         free(name);
         
-        IMP testIMP = imp_implementationWithBlock(^(void *self) {
-            testassert(i == _objc_getTaggedPointerTag(self));
-            testassert(expectedPayload == _objc_getTaggedPointerValue(self));
-            sawPayload = _objc_getTaggedPointerValue(self);
-            sawTag = i;
-        });
-        class_addMethod(classes[i], @selector(test), testIMP, "v@@");
+        class_addMethod(classes[i], @selector(test), (IMP)impl, "v@@");
         
         objc_registerClassPair(classes[i]);
         _objc_registerTaggedPointerClass(tag, classes[i]);
@@ -64,7 +67,8 @@ int main()
                 payload >>= _OBJC_TAG_PAYLOAD_RSHIFT;
             else
                 payload >>= _OBJC_TAG_EXT_PAYLOAD_RSHIFT;
-            
+
+            expectedTag = i;
             expectedPayload = payload;
             id obj = (__bridge id)_objc_makeTaggedPointer(tag, payload);
             [obj test];

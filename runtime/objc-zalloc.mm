@@ -98,7 +98,7 @@ T *Zone<T, false>::alloc()
 {
     void *e = _freelist.pop();
     if (e) {
-        __builtin_bzero(e, sizeof(void *));
+        memset(e, 0, sizeof(void *));
         return reinterpret_cast<T *>(e);
     }
     return alloc_slow();
@@ -109,17 +109,15 @@ void Zone<T, false>::free(T *ptr)
 {
     if (ptr) {
         Element *e = reinterpret_cast<Element *>(ptr);
-        __builtin_bzero(e->buf, sizeof(e->buf));
+        memset(e->buf, 0, sizeof(e->buf));
         _freelist.push(e);
     }
 }
 
-#if __OBJC2__
 #define ZoneInstantiate(type) \
 	template class Zone<type, sizeof(type) % MALLOC_ALIGNMENT == 0>
 
 ZoneInstantiate(class_rw_t);
 ZoneInstantiate(class_rw_ext_t);
-#endif
 
 }

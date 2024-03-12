@@ -1,13 +1,4 @@
 // TEST_CONFIG MEM=mrc
-/*
-TEST_RUN_OUTPUT
-objc\[\d+\]: Deallocator object 0x[0-9a-fA-F]+ overreleased while already deallocating; break on objc_overrelease_during_dealloc_error to debug
-OK: bigrc.m
-OR
-no overrelease enforcement
-OK: bigrc.m
-END
- */
 
 #include "test.h"
 #include "testroot.i"
@@ -20,37 +11,22 @@ static size_t LOTS;
 -(void)dealloc 
 {
     id o = self;
-    size_t rc = 1;
 
 
-    testprintf("Retain a lot during dealloc\n");
+    testprintf("Retain/release during dealloc\n");
 
-    testassert(rc == 1);
-    testassert([o retainCount] == rc);
-    do {
-        [o retain];
-        if (rc % 0x100000 == 0) testprintf("%zx/%zx ++\n", rc, LOTS);
-    } while (++rc < LOTS);
-
-    testassert([o retainCount] == rc);
-
-    do {
-        [o release];
-        if (rc % 0x100000 == 0) testprintf("%zx/%zx --\n", rc, LOTS);
-    } while (--rc > 1);
-
-    testassert(rc == 1);
-    testassert([o retainCount] == rc);
-
-
-    testprintf("Overrelease during dealloc\n");
-
-    // Not all architectures enforce this.
-#if !SUPPORT_NONPOINTER_ISA
-    testwarn("no overrelease enforcement");
-    fprintf(stderr, "no overrelease enforcement\n");
-#endif
+    // It turns out that if we're using side tables, rc is 1 here, and
+    // it can still increment and decrement.  We should fix that.
+    // rdar://93537253 (Make side table retain count zero during dealloc)
+#if !ISA_HAS_INLINE_RC
+    testassertequal([o retainCount], 1);
+#else
+    testassertequal([o retainCount], 0);
+    [o retain];
+    testassertequal([o retainCount], 0);
     [o release];
+    testassertequal([o retainCount], 0);
+#endif
 
     [super dealloc];
 }
@@ -106,7 +82,7 @@ int main()
 
     testprintf("tryRetain a lot\n");
 
-    id w;
+    id w = nil;
     objc_storeWeak(&w, o);
     testassert(w == o);
 
@@ -126,14 +102,15 @@ int main()
 
     testassert(rc == 1);
     testassert([o retainCount] == rc);
-    
+
     testprintf("dealloc\n");
 
     testassert(TestRootDealloc == 0);
     testassert(w != nil);
     [o release];
-    testassert(TestRootDealloc == 1);
+
     testassert(w == nil);
+    testassert(TestRootDealloc == 1);
 
     succeed(__FILE__);
 }

@@ -72,6 +72,7 @@ int deallocstate = 0;
     // test autorelease pool
     __autoreleasing id x;
     x = AUTORELEASE([Deallocator new]);
+    (void)x;
 }
 @end
 

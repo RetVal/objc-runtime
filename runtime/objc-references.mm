@@ -38,7 +38,8 @@ enum {
     OBJC_ASSOCIATION_SETTER_COPY        = 3,            // NOTE:  both bits are set, so we can simply test 1 bit in releaseValue below.
     OBJC_ASSOCIATION_GETTER_READ        = (0 << 8),
     OBJC_ASSOCIATION_GETTER_RETAIN      = (1 << 8),
-    OBJC_ASSOCIATION_GETTER_AUTORELEASE = (2 << 8)
+    OBJC_ASSOCIATION_GETTER_AUTORELEASE = (2 << 8),
+    OBJC_ASSOCIATION_SYSTEM_OBJECT      = _OBJC_ASSOCIATION_SYSTEM_OBJECT, // 1 << 16
 };
 
 spinlock_t AssociationsManagerLock;
@@ -172,6 +173,7 @@ _object_set_associative_reference(id object, const void *key, id value, uintptr_
     // retain the new value (if any) outside the lock.
     association.acquireValue();
 
+    bool isFirstAssociation = false;
     {
         AssociationsManager manager;
         AssociationsHashMap &associations(manager.get());
@@ -180,7 +182,7 @@ _object_set_associative_reference(id object, const void *key, id value, uintptr_
             auto refs_result = associations.try_emplace(disguised, ObjectAssociationMap{});
             if (refs_result.second) {
                 /* it's the first association we make */
-                object->setHasAssociatedObjects();
+                isFirstAssociation = true;
             }
 
             /* establish or replace the association */
@@ -206,6 +208,13 @@ _object_set_associative_reference(id object, const void *key, id value, uintptr_
         }
     }
 
+    // Call setHasAssociatedObjects outside the lock, since this
+    // will call the object's _noteAssociatedObjects method if it
+    // has one, and this may trigger +initialize which might do
+    // arbitrary stuff, including setting more associated objects.
+    if (isFirstAssociation)
+        object->setHasAssociatedObjects();
+
     // release the old value (outside of the lock).
     association.releaseHeldValue();
 }
@@ -215,7 +224,7 @@ _object_set_associative_reference(id object, const void *key, id value, uintptr_
 // raw isa objects (such as OS Objects) that can't track
 // whether they have associated objects.
 void
-_object_remove_assocations(id object)
+_object_remove_associations(id object, bool deallocating)
 {
     ObjectAssociationMap refs{};
 
@@ -225,12 +234,36 @@ _object_remove_assocations(id object)
         AssociationsHashMap::iterator i = associations.find((objc_object *)object);
         if (i != associations.end()) {
             refs.swap(i->second);
-            associations.erase(i);
+
+            // If we are not deallocating, then SYSTEM_OBJECT associations are preserved.
+            bool didReInsert = false;
+            if (!deallocating) {
+                for (auto &ref: refs) {
+                    if (ref.second.policy() & OBJC_ASSOCIATION_SYSTEM_OBJECT) {
+                        i->second.insert(ref);
+                        didReInsert = true;
+                    }
+                }
+            }
+            if (!didReInsert)
+                associations.erase(i);
         }
     }
 
+    // Associations to be released after the normal ones.
+    SmallVector<ObjcAssociation *, 4> laterRefs;
+
     // release everything (outside of the lock).
     for (auto &i: refs) {
-        i.second.releaseHeldValue();
+        if (i.second.policy() & OBJC_ASSOCIATION_SYSTEM_OBJECT) {
+            // If we are not deallocating, then RELEASE_LATER associations don't get released.
+            if (deallocating)
+                laterRefs.append(&i.second);
+        } else {
+            i.second.releaseHeldValue();
+        }
+    }
+    for (auto *later: laterRefs) {
+        later->releaseHeldValue();
     }
 }

@@ -5,6 +5,7 @@
 #include "test.h"
 #include <dlfcn.h>
 #include <objc/objc-internal.h>
+#include <limits.h>
 
 atomic_int TestRootLoad;
 atomic_int TestRootInitialize;
@@ -93,7 +94,7 @@ plusretaincount_fn(void *self __unused, SEL _cmd __unused) {
 
 +(void) load {
     atomic_fetch_add_explicit(&TestRootLoad, 1, memory_order_relaxed);
-    
+
     // install methods that ARC refuses to compile
     class_addMethod(self, sel_registerName("retain"), (IMP)retain_fn, "");
     class_addMethod(self, sel_registerName("release"), (IMP)release_fn, "");

@@ -63,7 +63,7 @@ void add_class_to_loadable_list(Class cls)
 {
     IMP method;
 
-    loadMethodLock.assertLocked();
+    lockdebug::assert_locked(&loadMethodLock);
 
     method = cls->getLoadMethod();
     if (!method) return;  // Don't bother if cls has no +load method
@@ -97,7 +97,7 @@ void add_category_to_loadable_list(Category cat)
 {
     IMP method;
 
-    loadMethodLock.assertLocked();
+    lockdebug::assert_locked(&loadMethodLock);
 
     method = _category_getLoadMethod(cat);
 
@@ -130,7 +130,7 @@ void add_category_to_loadable_list(Category cat)
 **********************************************************************/
 void remove_class_from_loadable_list(Class cls)
 {
-    loadMethodLock.assertLocked();
+    lockdebug::assert_locked(&loadMethodLock);
 
     if (loadable_classes) {
         int i;
@@ -155,7 +155,7 @@ void remove_class_from_loadable_list(Class cls)
 **********************************************************************/
 void remove_category_from_loadable_list(Category cat)
 {
-    loadMethodLock.assertLocked();
+    lockdebug::assert_locked(&loadMethodLock);
 
     if (loadable_categories) {
         int i;
@@ -339,7 +339,7 @@ void call_load_methods(void)
     static bool loading = NO;
     bool more_categories;
 
-    loadMethodLock.assertLocked();
+    lockdebug::assert_locked(&loadMethodLock);
 
     // Re-entrant calls do nothing; the outermost call will finish the job.
     if (loading) return;

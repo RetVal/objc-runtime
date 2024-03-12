@@ -1,4 +1,4 @@
-// TEST_CONFIG MEM=mrc LANGUAGE=objective-c
+// TEST_CONFIG MEM=mrc LANGUAGE=objective-c ARCH=!arm64e,!arm64
 /*
 TEST_RUN_OUTPUT
 [\S\s]*0 leaks for 0 total leaked bytes[\S\s]*
@@ -61,5 +61,10 @@ int main()
         exit(1);
     }
     wait4(pid, NULL, 0, NULL);
-    printf("objs=%p\n", objs);
+
+    // Clean up. Otherwise leaks can end up seeing this as a leak, oddly enough.
+    for (int i = 0; i < classCount; i++) {
+       [objs[i] release];
+    }
+    free(objs);
 }

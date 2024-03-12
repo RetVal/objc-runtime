@@ -14,7 +14,13 @@ int main()
 
 int main()
 {
-    testassert(_objc_getTaggedPointerTag((void *)1) == 0);
+#if OBJC_SPLIT_TAGGED_POINTERS
+    void *obj = (void *)0;
+#else
+    void *obj = (void *)1;
+#endif
+
+    testassert(_objc_getTaggedPointerTag(obj) == 0);
     succeed(__FILE__);
 }
 

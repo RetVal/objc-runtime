@@ -1,8 +1,8 @@
 /*
 TEST_BUILD
-    $C{COMPILE} $DIR/cacheflush0.m -o cacheflush0.dylib -dynamiclib
-    $C{COMPILE} $DIR/cacheflush2.m -x none cacheflush0.dylib -o cacheflush2.dylib -dynamiclib
-    $C{COMPILE} $DIR/cacheflush3.m -x none cacheflush0.dylib -o cacheflush3.dylib -dynamiclib
+    $C{COMPILE} $DIR/cacheflush0.m -install_name $T{DYLIBDIR}/cacheflush0.dylib -o cacheflush0.dylib -dynamiclib
+    $C{COMPILE} $DIR/cacheflush2.m -x none cacheflush0.dylib -install_name $T{DYLIBDIR}/cacheflush2.dylib -o cacheflush2.dylib -dynamiclib
+    $C{COMPILE} $DIR/cacheflush3.m -x none cacheflush0.dylib -install_name $T{DYLIBDIR}/cacheflush3.dylib -o cacheflush3.dylib -dynamiclib
     $C{COMPILE} $DIR/cacheflush.m  -x none cacheflush0.dylib -o cacheflush.exe
 END
 */
@@ -33,6 +33,7 @@ int main()
     testassert(1 == [Sub classMethod]);
     testassert(1 == [sub instanceMethod]);
 
+#if !TARGET_OS_EXCLAVEKIT
     // Dynamically load a category
     dlopen("cacheflush2.dylib", 0);
 
@@ -52,6 +53,7 @@ int main()
 
     testassert(3 == [Sub classMethod]);
     testassert(3 == [sub instanceMethod]);
+#endif // !TARGET_OS_EXCLAVEKIT
 
     // fixme test subclasses
 

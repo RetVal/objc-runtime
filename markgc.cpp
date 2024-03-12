@@ -391,6 +391,14 @@ void dosect(uint8_t *start, macho_section<P> *sect)
         sect->set_sectname("__objc_init_func");
         if (debug) printf("disabled __mod_init_func section\n");
     }
+    if (segnameStartsWith(sect->segname(), "__TEXT")  &&
+        sectnameEquals(sect->sectname(), "__init_offsets"))
+    {
+        // section type 0 is S_REGULAR
+        sect->set_flags(sect->flags() & ~SECTION_TYPE);
+        sect->set_sectname("__objc_init_offs");
+        if (debug) printf("disabled __mod_init_func section\n");
+    }
     if (segnameStartsWith(sect->segname(), "__DATA")  &&  
         sectnameEquals(sect->sectname(), "__mod_term_func"))
     {

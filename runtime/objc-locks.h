@@ -35,7 +35,8 @@
 // Lock ordering is declared in _objc_fork_prepare()
 // and is enforced by lockdebug.
 
-extern monitor_t classInitLock;
+extern mutex_t classInitLock;
+extern mutex_t pendingInitializeMapLock;
 extern mutex_t selLock;
 #if CONFIG_USE_CACHE_LOCK
 extern mutex_t cacheUpdateLock;
@@ -59,10 +60,6 @@ extern void SideTableLocksSucceedLock(const void *oldlock);
 extern void SideTableLocksPrecedeLocks(StripedMap<spinlock_t>& newlocks);
 extern void SideTableLocksSucceedLocks(StripedMap<spinlock_t>& oldlocks);
 
-#if __OBJC2__
 #include "objc-locks-new.h"
-#else
-#include "objc-locks-old.h"
-#endif
 
 #endif

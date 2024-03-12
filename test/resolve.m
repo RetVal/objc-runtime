@@ -3,12 +3,15 @@
  */
 
 // TEST_CFLAGS -Wno-deprecated-declarations
-  
+
 #include "test.h"
 #include "testroot.i"
 #include <objc/objc.h>
 #include <objc/objc-runtime.h>
+
+#if !TARGET_OS_EXCLAVEKIT
 #include <unistd.h>
+#endif
 
 #if __has_feature(objc_arc)
 
@@ -51,7 +54,8 @@ static id forward_handler(id self, SEL sel)
             if (state == 35) state = 36;
             return nil;
         }
-        fail("+forward:: shouldn't be called with sel %s", sel_getName(sel));
+        fail("+forward:: shouldn't be called with sel %s (state %d)",
+             sel_getName(sel), state);
         return nil;
     }
     else {
@@ -67,7 +71,8 @@ static id forward_handler(id self, SEL sel)
             if (state == 75) state = 76;
             return nil;
         }
-        fail("-forward:: shouldn't be called with sel %s", sel_getName(sel));
+        fail("-forward:: shouldn't be called with sel %s (state %d)",
+             sel_getName(sel), state);
         return nil;
     }
 }
@@ -120,8 +125,8 @@ static id instanceMethod_c(id __unused self, SEL __unused sel)
         state = 31;
         return YES;  // lie
     } else {
-        fail("+resolveClassMethod: called incorrectly (sel %s)", 
-             sel_getName(sel));
+        fail("+resolveClassMethod: called incorrectly (sel %s, state %d)", 
+             sel_getName(sel), state);
         return NO;
     }
 }
@@ -142,8 +147,8 @@ static id instanceMethod_c(id __unused self, SEL __unused sel)
         state = 71;
         return YES;  // lie
     } else {
-        fail("+resolveInstanceMethod: called incorrectly (sel %s)", 
-             sel_getName(sel));
+        fail("+resolveInstanceMethod: called incorrectly (sel %s, state %d)", 
+             sel_getName(sel), state);
         return NO;
     }
 }
@@ -252,7 +257,7 @@ int main()
     testassert(ret == nil);
 
     _objc_flush_caches([Sub class]);
-    
+
     // Call a method that won't get resolved but the resolver lies about it
     state = 70;
     ret = [s lyingInstanceMethod];

@@ -23,6 +23,14 @@ END
 
 #define ustrcmp(a, b) strcmp((char *)a, (char *)b)
 
+// Aliasing-friendly way to read from a fixed offset in an object.
+uintptr_t readWord(id obj, int offset) {
+    uintptr_t value;
+    char *ptr = (char *)(__bridge void*)obj;
+    memcpy(&value, ptr + offset * sizeof(uintptr_t), sizeof(uintptr_t));
+    return value;
+}
+
 #ifdef __cplusplus
 class CXX {
  public:
@@ -175,15 +183,14 @@ int main(int argc __attribute__((unused)), char **argv)
     static Sub * volatile sub;
     sub = [Sub new];
     sub->subIvar = 10;
-    uintptr_t *subwords = (uintptr_t *)(__bridge void*)sub;
-    testassert(subwords[2] == 10);
+    testassertequal(readWord(sub, 2), 10);
 
 #ifdef __cplusplus
-    testassert(subwords[5] == 1);
-    testassert(sub->cxx.magic == 1);
+    testassertequal(readWord(sub, 5), 1);
+    testassertequal(sub->cxx.magic, 1);
     sub->cxx.magic++;
-    testassert(subwords[5] == 2);
-    testassert(sub->cxx.magic == 2);
+    testassertequal(readWord(sub, 5), 2);
+    testassertequal(sub->cxx.magic, 2);
 # if __has_feature(objc_arc)
     sub = nil;
 # else
@@ -254,15 +261,14 @@ int main(int argc __attribute__((unused)), char **argv)
     */
 
     Sub2 *sub2 = [Sub2 new];
-    uintptr_t *sub2words = (uintptr_t *)(__bridge void*)sub2;
     sub2->subIvar = (void *)10;
-    testassert(sub2words[11] == 10);
+    testassertequal(readWord(sub2, 11), 10);
 
-    testassert(class_getInstanceSize([Sub2 class]) == 13*sizeof(void*));
+    testassertequal(class_getInstanceSize([Sub2 class]), 13*sizeof(void*));
 
     ivar = class_getInstanceVariable([Sub2 class], "subIvar");
     testassert(ivar);
-    testassert(11*sizeof(void*) == (size_t)ivar_getOffset(ivar));
+    testassertequal(11*sizeof(void*), (size_t)ivar_getOffset(ivar));
     testassert(0 == strcmp(ivar_getName(ivar), "subIvar"));
 
     ivar = class_getInstanceVariable([ShrinkingSuper class], "superIvar");

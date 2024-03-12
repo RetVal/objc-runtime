@@ -1,4 +1,4 @@
-// TEST_CONFIG MEM=arc
+// TEST_CONFIG MEM=arc OS=!exclavekit
 // TEST_CFLAGS -framework Foundation
 
 // Problem: If weak reference operations provoke +initialize, the runtime 

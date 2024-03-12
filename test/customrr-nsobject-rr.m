@@ -7,6 +7,8 @@ TEST_BUILD
     $C{COMPILE} $DIR/customrr-nsobject.m -o customrr-nsobject-rr.exe -DSWIZZLE_RELEASE=1 -fno-objc-convert-messages-to-runtime-calls
 END
 
+TEST_RUN_OUTPUT_FILTER .*( OS_|inherited).*
+
 TEST_RUN_OUTPUT
 objc\[\d+\]: CUSTOM RR: NSObject
 OK: customrr-nsobject-rr.exe

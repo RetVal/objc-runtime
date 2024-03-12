@@ -21,6 +21,7 @@
 
 #include <objc/objc-internal.h>
 #include <Foundation/Foundation.h>
+#include <ptrauth.h>
 
 static int state;
 static pthread_attr_t smallstack;
@@ -83,6 +84,24 @@ static pthread_attr_t smallstack;
     }
 #endif
 
+    [super dealloc];
+}
+@end
+
+@interface AutoreleaseSelfDuringDealloc : NSObject @end
+@implementation AutoreleaseSelfDuringDealloc
++ (id)allocRawIsa {
+    id obj = (id)calloc(class_getInstanceSize(self), 1);
+    *(Class __ptrauth_objc_isa_pointer *)obj = self;
+    return obj;
+}
+- (void)_objc_initiateDealloc {
+    [self dealloc];
+}
+- (void)dealloc
+{
+    state++;
+    RR_AUTORELEASE(self);
     [super dealloc];
 }
 @end
@@ -168,6 +187,29 @@ void cycle(void)
         testassert(state == 4 * NESTED_COUNT);
     }
 
+    // Autorelease an object during its own dealloc.
+    testprintf("-- Autorelease deallocating object.\n");
+
+    // Raw isa only skips the autorelease pool when it has custom dealloc initiation.
+    // Do this early in case we're on a platform where everything gets a raw isa.
+    _class_setCustomDeallocInitiation([AutoreleaseSelfDuringDealloc class]);
+
+    {
+        void *pool = RR_PUSH();
+        state = 0;
+        RELEASE_VALUE([[AutoreleaseSelfDuringDealloc alloc] init]);
+        testassert(state == 1);
+        RR_POP(pool);
+    }
+    testprintf("-- Autorelease deallocating object with raw isa.\n");
+    {
+        void *pool = RR_PUSH();
+        state = 0;
+        RELEASE_VALUE([[AutoreleaseSelfDuringDealloc allocRawIsa] init]);
+        testassert(state == 1);
+        RR_POP(pool);
+    }
+
     // Top-level thread pool popped normally.
     // Check twice - once for empty placeholder, once without.
 #   if DEBUG_POOL_ALLOCATION || FOUNDATION
@@ -189,6 +231,8 @@ void cycle(void)
             }
 #endif
             RR_AUTORELEASE([[Deallocator alloc] init]);
+            // Push and pop a pool to clear out the return TLS.
+            RR_POP(RR_PUSH());
             RR_POP(pool);
             pool = RR_PUSH();
 #if CHECK_PLACEHOLDER

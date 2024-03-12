@@ -33,7 +33,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <mach-o/dyld.h>
-#include <mach-o/ldsyms.h>
 
 #include "Protocol.h"
 #include "NSObject.h"
@@ -48,16 +47,12 @@
 @interface __IncompleteProtocol : NSObject
 @end
 
-#if __OBJC2__
 __attribute__((objc_nonlazy_class))
-#endif
 @implementation __IncompleteProtocol
 @end
 
 
-#if __OBJC2__
 __attribute__((objc_nonlazy_class))
-#endif
 @implementation Protocol
 
 - (BOOL) conformsTo: (Protocol *)aProtocolObj
@@ -67,26 +62,14 @@ __attribute__((objc_nonlazy_class))
 
 - (struct objc_method_description *) descriptionForInstanceMethod:(SEL)aSel
 {
-#if !__OBJC2__
-    return lookup_protocol_method((struct old_protocol *)self, aSel, 
-                                  YES/*required*/, YES/*instance*/, 
-                                  YES/*recursive*/);
-#else
     return method_getDescription(protocol_getMethod((struct protocol_t *)self, 
                                                      aSel, YES, YES, YES));
-#endif
 }
 
 - (struct objc_method_description *) descriptionForClassMethod:(SEL)aSel
 {
-#if !__OBJC2__
-    return lookup_protocol_method((struct old_protocol *)self, aSel, 
-                                  YES/*required*/, NO/*instance*/, 
-                                  YES/*recursive*/);
-#else
     return method_getDescription(protocol_getMethod((struct protocol_t *)self, 
                                                     aSel, YES, NO, YES));
-#endif
 }
 
 - (const char *)name
@@ -96,31 +79,20 @@ __attribute__((objc_nonlazy_class))
 
 - (BOOL)isEqual:other
 {
-#if __OBJC2__
     // check isKindOf:
     Class cls;
     Class protoClass = objc_getClass("Protocol");
-    for (cls = object_getClass(other); cls; cls = cls->superclass) {
+    for (cls = object_getClass(other); cls; cls = cls->getSuperclass()) {
         if (cls == protoClass) break;
     }
     if (!cls) return NO;
     // check equality
     return protocol_isEqual(self, other);
-#else
-    return [other isKindOf:[Protocol class]] && [self conformsTo: other] && [other conformsTo: self];
-#endif
 }
 
-#if __OBJC2__
 - (NSUInteger)hash
 {
     return 23;
 }
-#else
-- (unsigned)hash
-{
-    return 23;
-}
-#endif
 
 @end

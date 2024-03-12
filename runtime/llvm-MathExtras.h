@@ -16,6 +16,8 @@
 #ifndef LLVM_SUPPORT_MATHEXTRAS_H
 #define LLVM_SUPPORT_MATHEXTRAS_H
 
+#include <stdint.h>
+
 namespace objc {
 
 // NOTE: The following support functions use the _32/_64 extensions instead of
@@ -423,6 +425,10 @@ inline uint32_t NextPowerOf2(uint32_t A) {
   A |= (A >> 16);
   return A + 1;
 }
+
+/// Returns true if \p x is a power of 2.
+template <typename T>
+constexpr bool IsPowerOf2(T x) { return ((x-1) & x) == 0; }
 
 /// Returns the next integer (mod 2**64) that is greater than or equal to
 /// \p Value and is a multiple of \p Align. \p Align must be non-zero.

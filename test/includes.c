@@ -41,7 +41,7 @@
 #include "test.h"
 #pragma clang diagnostic pop
 
-int main()
+int main(int argc __unused, char **argv __unused)
 {
     succeed(NAME);
 }

@@ -1,0 +1,443 @@
+#!/usr/bin/python3
+#
+#  Run ObjC tests in exclaves
+#
+import sys
+import re
+import os
+import subprocess
+import shutil
+import tempfile
+from threading import Event, Lock, Thread
+import time
+
+# Decode the arguments; we're passed environment variables first, then
+# the name of the command to run, and finally any arguments for that command.
+opt_re = re.compile(r'(--(?:[A-Za-z][-A-Za-z]*)|-(?:[A-Za-z]))')
+env_re = re.compile(r'^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$')
+env=dict()
+cmd=[]
+debug=False
+gdb=False
+for arg in sys.argv[1:]:
+    if len(cmd):
+        cmd.append(arg)
+        continue
+
+    m = opt_re.match(arg)
+    if m:
+        option = m.group(1)
+        if option in ('--debug', '-d'):
+            debug=True
+        elif option in ('--gdb', '-g'):
+            gdb=True
+        else:
+            print('Unknown option: {}'.format(arg))
+            exit(1)
+        continue
+
+    m = env_re.match(arg)
+    if m:
+        name = m.group(1)
+        value = m.group(2)
+        env[name] = value
+    else:
+        cmd.append(arg)
+
+if len(cmd) == 0:
+    print('usage: exclave-run [ENVVAR=value...] command [arg...]')
+    exit(1)
+
+# Make sure we have the runtime
+if os.path.exists('/Volumes/ExclavesEngineeringRuntimeInternal'):
+    if debug:
+        print('Found mounted ExclavesEngineeringRuntimeInternal at /Volumes/ExclavesEngineeringRuntimeInternal')
+else:
+    if debug:
+        print('Locating ExclavesEngineeringRuntimeInternal DMG file...')
+
+    sdk_version = subprocess.check_output([shutil.which('xcrun'),
+                                           '--sdk', 'macosx.internal',
+                                           '--show-sdk-build-version'])\
+                            .strip().decode()
+    build_re = re.compile(r'^([0-9]*[A-Z])[0-9]+[a-z]*')
+    m = build_re.match(sdk_version)
+    if not m:
+        print('Bad SDK version: {}'.format(sdk_version))
+        exit(1)
+    sdk_names = {
+        '22A': 'Rome',
+        '22E': 'RomeE',
+        '23A': 'Sunburst'
+    }
+    sdk_name = sdk_names.get(m.group(1), None)
+    if sdk_name is None:
+        print('Unknown SDK version: {}'.format(sdk_version))
+        exit(1)
+    sdk = sdk_name + sdk_version
+
+    p = ''.join([os.environ['HOME'],
+                 '/Downloads/',
+                 sdk,
+                 '_',
+                 'ExclavesEngineeringRuntimeInternal.dmg'])
+    if os.path.exists(p):
+        if debug:
+            print('Found {}, mounting...'.format(p))
+    else:
+        if debug:
+            print('DMG not found in ~/Downloads, attempting to download...')
+        subprocess.run([shutil.which('nfa-cli'),
+                        sdk,
+                        'ExclavesEngineeringRuntimeInternal',
+                        '-o', p],
+                       capture_output=not debug)
+        if not os.path.exists(p):
+            print('Download failed')
+            exit(1)
+
+        if debug:
+            print('Download succeeded, mounting...')
+
+    subprocess.run([shutil.which('diskimagetool'), 'attach', p],
+                   check=True, capture_output=not debug)
+
+SEG_STATE_START = 0
+SEG_STATE_SEGCMD = 1
+SEG_STATE_SEGFOUND = 2
+SEG_STATE_GOTFILEOFF = 3
+SEG_STATE_DONE = 4
+load_cmd_re = re.compile(r'^Load command \d+')
+cmd_re = re.compile(r'^\s+cmd\s([A-Za-z_][A-Za-z0-9_]*)')
+segname_re = re.compile(r'^\s+segname\s([A-Za-z_][A-Za-z0-9_]*)')
+fileoff_re = re.compile(r'^\s+fileoff\s(\d+|0x[0-9A-Fa-f]+)')
+filesize_re = re.compile(r'^\s+filesize\s(\d+|0x[0-9A-Fa-f]+)')
+def find_segment(filename, name):
+    state = SEG_STATE_START
+    fileoff = None
+    filesize = None
+    with subprocess.Popen([shutil.which('otool'), '-l', filename],
+                          stdout=subprocess.PIPE, text=True) as proc:
+        while True:
+            line = proc.stdout.readline()
+            if not line:
+                break
+
+            if load_cmd_re.match(line):
+                state = SEG_STATE_START
+                continue
+            elif state == SEG_STATE_START:
+                m = cmd_re.match(line)
+                if m and m.group(1) == 'LC_SEGMENT_64':
+                    state = SEG_STATE_SEGCMD
+            elif state == SEG_STATE_SEGCMD:
+                m = segname_re.match(line)
+                if m and m.group(1) == name:
+                    state = SEG_STATE_SEGFOUND
+            elif state == SEG_STATE_SEGFOUND:
+                m = fileoff_re.match(line)
+                if m:
+                    fileoff = int(m.group(1), 0)
+                    state = SEG_STATE_GOTFILEOFF
+            elif state == SEG_STATE_GOTFILEOFF:
+                m = filesize_re.match(line)
+                if m:
+                    filesize = int(m.group(1), 0)
+                    state = SEG_STATE_DONE
+                    break
+
+    if state != SEG_STATE_DONE:
+        return None
+
+    return (fileoff, filesize)
+
+# Find EVE and CL4
+macos_sdk_path = subprocess.check_output([
+    shutil.which('xcrun'), '--show-sdk-platform-path',
+    '--sdk', 'macosx.internal'
+], text=True).strip()
+exclavecore_path = subprocess.check_output([
+    shutil.which('xcrun'), '--show-sdk-path',
+    '--sdk', 'exclavecore.macosx.internal'
+], text=True).strip()
+eve_path = os.path.join(macos_sdk_path,
+                        'usr/local/bin/ExclaveVisor')
+cL4_path = os.path.join(exclavecore_path,
+                        'System/ExclaveCore/usr/local/standalone/cL4/l4.EVP.DEBUG')
+
+if debug:
+    print('EVE found at {}\ncL4 found at {}'.format(eve_path, cL4_path))
+
+# A watchdog timer, which we'll need in a minute
+class WatchdogTimer(Thread):
+    def __init__(self, timeout, callback, *args, **kwargs):
+        super().__init__(**kwargs)
+        self.timeout = timeout
+        self.callback = callback
+        self.args = args
+        self.cancelled = Event()
+
+    def run(self):
+        self.restart()
+        while not self.cancelled.wait(self.deadline - time.monotonic()):
+            if self.deadline <= time.monotonic() and not self.cancelled.is_set():
+                return self.callback(*self.args)
+
+    def restart(self):
+        self.deadline = time.monotonic() + self.timeout
+
+    def cancel(self):
+        self.cancelled.set()
+
+escape_map = {
+    b'"': b'\\"',
+    b'\\': b'\\\\',
+    b'\n': b'\\n',
+    b'\r': b'\\r',
+    b'\t': b'\\t'
+}
+escape_re = re.compile(rb'[\x00-\x1f"\\\x7f-\xff]')
+def escape_for_c(s):
+    """Escape a string for use in a C program."""
+    def escape_match(m):
+        ch = m.group(0)
+        result = escape_map.get(ch, None)
+        if result is not None:
+            return result
+        return b'\\x%02x' % ord(ch)
+    if isinstance(s, str):
+        s = s.encode('utf-8')
+    escaped = escape_re.sub(escape_match, s)
+    return escaped.decode('utf-8')
+
+# Make a temporary directory to build the filesystem
+with tempfile.TemporaryDirectory() as tmpdir:
+    root = os.path.join(tmpdir, 'root')
+    archive = os.path.join(tmpdir, 'bundle.cpio')
+
+    # Check for OBJC_ environment variables; if we have them, we need to
+    # build a dylib containing those settings and inject that
+    need_env = False
+    for k in env:
+        if k.startswith("OBJC_"):
+            need_env = True
+            break
+
+    # Build the filesystem structure we want
+    os.makedirs(os.path.join(root, 'System', 'ExclaveKit', 'usr', 'bin'))
+    os.makedirs(os.path.join(root,
+                             'System', 'ExclaveKit', 'usr', 'lib', 'system'))
+
+    shutil.copytree('/Volumes/ExclavesEngineeringRuntimeInternal/System/ExclaveKit',
+                    os.path.join(root, 'System', 'ExclaveKit'),
+                    ignore=lambda path,files: [
+                        f for f in files
+                        if os.path.splitext(f)[1] in ('.py', '.h')
+                    ],
+                    dirs_exist_ok=True)
+
+    usr_local = os.path.join(root,
+                             'System/ExclaveKit',
+                             'usr/local')
+    if os.path.exists(usr_local):
+        shutil.rmtree(usr_local)
+
+    os.makedirs(os.path.join(root, 'System/ExclaveKit/usr/local/lib'))
+
+    # Build the environment library, if needed
+    if need_env:
+        if debug:
+            print('Building environment library with settings:')
+
+        env_c = os.path.join(tmpdir, 'env.c')
+        env_dylib = os.path.join(root, 'System/ExclaveKit/usr/local/lib',
+                                 'libobjc-env.dylib')
+
+        with open(env_c, 'wt') as f:
+            f.write('static char *_objc_env[] = {\n')
+            for k,v in env.items():
+                if k.startswith("OBJC_"):
+                    if debug:
+                        print('  {}={}'.format(k, v))
+                    f.write('  "{}={}",\n'.format(escape_for_c(k),
+                                                  escape_for_c(v)));
+            f.write('''
+};
+
+char **_objc_test_get_environ(void) __attribute__((weak_import, visibility("default")));
+char **_objc_test_get_environ(void) { return _objc_env; }
+''')
+        shutil.copy(env_c, '/tmp/env.c')
+        sdkroot = subprocess.check_output([shutil.which('xcrun'),
+                                           '--sdk', 'exclavekit.macosx.internal',
+                                           '--show-sdk-path']).strip().decode()
+        subprocess.run(['xcrun', '--sdk', 'exclavekit.macosx.internal',
+                        'clang', '-arch', 'arm64e',
+                        env_c,
+                        '-L', os.path.join(sdkroot, 'System/ExclaveKit/usr/lib'),
+                        '-o', env_dylib, '-dynamiclib',
+                        '-install_name',
+                        '/System/ExclaveKit/usr/local/lib/libobjc-env.dylib'],
+                       check=True, capture_output=not debug)
+
+    libobjc_path = env.get('LIBOBJC', None)
+    if libobjc_path is not None:
+        shutil.copy(libobjc_path, os.path.join(root,
+                                               'System/ExclaveKit',
+                                               'usr/lib/libobjc.A.dylib'))
+
+    libunwind_path = os.environ.get('EXCLAVE_LIBUNWIND', None)
+    if libunwind_path is not None:
+        shutil.copy(libunwind_path,
+                    os.path.join(root,
+                                 'System/ExclaveKit',
+                                 'usr/lib/system/libunwind.dylib'))
+
+    liblibc_path = os.environ.get('EXCLAVE_LIBLIBC', None)
+    if liblibc_path is not None:
+        shutil.copy(liblibc_path,
+                    os.path.join(root,
+                                 'System/ExclaveKit',
+                                 'usr/lib/system/liblibc.dylib'))
+
+    liblibc_plat_path = os.environ.get('EXCLAVE_LIBLIBC_PLAT', None)
+    if liblibc_plat_path is not None:
+        shutil.copy(liblibc_plat_path,
+                    os.path.join(root,
+                                 'System/ExclaveKit',
+                                 'usr/lib/system/liblibc_plat.dylib'))
+
+    libsys_path = os.environ.get('EXCLAVE_LIBSYSTEM', None)
+    if libsys_path is not None:
+        shutil.copy(libsys_path,
+                    os.path.join(root,
+                                 'System/ExclaveKit',
+                                 'usr/lib/libSystem.dylib'))
+
+    libsysblocks_path = os.environ.get('EXCLAVE_LIBSYSTEM_BLOCKS', None)
+    if libsysblocks_path is not None:
+        shutil.copy(libsysblocks_path,
+                    os.path.join(root,
+                                 'System/ExclaveKit',
+                                 'usr/lib/system/libsystem_blocks.dylib'))
+
+    dyld_path = os.environ.get('EXCLAVE_DYLD', None)
+    if dyld_path is not None:
+        shutil.copy(dyld_path,
+                    os.path.join(root,
+                                 'System/ExclaveKit',
+                                 'usr/lib/dyld'))
+
+    # Copy the executable
+    shutil.copy(cmd[0], os.path.join(root,
+                                     'System', 'ExclaveKit',
+                                     'usr', 'bin',
+                                     os.path.basename(cmd[0])))
+
+    # Look for dylibs to copy as well
+    for entry in os.scandir(os.path.dirname(cmd[0])):
+        _, ext = os.path.splitext(entry.name)
+        if ext == '.dylib':
+            shutil.copy(entry.path, os.path.join(root,
+                                                 'System', 'ExclaveKit',
+                                                 'usr', 'local', 'lib',
+                                                 entry.name))
+
+    if debug:
+        lsd_path = shutil.which('lsd')
+        if lsd_path is not None:
+            subprocess.run([lsd_path, '--tree', root])
+        else:
+            subprocess.run(['/bin/ls', '-lR', root])
+
+    # Pack it up as a cpio archive
+    if debug:
+        cpio_flags='-ov'
+        stderr_output=None
+    else:
+        cpio_flags='-o'
+        stderr_output=subprocess.DEVNULL
+
+    cpio_data = subprocess.check_output([
+        'bash', '-c', 'cd {} && find . -type f | cpio {}'.format(root, cpio_flags)
+    ], text=False, stderr=stderr_output)
+
+    if debug:
+        print('Generated bundle is {} bytes in size'.format(len(cpio_data)))
+
+    # Embed the payload in the launcher
+    launcher_path = os.path.join(tmpdir, 'launcher')
+
+    launcher_base_path = os.getenv('EXCLAVE_LAUNCHER', '/Volumes/ExclavesEngineeringRuntimeInternal/System/ExclaveCore/usr/local/bin/prototype-sample-exclavekit-launcher')
+    shutil.copy(launcher_base_path, launcher_path)
+
+    offset,size = find_segment(launcher_path, '__CPIO')
+
+    if debug:
+        print('__CPIO segment of size {} found at offset {}'.format(size, offset))
+
+    if size < len(cpio_data):
+        print('__CPIO segment is too small!')
+        exit(1)
+
+    with open(launcher_path, 'rb+') as f:
+        f.seek(offset, 0)
+        f.write(cpio_data)
+
+    # Launch EVE
+    state = 'start'
+    command = [eve_path, cL4_path, launcher_path]
+    if gdb:
+        command += ['--debug:objc4']
+    with subprocess.Popen(command,
+                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                          text=True) as p:
+        watchdog = WatchdogTimer(15, callback=p.kill, daemon=True)
+        watchdog.start()
+        while True:
+            line = p.stdout.readline()
+            if not line:
+                break
+            if state == 'start':
+                if line.startswith('> Starting target process...'):
+                    state = 'wait-lldb-command'
+                if debug:
+                    print('\x1b[33m{}\x1b[0m'.format(line), end='')
+            elif state == 'wait-lldb-command':
+                if line.startswith('lldb -o'):
+                    state = 'wait-blank'
+                if debug:
+                    print('\x1b[33m{}\x1b[0m'.format(line), end='')
+            elif state == 'wait-blank':
+                if line.strip() == "":
+                    state = 'running'
+                if debug:
+                    print('\x1b[33m{}\x1b[0m'.format(line), end='')
+            elif state == 'running':
+                if line.startswith('dyld['):
+                    if debug:
+                        print('\x1b[34m{}\x1b[0m'.format(line), end='')
+                    continue
+                if line.startswith('panic: user panic') \
+                   or line.startswith('exit()'):
+                    if debug:
+                        print('\x1b[34m{}\x1b[0m'.format(line), end='')
+                    state = 'exiting'
+                    p.kill()
+                    continue
+                print(line, end='')
+            elif state == 'exiting':
+                if debug:
+                    print('\x1b[34m{}\x1b[0m'.format(line), end='')
+            watchdog.restart()
+
+        watchdog.restart()
+        p.wait()
+        watchdog.cancel()
+
+        if state == 'exiting':
+            pass
+        elif p.returncode < 0:
+            print('Killed with signal {}'.format(-p.returncode))
+        elif p.returncode != 0:
+            print('Return error {}'.format(p.returncode))

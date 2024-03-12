@@ -1,8 +1,8 @@
-// TEST_CONFIG
+// TEST_CONFIG OS=!exclavekit
 
 #include "test.h"
 
-#include <Foundation/NSObject.h>
+#include <objc/NSObject.h>
 #include <mach/mach.h>
 #include <pthread.h>
 #include <sys/time.h>

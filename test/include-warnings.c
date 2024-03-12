@@ -1,6 +1,6 @@
 /*
 TEST_BUILD
-    $C{COMPILE} $DIR/include-warnings.c -o include-warnings.exe -Wsystem-headers -Weverything -Wno-undef -Wno-old-style-cast -Wno-nullability-extension -Wno-c++98-compat 2>&1 | grep -v 'In file' | grep objc || true
+    $C{COMPILE} $DIR/include-warnings.c -o include-warnings.exe -Wsystem-headers -Weverything -Wno-undef -Wno-old-style-cast -Wno-nullability-extension -Wno-c++98-compat -Wno-declaration-after-statement 2>&1 | grep -v 'In file' | grep objc || true
 END
 
 TEST_RUN_OUTPUT
@@ -17,5 +17,7 @@ END
 //   _Nullable etc which we already handle correctly in objc-abi.h.
 // -Wno-c++98-compat disables warnings about things that already
 //   have guards against C++98.
+// -Wno-declaration-after-statement disables a warning about mixing declarations
+//   and code while building for a standard earlier than C99
 
 #include "includes.c"

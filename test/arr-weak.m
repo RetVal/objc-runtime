@@ -9,7 +9,7 @@ END
 
 #include "test.h"
 
-#include <Foundation/NSObject.h>
+#include <objc/NSObject.h>
 
 static id weak;
 static id weak2;

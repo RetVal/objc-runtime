@@ -7,7 +7,13 @@ TEST_BUILD
     $C{COMPILE} $DIR/customrr-nsobject.m -o customrr-nsobject-core.exe -DSWIZZLE_CORE=1 -fno-objc-convert-messages-to-runtime-calls
 END
 
+TEST_RUN_OUTPUT_FILTER .*( OS_|inherited).*
+
 TEST_RUN_OUTPUT
+objc\[\d+\]: CUSTOM Core: NSObject \(meta\)
+objc\[\d+\]: CUSTOM Core: NSObject
+OK: customrr-nsobject-core.exe
+OR
 objc\[\d+\]: CUSTOM Core: NSObject
 objc\[\d+\]: CUSTOM Core: NSObject \(meta\)
 OK: customrr-nsobject-core.exe

@@ -44,6 +44,10 @@
 // blacklists this library by name. Do not change the name of this
 // library. rdar://problem/42627391
 
+#include <TargetConditionals.h>
+
+#if !TARGET_OS_EXCLAVEKIT
+
 #include <objc/objc-api.h>
 
 OBJC_EXPORT const char _objc_blockTrampolineImpl
@@ -67,5 +71,7 @@ OBJC_AVAILABLE(10.14, 12.0, 12.0, 5.0, 3.0)
 OBJC_EXPORT const char _objc_blockTrampolineLast_stret
 OBJC_AVAILABLE(10.14, 12.0, 12.0, 5.0, 3.0)
     OBJC_ARM64_UNAVAILABLE;
+
+#endif // !TARGET_OS_EXCLAVEKIT
 
 #endif

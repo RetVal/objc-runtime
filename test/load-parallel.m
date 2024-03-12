@@ -1,18 +1,19 @@
 /*
+TEST_CONFIG OS=!exclavekit
 TEST_BUILD
-    $C{COMPILE} $DIR/load-parallel00.m -o load-parallel00.dylib -dynamiclib
+    $C{COMPILE} $DIR/load-parallel00.m -install_name $T{DYLIBDIR}/load-parallel00.dylib -o load-parallel00.dylib -dynamiclib
     $C{COMPILE} $DIR/load-parallel.m -x none load-parallel00.dylib -o load-parallel.exe -DCOUNT=10
 
-    $C{COMPILE} $DIR/load-parallel0.m -x none load-parallel00.dylib -o load-parallel0.dylib -dynamiclib -DN=0
-    $C{COMPILE} $DIR/load-parallel0.m -x none load-parallel00.dylib -o load-parallel1.dylib -dynamiclib -DN=1
-    $C{COMPILE} $DIR/load-parallel0.m -x none load-parallel00.dylib -o load-parallel2.dylib -dynamiclib -DN=2
-    $C{COMPILE} $DIR/load-parallel0.m -x none load-parallel00.dylib -o load-parallel3.dylib -dynamiclib -DN=3
-    $C{COMPILE} $DIR/load-parallel0.m -x none load-parallel00.dylib -o load-parallel4.dylib -dynamiclib -DN=4
-    $C{COMPILE} $DIR/load-parallel0.m -x none load-parallel00.dylib -o load-parallel5.dylib -dynamiclib -DN=5
-    $C{COMPILE} $DIR/load-parallel0.m -x none load-parallel00.dylib -o load-parallel6.dylib -dynamiclib -DN=6
-    $C{COMPILE} $DIR/load-parallel0.m -x none load-parallel00.dylib -o load-parallel7.dylib -dynamiclib -DN=7
-    $C{COMPILE} $DIR/load-parallel0.m -x none load-parallel00.dylib -o load-parallel8.dylib -dynamiclib -DN=8
-    $C{COMPILE} $DIR/load-parallel0.m -x none load-parallel00.dylib -o load-parallel9.dylib -dynamiclib -DN=9
+    $C{COMPILE} $DIR/load-parallel0.m -x none load-parallel00.dylib -install_name $T{DYLIBDIR}/load-parallel0.dylib -o load-parallel0.dylib -dynamiclib -DN=0
+    $C{COMPILE} $DIR/load-parallel0.m -x none load-parallel00.dylib -install_name $T{DYLIBDIR}/load-parallel1.dylib -o load-parallel1.dylib -dynamiclib -DN=1
+    $C{COMPILE} $DIR/load-parallel0.m -x none load-parallel00.dylib -install_name $T{DYLIBDIR}/load-parallel2.dylib -o load-parallel2.dylib -dynamiclib -DN=2
+    $C{COMPILE} $DIR/load-parallel0.m -x none load-parallel00.dylib -install_name $T{DYLIBDIR}/load-parallel3.dylib -o load-parallel3.dylib -dynamiclib -DN=3
+    $C{COMPILE} $DIR/load-parallel0.m -x none load-parallel00.dylib -install_name $T{DYLIBDIR}/load-parallel4.dylib -o load-parallel4.dylib -dynamiclib -DN=4
+    $C{COMPILE} $DIR/load-parallel0.m -x none load-parallel00.dylib -install_name $T{DYLIBDIR}/load-parallel5.dylib -o load-parallel5.dylib -dynamiclib -DN=5
+    $C{COMPILE} $DIR/load-parallel0.m -x none load-parallel00.dylib -install_name $T{DYLIBDIR}/load-parallel6.dylib -o load-parallel6.dylib -dynamiclib -DN=6
+    $C{COMPILE} $DIR/load-parallel0.m -x none load-parallel00.dylib -install_name $T{DYLIBDIR}/load-parallel7.dylib -o load-parallel7.dylib -dynamiclib -DN=7
+    $C{COMPILE} $DIR/load-parallel0.m -x none load-parallel00.dylib -install_name $T{DYLIBDIR}/load-parallel8.dylib -o load-parallel8.dylib -dynamiclib -DN=8
+    $C{COMPILE} $DIR/load-parallel0.m -x none load-parallel00.dylib -install_name $T{DYLIBDIR}/load-parallel9.dylib -o load-parallel9.dylib -dynamiclib -DN=9
 END
 */
 

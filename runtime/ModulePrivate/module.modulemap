@@ -1,0 +1,4 @@
+module ObjectiveC_Private [system] {
+  umbrella "."
+  explicit module * { export * }
+}

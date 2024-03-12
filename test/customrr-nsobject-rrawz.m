@@ -7,9 +7,15 @@ TEST_BUILD
     $C{COMPILE} $DIR/customrr-nsobject.m -o customrr-nsobject-rrawz.exe -DSWIZZLE_RELEASE=1 -DSWIZZLE_AWZ=1 -fno-objc-convert-messages-to-runtime-calls
 END
 
+TEST_RUN_OUTPUT_FILTER .*( OS_|inherited).*
+
 TEST_RUN_OUTPUT
 objc\[\d+\]: CUSTOM AWZ: NSObject \(meta\)
 objc\[\d+\]: CUSTOM RR: NSObject
+OK: customrr-nsobject-rrawz.exe
+OR
+objc\[\d+\]: CUSTOM RR: NSObject
+objc\[\d+\]: CUSTOM AWZ: NSObject \(meta\)
 OK: customrr-nsobject-rrawz.exe
 END
 

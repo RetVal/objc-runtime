@@ -28,6 +28,8 @@
 
 #include "objc-private.h"
 
+#include <algorithm>
+
 /***********************************************************************
 * SubtypeUntil.
 *
@@ -284,7 +286,7 @@ encoding_getReturnType(const char *t, char *dst, size_t dst_len)
 
     end = SkipFirstType(t);
     len = end - t;
-    strncpy(dst, t, MIN(len, dst_len));
+    strncpy(dst, t, std::min(len, dst_len));
     if (len < dst_len) memset(dst+len, 0, dst_len - len);
 }
 
@@ -333,7 +335,7 @@ encoding_getArgumentType(const char *t, unsigned int index,
 
     end = SkipFirstType(t);
     len = end - t;
-    strncpy(dst, t, MIN(len, dst_len));
+    strncpy(dst, t, std::min(len, dst_len));
     if (len < dst_len) memset(dst+len, 0, dst_len - len);
 }
 

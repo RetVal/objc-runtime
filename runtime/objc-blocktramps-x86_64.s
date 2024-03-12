@@ -23,28 +23,43 @@
 
 #ifdef __x86_64__
 
-#include <mach/vm_param.h>
+#include "objc-vm.h"
 
 .text
 .globl __objc_blockTrampolineImpl
 .globl __objc_blockTrampolineStart
 .globl __objc_blockTrampolineLast
 
-.align PAGE_SHIFT
+.align PAGE_MAX_SHIFT
 __objc_blockTrampolineImpl:
     movq (%rsp), %r10  // read return address pushed by TrampolineEntry's callq
     movq %rdi, %rsi    // arg1 -> arg2
-    movq -2*PAGE_SIZE-5(%r10), %rdi  // block object pointer -> arg1
+    movq -2*PAGE_MAX_SIZE-5(%r10), %rdi  // block object pointer -> arg1
                        // trampoline is -5 bytes from the return address
                        // data is -2 pages from the trampoline
     ret                // back to TrampolineEntry to preserve CPU's return stack
 
-.macro TrampolineEntry
+.macro TrampolineEntry1
     // This trampoline is 8 bytes long.
     // This callq is 5 bytes long.
     callq __objc_blockTrampolineImpl
     jmp  *16(%rdi)
 .endmacro
+
+.macro TrampolineEntry4
+    TrampolineEntry1
+    TrampolineEntry1
+    TrampolineEntry1
+    TrampolineEntry1
+.endmacro
+
+#if PAGE_MAX_SHIFT == 12
+#define TrampolineEntry TrampolineEntry1
+#elif PAGE_MAX_SHIFT == 14
+#define TrampolineEntry TrampolineEntry4
+#else
+#error "unknown PAGE_MAX_SHIFT value"
+#endif
 
 .align 5
 __objc_blockTrampolineStart:
@@ -555,8 +570,26 @@ __objc_blockTrampolineStart:
     TrampolineEntry
     TrampolineEntry
     TrampolineEntry
+
+// The above is 507 entries.
+#if PAGE_MAX_SHIFT == 14
+// With 16kB pages, we need (4096*4-32)/8 = 2044 single entries, or
+// 511 "quad" entries as above. We need 3 more regular entries, then
+// 3 more singular entries, and finally a singular entry labeled Last.
+    TrampolineEntry
+    TrampolineEntry
+    TrampolineEntry
+    TrampolineEntry1
+    TrampolineEntry1
+    TrampolineEntry1
+__objc_blockTrampolineLast:
+    TrampolineEntry1
+#else
+// With 4kB pages, we need (4096-32)/8 = 508 entries. We have one
+// more at the end with the Last label for a total of 508.
 __objc_blockTrampolineLast:
     TrampolineEntry
+#endif
 
 
 .text
@@ -564,23 +597,38 @@ __objc_blockTrampolineLast:
 .globl __objc_blockTrampolineStart_stret
 .globl __objc_blockTrampolineLast_stret
 
-.align PAGE_SHIFT
+.align PAGE_MAX_SHIFT
 __objc_blockTrampolineImpl_stret:
 
     // %rdi -- arg1 -- is address of return value's space. Don't mess with it.
     movq (%rsp), %r10  // read return address pushed by TrampolineEntry's callq
     movq %rsi, %rdx    // arg2 -> arg3
-    movq -3*PAGE_SIZE-5(%r10), %rsi  // block object pointer -> arg2
+    movq -3*PAGE_MAX_SIZE-5(%r10), %rsi  // block object pointer -> arg2
                        // trampoline is -5 bytes from the return address
                        // data is -3 pages from the trampoline
     ret                // back to TrampolineEntry to preserve CPU's return stack
 
-.macro TrampolineEntry_stret
+.macro TrampolineEntry_stret1
     // This trampoline is 8 bytes long.
     // This callq is 5 bytes long.
     callq __objc_blockTrampolineImpl_stret
     jmp  *16(%rsi)
 .endmacro
+
+.macro TrampolineEntry_stret4
+    TrampolineEntry_stret1
+    TrampolineEntry_stret1
+    TrampolineEntry_stret1
+    TrampolineEntry_stret1
+.endmacro
+
+#if PAGE_MAX_SHIFT == 12
+#define TrampolineEntry_stret TrampolineEntry_stret1
+#elif PAGE_MAX_SHIFT == 14
+#define TrampolineEntry_stret TrampolineEntry_stret4
+#else
+#error "unknown PAGE_MAX_SHIFT value"
+#endif
 
 .align 5
 __objc_blockTrampolineStart_stret:
@@ -1091,7 +1139,21 @@ __objc_blockTrampolineStart_stret:
     TrampolineEntry_stret
     TrampolineEntry_stret
     TrampolineEntry_stret
+
+// See the comment on non-stret's Last for why we have additional
+// entries here.
+#if PAGE_MAX_SHIFT == 14
+    TrampolineEntry_stret
+    TrampolineEntry_stret
+    TrampolineEntry_stret
+    TrampolineEntry_stret1
+    TrampolineEntry_stret1
+    TrampolineEntry_stret1
+__objc_blockTrampolineLast_stret:
+    TrampolineEntry_stret1
+#else
 __objc_blockTrampolineLast_stret:
     TrampolineEntry_stret
+#endif
 
 #endif

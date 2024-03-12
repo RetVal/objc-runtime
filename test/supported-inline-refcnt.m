@@ -1,4 +1,4 @@
-// TEST_CONFIG MEM=mrc
+// TEST_CONFIG MEM=mrc OS=!exclavekit
 // TEST_CFLAGS -framework CoreFoundation -Weverything
 
 #pragma clang diagnostic push
@@ -14,6 +14,9 @@
 #pragma clang diagnostic ignored "-Watomic-implicit-seq-cst"
 #pragma clang diagnostic ignored "-Wdirect-ivar-access"
 #pragma clang diagnostic ignored "-Wold-style-cast"
+
+// We're not interested in standards before C99.
+#pragma clang diagnostic ignored "-Wdeclaration-after-statement"
 
 static int deallocCount;
 @interface Refcnt: NSObject @end
@@ -45,7 +48,7 @@ _OBJC_SUPPORTED_INLINE_REFCNT_WITH_DEALLOC2MAIN(_rc)
 
 @end
 
-int main()
+int main(int argc __unused, char **argv __unused)
 {
     Refcnt *obj = [Refcnt new];
     [obj retain];

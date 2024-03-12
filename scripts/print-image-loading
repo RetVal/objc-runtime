@@ -1,0 +1,222 @@
+#!/usr/sbin/dtrace -x evaltime=preinit -Z -qs
+
+//
+//  Measure duration of image loading steps
+//
+//  Sample usage:
+//
+//    sudo scripts/print-image-loading -c /path/to/app
+
+pid$target:libobjc.A.dylib:map_images:entry {
+  printf("\n");
+  printf("Loading images\n");
+  printf("------------------------------------------------------------------------------\n");
+}
+
+objc_runtime$target:::load_image {
+  printf("  %s\n", copyinstr(arg0));
+}
+
+objc_runtime$target:::first_time-start {
+  self->first_time_start = timestamp;
+  self->vfirst_time_start = vtimestamp;
+}
+objc_runtime$target:::first_time-end {
+  this->first_time = timestamp - self->first_time_start;
+  @totals["First time tasks"] = sum(this->first_time);
+  self->phase_times["First time tasks"] = this->first_time;
+
+  this->vfirst_time = vtimestamp - self->vfirst_time_start;
+  @vtotals["First time tasks"] = sum(this->vfirst_time);
+  self->vphase_times["First time tasks"] = this->vfirst_time;
+}
+
+objc_runtime$target:::fixup_selectors-start {
+  self->fixup_selectors_start = timestamp;
+  self->vfixup_selectors_start = vtimestamp;
+}
+objc_runtime$target:::fixup_selectors-end {
+  this->fixup_selectors = timestamp - self->fixup_selectors_start;
+  @totals["Fix-up selectors"] = sum(this->fixup_selectors);
+  self->phase_times["Fix-up selectors"] = this->fixup_selectors;
+
+  this->vfixup_selectors = vtimestamp - self->vfixup_selectors_start;
+  @vtotals["Fix-up selectors"] = sum(this->vfixup_selectors);
+  self->vphase_times["Fix-up selectors"] = this->vfixup_selectors;
+}
+
+objc_runtime$target:::discover_classes-start {
+  self->discover_classes_start = timestamp;
+  self->vdiscover_classes_start = vtimestamp;
+}
+objc_runtime$target:::discover_classes-end {
+  this->discover_classes = timestamp - self->discover_classes_start;
+  @totals["Discover classes"] = sum(this->discover_classes);
+  self->phase_times["Discover classes"] = this->discover_classes;
+
+  this->vdiscover_classes = vtimestamp - self->vdiscover_classes_start;
+  @vtotals["Discover classes"] = sum(this->vdiscover_classes);
+  self->vphase_times["Discover classes"] = this->vdiscover_classes;
+}
+
+objc_runtime$target:::remap_classes-start {
+  self->remap_classes_start = timestamp;
+  self->vremap_classes_start = vtimestamp;
+}
+objc_runtime$target:::remap_classes-end {
+  this->remap_classes = timestamp - self->remap_classes_start;
+  @totals["Remap classes"] = sum(this->remap_classes);
+  self->phase_times["Remap classes"] = this->remap_classes;
+
+  this->vremap_classes = vtimestamp - self->vremap_classes_start;
+  @vtotals["Remap classes"] = sum(this->vremap_classes);
+  self->vphase_times["Remap classes"] = this->vremap_classes;
+}
+
+objc_runtime$target:::fixup_vtables-start {
+  self->fixup_vtables_start = timestamp;
+  self->vfixup_vtables_start = vtimestamp;
+}
+objc_runtime$target:::fixup_vtables-end {
+  this->fixup_vtables = timestamp - self->fixup_vtables_start;
+  @totals["Fix-up vtables"] = sum(this->fixup_vtables);
+  self->phase_times["Fix-up vtables"] = this->fixup_vtables;
+
+  this->vfixup_vtables = vtimestamp - self->vfixup_vtables_start;
+  @vtotals["Fix-up vtables"] = sum(this->vfixup_vtables);
+  self->vphase_times["Fix-up vtables"] = this->vfixup_vtables;
+}
+
+objc_runtime$target:::discover_protocols-start {
+  self->discover_protocols_start = timestamp;
+  self->vdiscover_protocols_start = vtimestamp;
+}
+objc_runtime$target:::discover_protocols-end {
+  this->discover_protocols = timestamp - self->discover_protocols_start;
+  @totals["Discover protocols"] = sum(this->discover_protocols);
+  self->phase_times["Discover protocols"] = this->discover_protocols;
+
+  this->vdiscover_protocols = vtimestamp - self->vdiscover_protocols_start;
+  @vtotals["Discover protocols"] = sum(this->vdiscover_protocols);
+  self->vphase_times["Discover protocols"] = this->vdiscover_protocols;
+}
+
+objc_runtime$target:::fixup_protocols-start {
+  self->fixup_protocols_start = timestamp;
+  self->vfixup_protocols_start = vtimestamp;
+}
+objc_runtime$target:::fixup_protocols-end {
+  this->fixup_protocols = timestamp - self->fixup_protocols_start;
+  @totals["Fix-up protocols"] = sum(this->fixup_protocols);
+  self->phase_times["Fix-up protocols"] = this->fixup_protocols;
+
+  this->vfixup_protocols = vtimestamp - self->vfixup_protocols_start;
+  @vtotals["Fix-up protocols"] = sum(this->vfixup_protocols);
+  self->vphase_times["Fix-up protocols"] = this->vfixup_protocols;
+}
+
+objc_runtime$target:::discover_categories-start {
+  self->discover_categories_start = timestamp;
+  self->vdiscover_categories_start = vtimestamp;
+}
+objc_runtime$target:::discover_categories-end {
+  this->discover_categories = timestamp - self->discover_categories_start;
+  @totals["Discover categories"] = sum(this->discover_categories);
+  self->phase_times["Discover categories"] = this->discover_categories;
+
+  this->vdiscover_categories = vtimestamp - self->vdiscover_categories_start;
+  @vtotals["Discover categories"] = sum(this->vdiscover_categories);
+  self->vphase_times["Discover categories"] = this->vdiscover_categories;
+}
+
+objc_runtime$target:::realize_non_lazy_classes-start {
+  self->realize_non_lazy_classes_start = timestamp;
+  self->vrealize_non_lazy_classes_start = vtimestamp;
+}
+objc_runtime$target:::realize_non_lazy_classes-end {
+  this->realize_non_lazy_classes = timestamp - self->realize_non_lazy_classes_start;
+  @totals["Realize non-lazy classes"] = sum(this->realize_non_lazy_classes);
+  self->phase_times["Realize non-lazy classes"] = this->realize_non_lazy_classes;
+
+  this->vrealize_non_lazy_classes = vtimestamp - self->vrealize_non_lazy_classes_start;
+  @vtotals["Realize non-lazy classes"] = sum(this->vrealize_non_lazy_classes);
+  self->vphase_times["Realize non-lazy classes"] = this->vrealize_non_lazy_classes;
+}
+
+objc_runtime$target:::realize_future_classes-start {
+  self->realize_future_classes_start = timestamp;
+  self->vrealize_future_classes_start = vtimestamp;
+}
+objc_runtime$target:::realize_future_classes-end {
+  this->realize_future_classes = timestamp - self->realize_future_classes_start;
+  @totals["Realize future classes"] = sum(this->realize_future_classes);
+  self->phase_times["Realize future classes"] = this->realize_future_classes;
+
+  this->vrealize_future_classes = vtimestamp - self->vrealize_future_classes_start;
+  @vtotals["Realize future classes"] = sum(this->vrealize_future_classes);
+  self->vphase_times["Realize future classes"] = this->vrealize_future_classes;
+}
+
+pid$target:libobjc.A.dylib:map_images:return {
+  printf("\n");
+  printf("Phase                   \tWall (ns)\tCPU  (ns)\n");
+  printf("------------------------\t---------\t---------\n");
+  printf("%-24s\t%9d\t%9d\n",
+         "First time tasks",
+         self->phase_times["First time tasks"],
+         self->vphase_times["First time tasks"]);
+  printf("%-24s\t%9d\t%9d\n",
+         "Fix-up selectors",
+         self->phase_times["Fix-up selectors"],
+         self->vphase_times["Fix-up selectors"]);
+  printf("%-24s\t%9d\t%9d\n",
+         "Discover classes",
+         self->phase_times["Discover classes"],
+         self->vphase_times["Discover classes"]);
+  printf("%-24s\t%9d\t%9d\n",
+         "Remap classes",
+         self->phase_times["Remap classes"],
+         self->vphase_times["Remap classes"]);
+  printf("%-24s\t%9d\t%9d\n",
+         "Fixup vtables",
+         self->phase_times["Fix-up vtables"],
+         self->vphase_times["Fix-up vtables"]);
+  printf("%-24s\t%9d\t%9d\n",
+         "Discover protocols",
+         self->phase_times["Discover protocols"],
+         self->vphase_times["Discover protocols"]);
+  printf("%-24s\t%9d\t%9d\n",
+         "Fix-up protocols",
+         self->phase_times["Fix-up protocols"],
+         self->vphase_times["Fix-up protocols"]);
+  printf("%-24s\t%9d\t%9d\n",
+         "Discover categories",
+         self->phase_times["Discover categories"],
+         self->vphase_times["Discover categories"]);
+  printf("%-24s\t%9d\t%9d\n",
+         "Realize non-lazy classes",
+         self->phase_times["Realize non-lazy classes"],
+         self->vphase_times["Realize non-lazy classes"]);
+  printf("%-24s\t%9d\t%9d\n",
+         "Realize future classes",
+         self->phase_times["Realize future classes"],
+         self->vphase_times["Realize future classes"]);
+}
+
+objc$target:NSApplication:-finishLaunching:return {
+  printf("\n");
+  printf("TOTALS AT END OF -finishLaunching\n");
+  printf("========================\t=========\t=========\n");
+  printf("Phase                   \tWall (ns)\tCPU  (ns)\n");
+  printf("========================\t=========\t=========\n");
+  printa("%-24s\t%@9d\t%@9d\n", @totals, @vtotals);
+}
+
+dtrace:::END {
+  printf("\n");
+  printf("OVERALL TOTALS\n");
+  printf("========================\t=========\t=========\n");
+  printf("Phase                   \tWall (ns)\tCPU  (ns)\n");
+  printf("========================\t=========\t=========\n");
+  printa("%-24s\t%@9d\t%@9d\n", @totals, @vtotals);
+}

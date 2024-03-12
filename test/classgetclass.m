@@ -1,9 +1,10 @@
 // TEST_CONFIG
 
+#define __APPLE_API_PRIVATE 1
 #include "test.h"
 #include <objc/objc-runtime.h>
 #include <objc/objc-gdb.h>
-#import <Foundation/NSObject.h>
+#import <objc/NSObject.h>
 
 @interface Foo:NSObject
 @end

@@ -23,20 +23,20 @@
 
 #ifdef __i386__
 
-#include <mach/vm_param.h>
-	
+#include "objc-vm.h"
+
 .text
 .globl __objc_blockTrampolineImpl
 .globl __objc_blockTrampolineStart
 .globl __objc_blockTrampolineLast
 
-.align PAGE_SHIFT
+.align 12 /* PAGE_SHIFT */
 __objc_blockTrampolineImpl:
     movl (%esp), %eax  // return address pushed by trampoline
     //   4(%esp) is return address pushed by the call site
     movl 8(%esp), %ecx // self -> ecx
     movl %ecx, 12(%esp) // ecx -> _cmd
-    movl -2*PAGE_SIZE-5(%eax), %ecx // block object pointer -> ecx
+    movl -2*4096/*PAGE_SIZE */-5(%eax), %ecx // block object pointer -> ecx
                        // trampoline is -5 bytes from the return address
                        // data is -2 pages from the trampoline
     movl %ecx, 8(%esp) // ecx -> self
@@ -567,14 +567,14 @@ __objc_blockTrampolineLast:
 .globl __objc_blockTrampolineStart_stret
 .globl __objc_blockTrampolineLast_stret
 
-.align PAGE_SHIFT
+.align 12 /* PAGE_SHIFT */
 __objc_blockTrampolineImpl_stret:
     movl (%esp), %eax  // return address pushed by trampoline
     //   4(%esp) is return address pushed by the call site
     //   8(%esp) is struct-return address
     movl 12(%esp), %ecx // self -> ecx
     movl %ecx, 16(%esp) // ecx -> _cmd
-    movl -3*PAGE_SIZE-5(%eax), %ecx // block object pointer -> ecx
+    movl -3*4096/*PAGE_SIZE*/-5(%eax), %ecx // block object pointer -> ecx
                        // trampoline is -5 bytes from the return address
                        // data is -3 pages from the trampoline
     movl %ecx, 12(%esp) // ecx -> self

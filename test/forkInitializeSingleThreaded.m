@@ -1,4 +1,6 @@
 /*
+TEST_CONFIG OS=!exclavekit
+
 TEST_RUN_OUTPUT
 OK: forkInitialize\.m
 OK: forkInitialize\.m

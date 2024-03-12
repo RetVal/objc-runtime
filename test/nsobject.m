@@ -2,7 +2,9 @@
 
 #include "test.h"
 
-#import <Foundation/NSObject.h>
+#import <objc/NSObject.h>
+
+typedef struct _NSZone NSZone;
 
 @interface Sub : NSObject @end
 @implementation Sub 
@@ -109,6 +111,7 @@ int main()
     [Sub.superclass NSObjectClass];
     [subobject.superclass NSObjectClass];
 
+    (void)cls;
 
     succeed(__FILE__);
 }

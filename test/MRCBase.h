@@ -6,7 +6,7 @@
 //  Copyright 2011 __MyCompanyName__. All rights reserved.
 //
 
-#import <Foundation/NSObject.h>
+#import <objc/NSObject.h>
 
 // YES if MRC compiler supports ARC-style weak
 extern bool supportsMRCWeak;

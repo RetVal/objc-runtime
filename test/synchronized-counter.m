@@ -1,4 +1,4 @@
-// TEST_CONFIG
+// TEST_CONFIG OS=!exclavekit
 
 #include "test.h"
 
@@ -6,8 +6,11 @@
 #include <pthread.h>
 #include <objc/runtime.h>
 #include <objc/objc-sync.h>
-#include <Foundation/NSObject.h>
+#include <objc/NSObject.h>
+
+#if !TARGET_OS_EXCLAVEKIT
 #include <System/pthread_machdep.h>
+#endif
 
 // synchronized stress test
 // Single locked counter incremented by many threads.

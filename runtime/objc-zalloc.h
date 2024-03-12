@@ -65,6 +65,8 @@ class AtomicQueue {
     };
 
 public:
+    AtomicQueue() : pair(0) {}
+
     void *pop();
     void push_list(void *_head, void *_tail);
     inline void push(void *head)

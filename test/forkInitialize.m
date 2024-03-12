@@ -59,6 +59,14 @@ OBJC_ROOT_CLASS
 // can't implement +initialize here
 @end
 
+@interface InterestingSub : AnotherRootClass @end
+@implementation InterestingSub
++(void)initialize {
+    class_addMethod(self, sel_registerName("retain"), (IMP)retain_fn, "");
+    class_addMethod(self, sel_registerName("release"), (IMP)release_fn, "");
+}
+@end
+
 @implementation AnotherRootClass
 
 void doFork()
@@ -76,6 +84,13 @@ void doFork()
         // still works across fork().
         // This falls in the isInitializing() case in _class_initialize.
         [BoringSub self];
+
+#if !TARGET_OS_EXCLAVEKIT
+#if TARGET_OS_MAC && SINGLETHREADED
+        // This one will only succeed in the single-threaded case.
+        [InterestingSub self];
+#endif
+#endif
 
 #if !SINGLETHREADED
         // This one succeeds even though another thread is in its

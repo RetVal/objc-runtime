@@ -711,7 +711,7 @@ LNilReceiver:
 	mov 	r1, r2			// selector
 .endif
 	mov	r2, r9			// class to search
-	mov	r3, #3			// LOOKUP_INITIALIZE | LOOKUP_INITIALIZE
+	mov	r3, #3			// LOOKUP_INITIALIZE | LOOKUP_RESOLVER
 	blx	_lookUpImpOrForward
 	mov	r12, r0			// r12 = IMP
 	

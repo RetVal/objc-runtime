@@ -1,4 +1,4 @@
-// TEST_CONFIG
+// TEST_CONFIG OS=!exclavekit
 
 #include "test.h"
 
@@ -6,7 +6,7 @@
 #include <pthread.h>
 #include <objc/runtime.h>
 #include <objc/objc-sync.h>
-#include <Foundation/NSObject.h>
+#include <objc/NSObject.h>
 
 // synchronized stress test
 // 2-D grid of counters and locks. 

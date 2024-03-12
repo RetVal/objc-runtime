@@ -1,3 +1,4 @@
+// TEST_CONFIG OS=!exclavekit
 // TEST_CFLAGS -lobjc
 
 #include "test.h"
@@ -8,11 +9,16 @@
 // etc.) then the typical result is a silent failure and we end up testing
 // /usr/lib/libobjc.A.dylib instead. This test detects when DYLD_LIBRARY_PATH is
 // set but libobjc isn't loaded from it.
-int main() {
+int main(int argc __unused, char **argv) {
+    char *containingDirectory = realpath(dirname(argv[0]), NULL);
+    testprintf("containingDirectory is %s\n", containingDirectory);
+
     char *dyldLibraryPath = getenv("DYLD_LIBRARY_PATH");
     testprintf("DYLD_LIBRARY_PATH is %s\n", dyldLibraryPath);
+
     if (dyldLibraryPath != NULL && strlen(dyldLibraryPath) > 0) {
         int foundMatch = 0;
+        int foundNonMatch = 0;
         
         dyldLibraryPath = strdup(dyldLibraryPath);
         
@@ -27,6 +33,10 @@ int main() {
         while ((path = strsep(&cursor, ":"))) {
             char *resolved = realpath(path, NULL);
             testprintf("Resolved %s to %s\n", path, resolved);
+            if (strcmp(resolved, containingDirectory) == 0) {
+                testprintf("This is equal to our containing directory, ignoring.\n");
+                continue;
+            }
             testprintf("Comparing %s and %s\n", resolved, info.dli_fname);
             int comparison = strncmp(resolved, info.dli_fname, strlen(resolved));
             free(resolved);
@@ -34,11 +44,13 @@ int main() {
                 testprintf("Found a match!\n");
                 foundMatch = 1;
                 break;
+            } else {
+                foundNonMatch = 1;
             }
         }
 
-        testprintf("Finished searching, foundMatch=%d\n", foundMatch);
-        testassert(foundMatch);
+        testprintf("Finished searching, foundMatch=%d foundNonMatch=%d\n", foundMatch, foundNonMatch);
+        testassert(foundMatch || !foundNonMatch);
     }
     succeed(__FILE__);
 }
