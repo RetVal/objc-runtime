@@ -43,10 +43,10 @@
 		       context:(void *)context
 {
     // suppress warning
-    keyPath = nil;
-    object = nil;
-    change = nil;
-    context = NULL; 
+    (void)keyPath;
+    (void)object;
+    (void)change;
+    (void)context;
 }
 @end
 

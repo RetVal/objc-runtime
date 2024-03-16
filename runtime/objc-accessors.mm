@@ -24,8 +24,6 @@
 #include <string.h>
 #include <stddef.h>
 
-#include <libkern/OSAtomic.h>
-
 #include "objc-private.h"
 #include "runtime.h"
 

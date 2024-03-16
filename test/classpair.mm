@@ -115,24 +115,24 @@ static void cycle(void)
 
     attrs[0].name = attrname;
     attrs[0].value = attrvalue;
-    strcpy(attrname, "T");
-    strcpy(attrvalue, "x");
+    strncpy(attrname, "T", sizeof(attrname));
+    strncpy(attrvalue, "x", sizeof(attrname));
 
-    strcpy(namebuf, "subProp");
+    strncpy(namebuf, "subProp", sizeof(namebuf));
     ok = class_addProperty(cls, namebuf, attrs, attrcount);
     testassert(ok);
-    strcpy(namebuf, "subProp");
+    strncpy(namebuf, "subProp", sizeof(namebuf));
     ok = class_addProperty(cls, namebuf, attrs, attrcount);
     testassert(!ok);
-    strcpy(attrvalue, "i");
+    strncpy(attrvalue, "i", sizeof(attrvalue));
     class_replaceProperty(cls, namebuf, attrs, attrcount);
-    strcpy(namebuf, "superProp");
+    strncpy(namebuf, "superProp", sizeof(namebuf));
     ok = class_addProperty(cls, namebuf, attrs, attrcount);
     testassert(!ok);
-    bzero(namebuf, sizeof(namebuf));
-    bzero(attrs, sizeof(attrs));
-    bzero(attrname, sizeof(attrname));
-    bzero(attrvalue, sizeof(attrvalue));
+    memset(namebuf, 0, sizeof(namebuf));
+    memset(attrs, 0, sizeof(attrs));
+    memset(attrname, 0, sizeof(attrname));
+    memset(attrvalue, 0, sizeof(attrvalue));
 
 #ifndef __LP64__
 # define size 4
@@ -206,22 +206,22 @@ static void cycle(void)
 
     attrs[0].name = attrname;
     attrs[0].value = attrvalue;
-    strcpy(attrname, "T");
-    strcpy(attrvalue, "i");
+    strncpy(attrname, "T", sizeof(attrname));
+    strncpy(attrvalue, "i", sizeof(attrvalue));
 
-    strcpy(namebuf, "subProp2");
+    strncpy(namebuf, "subProp2", sizeof(namebuf));
     ok = class_addProperty(cls, namebuf, attrs, attrcount);
     testassert(ok);
-    strcpy(namebuf, "subProp");
+    strncpy(namebuf, "subProp", sizeof(namebuf));
     ok = class_addProperty(cls, namebuf, attrs, attrcount);
     testassert(!ok);
-    strcpy(namebuf, "superProp");
+    strncpy(namebuf, "superProp", sizeof(namebuf));
     ok = class_addProperty(cls, namebuf, attrs, attrcount);
     testassert(!ok);
-    bzero(namebuf, sizeof(namebuf));
-    bzero(attrs, sizeof(attrs));
-    bzero(attrname, sizeof(attrname));
-    bzero(attrvalue, sizeof(attrvalue));
+    memset(namebuf, 0, sizeof(namebuf));
+    memset(attrs, 0, sizeof(attrs));
+    memset(attrname, 0, sizeof(attrname));
+    memset(attrvalue, 0, sizeof(attrvalue));
 
     prop = class_getProperty(cls, "subProp");
     testassert(prop);
@@ -305,11 +305,15 @@ int main()
     // fixme even with this long warmup we still
     // suffer false 4096-byte leaks occasionally.
     for (int i = 0; i < 500; i++) {
+        if (i % 100 == 0)
+            printf("VERBOSE: %d\n", i);
         testonthread(^{ cycle(); });
     }
 
     leak_mark();
     while (count--) {
+        if (count % 100 == 0)
+            printf("VERBOSE: %d\n", count);
         testonthread(^{ cycle(); });
     }
     leak_check(4096);

@@ -48,10 +48,17 @@ int main()
     // Read a non-root class.
     testassert(!objc_getClass("Sub"));
 
-    extern intptr_t OBJC_CLASS_$_Sub[OBJC_MAX_CLASS_SIZE/sizeof(void*)];
+    // Clang assumes too much alignment on this by default (rdar://problem/60881608),
+    // so tell it that it's only as aligned as an intptr_t.
+    extern _Alignas(intptr_t) intptr_t OBJC_CLASS_$_Sub[OBJC_MAX_CLASS_SIZE/sizeof(void*)];
     // Make a duplicate of class Sub for use later.
     intptr_t Sub2_buf[OBJC_MAX_CLASS_SIZE/sizeof(void*)];
     memcpy(Sub2_buf, &OBJC_CLASS_$_Sub, sizeof(Sub2_buf));
+    // Re-sign the isa and super pointers in the new location.
+    ((Class __ptrauth_objc_isa_pointer *)(void *)Sub2_buf)[0] = ((Class __ptrauth_objc_isa_pointer *)(void *)&OBJC_CLASS_$_Sub)[0];
+    ((Class __ptrauth_objc_super_pointer *)(void *)Sub2_buf)[1] = ((Class __ptrauth_objc_super_pointer *)(void *)&OBJC_CLASS_$_Sub)[1];
+    ((void *__ptrauth_objc_class_ro *)(void *)Sub2_buf)[4] = ((void * __ptrauth_objc_class_ro *)(void *)&OBJC_CLASS_$_Sub)[4];
+
     Class Sub = objc_readClassPair((__bridge Class)(void*)&OBJC_CLASS_$_Sub, &ii);
     testassert(Sub);
 

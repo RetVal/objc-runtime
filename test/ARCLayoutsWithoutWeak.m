@@ -1,6 +1,6 @@
 // Same as test ARCLayouts but with MRC __weak support disabled.
 /*
-TEST_CONFIG MEM=arc
+TEST_CONFIG MEM=arc OS=!exclavekit
 TEST_BUILD
     mkdir -p $T{OBJDIR}
     $C{COMPILE_NOLINK_NOMEM} -c $DIR/MRCBase.m -o $T{OBJDIR}/MRCBase.o -fno-objc-weak

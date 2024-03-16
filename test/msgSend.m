@@ -10,14 +10,21 @@ END
 #include "test.h"
 #include "testroot.i"
 
+#include "../runtime/objc-config.h"
+
+#if !TARGET_OS_EXCLAVEKIT
+#include <mach-o/loader.h>
 #include <libkern/OSCacheControl.h>
 #include <sys/stat.h>
+#include <sys/sysctl.h>
+#include <fcntl.h>
+#endif
+
 #include <objc/objc.h>
 #include <objc/runtime.h>
 #include <objc/objc-internal.h>
 #include <objc/objc-abi.h>
 #include <simd/simd.h>
-#include <mach-o/loader.h>
 
 // rdar://21694990 simd.h should have a vector_equal(a, b) function
 static bool vector_equal(vector_ulong2 lhs, vector_ulong2 rhs) {
@@ -71,7 +78,7 @@ vector_ulong2 (*vecmsg0)(id, SEL) __attribute__((unused));
 #define VEC7 ((vector_ulong2){7, 7})
 #define VEC8 ((vector_ulong2){8, 8})
 
-#define CHECK_ARGS(sel) \
+#define CHECK_ARGS(sel)                         \
 do { \
     testassert(self == SELF); \
     testassert(_cmd == sel_registerName(#sel "::::::::::::::::::::::::::::::::::::"));\
@@ -525,7 +532,7 @@ asm("\n .text"
 +(struct stret_##n)stret_##n##_zero             \
 {                                               \
     struct stret_##n ret;                       \
-    bzero(&ret, sizeof(ret));                   \
+    memset(&ret, 0, sizeof(ret));               \
     return ret;                                 \
 }                                               \
 +(struct stret_##n)stret_##n##_nonzero          \
@@ -815,10 +822,9 @@ STRET_IMP(d9)
 
 // DWARF checking machinery
 
-#if TARGET_OS_WIN32
-// unimplemented on this platform
-#define NO_DWARF_REASON "(windows)"
-
+#if TARGET_OS_EXCLAVEKIT
+// fixme unimplemented - ucontext not passed to signal handlers
+#define NO_DWARF_REASON "(exclaveKit)"
 #elif TARGET_OS_WATCH
 // fixme unimplemented - ucontext not passed to signal handlers
 #define NO_DWARF_REASON "(watchOS)"
@@ -842,8 +848,10 @@ STRET_IMP(d9)
 @implementation SubDW @end
 
 #include <dlfcn.h>
+#if !TARGET_OS_EXCLAVEKIT
 #include <signal.h>
 #include <sys/mman.h>
+#endif
 #include <libunwind.h>
 
 bool caught = false;
@@ -1129,6 +1137,49 @@ uintptr_t fp = 0;
 uintptr_t sp = 0;
 uintptr_t pc = 0;
 
+// Check if the CPU has ptrauth or not
+bool has_ptrauth = false;
+
+/* Sign a pointer using the return address key.
+
+   We can't use ptrauth_sign_unauthenticated() here because it does nothing
+   when building ARM64 code, but we *need* to do this in ARM64 code because
+   we link an ARM64e libunwind, and the kernel gives us un-signed pointers.
+
+   The pacib instruction has to be hard-coded because the assembler won't
+   accept it when in ARM64 mode.  That's why we use the linkage registers
+   as scratch registers here. */
+static inline void *sign_ptr(void *ptr, ptrauth_extra_data_t disc)
+{
+    register void *to_sign asm("x16") = ptr;
+    register ptrauth_extra_data_t discriminator asm("x17") = disc;
+
+    asm("  .long  0xdac10630\n" // pacib x16,x17
+        : "=r" (to_sign)
+        : "0" (to_sign), "r" (discriminator));
+
+    return to_sign;
+}
+
+/* Strip a pointer using the return address key.
+
+   Again, we can't use ptrauth_strip() here because it does nothing when
+   building ARM64 code, but we definitely have a signed pointer to strip.
+
+   The xpaci instruction has to be hard-coded because the assembler won't
+   accept it when in ARM64 mode.  Again, we use a linkage register as
+   a scratch register here as a result. */
+static void *strip_ptr(void *ptr)
+{
+    register void *result asm("x16") = ptr;
+
+    asm("  .long 0xdac143f0\n" // xpaci x16
+        : "=r" (result)
+        : "0" (ptr));
+
+    return result;
+}
+
 void handle_exception(arm_thread_state64_t *state)
 {
     unw_cursor_t curs;
@@ -1145,15 +1196,15 @@ void handle_exception(arm_thread_state64_t *state)
     // libunwind and xnu sign some pointers differently
     // xnu: not signed (fixme this may change?)
     // libunwind: PC and LR both signed with return address key and SP
-    void **pcp = &((arm_thread_state64_t *)&unwstate)->__opaque_pc;
-    *pcp = ptrauth_sign_unauthenticated((void*)__darwin_arm_thread_state64_get_pc(*state),
-                                        ptrauth_key_return_address,
-                                        (ptrauth_extra_data_t)__darwin_arm_thread_state64_get_sp(*state));
-    void **lrp = &((arm_thread_state64_t *)&unwstate)->__opaque_lr;
-    *lrp = ptrauth_sign_unauthenticated((void*)__darwin_arm_thread_state64_get_lr(*state),
-                                        ptrauth_key_return_address,
-                                        (ptrauth_extra_data_t)__darwin_arm_thread_state64_get_sp(*state));
-
+    if (has_ptrauth) {
+        void **pcp = &((arm_thread_state64_t *)&unwstate)->__opaque_pc;
+        *pcp = sign_ptr((void*)__darwin_arm_thread_state64_get_pc(*state),
+                        (ptrauth_extra_data_t)__darwin_arm_thread_state64_get_sp(*state));
+        void **lrp = &((arm_thread_state64_t *)&unwstate)->__opaque_lr;
+        *lrp = sign_ptr((void*)__darwin_arm_thread_state64_get_lr(*state),
+                        (ptrauth_extra_data_t)__darwin_arm_thread_state64_get_sp(*state));
+    }
+    
     err = unw_init_local(&curs, &unwstate);
     testassert(!err);
 
@@ -1210,8 +1261,10 @@ void handle_exception(arm_thread_state64_t *state)
 
     err = unw_get_reg(&curs, UNW_REG_IP, &reg);
     testassert(!err);
-    // libunwind's return is signed but our value is not
-    reg = (uintptr_t)ptrauth_strip((void *)reg, ptrauth_key_return_address);
+    if (has_ptrauth) {
+        // libunwind's return is signed but our value is not
+        reg = (uintptr_t)strip_ptr((void *)reg);
+    }
     testassert(reg == pc);
 
     // libunwind restores PC into LR and doesn't track LR
@@ -1578,17 +1631,53 @@ uintptr_t *disassemble(uintptr_t symbol, uintptr_t symbolEnd,
     }
     close(fd);
 
-    // run `llvm-objdump -disassemble`
+    // find llvm-objdump
     const char *objdump;
-    if (0 == access("/usr/local/bin/llvm-objdump", F_OK)) {
+    if (0 == access("/usr/bin/xcrun", F_OK)) {
+        FILE *xcrun = popen("/usr/bin/xcrun -f llvm-objdump", "r");
+        char buffer[PATH_MAX];
+        if (!fgets(buffer, sizeof(buffer), xcrun)) {
+            fail("xcrun couldn't find llvm-objdump");
+        }
+        size_t len = strlen(buffer);
+        if (buffer[len - 1] == '\n')
+            buffer[len - 1] = 0;
+        objdump = strdup(buffer);
+        pclose(xcrun);
+    } else if (0 == access("/usr/local/bin/llvm-objdump", F_OK)) {
         objdump = "/usr/local/bin/llvm-objdump";
     } else if (0 == access("/usr/bin/llvm-objdump", F_OK)) {
         objdump = "/usr/bin/llvm-objdump";
     } else {
         fail("couldn't find llvm-objdump");
     }
+
+    // see if it's the old version or the new version
+    bool old_objdump = true;
+    {
+        char *cmd;
+        asprintf(&cmd, "%s --version", objdump);
+        FILE *vers = popen(cmd, "r");
+        if (!vers) {
+            fail("couldn't run %s", cmd);
+        }
+        int maj = 0, min = 0;
+        if (fscanf(vers, "Apple LLVM version %d.%d\n", &maj, &min) == 2
+            || fscanf(vers, "LLVM (http://llvm.org/):\n  LLVM version %d.%d\n",
+                      &maj, &min) == 2) {
+            if (maj >= 10) {
+                old_objdump = false;
+            }
+        }
+        pclose(vers);
+    }
+
+    // run llvm-objdump -disassemble
     char *cmd;
-    asprintf(&cmd, "%s -disassemble %s", objdump, tempname);
+    if (old_objdump)
+        asprintf(&cmd, "%s -disassemble %s", objdump, tempname);
+    else
+        asprintf(&cmd, "%s --disassemble %s", objdump, tempname);
     FILE *disa = popen(cmd, "r");
     if (!disa) {
         fail("couldn't popen %s", cmd);
@@ -1602,6 +1691,7 @@ uintptr_t *disassemble(uintptr_t symbol, uintptr_t symbolEnd,
     while ((line = fgetln(disa, &len))) {
         testprintf("ASM: %.*s", (int)len, line);
         if (0 == strncmp(line, "_main:", strlen("_main:"))) break;
+        if (len >= 9 && 0 == strncmp(line + len - 9, "<_main>:\n", 9)) break;
     }
 
     // read instructions and save offsets
@@ -1611,7 +1701,8 @@ uintptr_t *disassemble(uintptr_t symbol, uintptr_t symbolEnd,
     uintptr_t *p = offsets;
     // disassembly format:
     // ADDR:\t ...instruction bytes... \tOPCODE ...etc...\n
-    while (2 == fscanf(disa, "%lx:\t%*[a-fA-F0-9 ]\t%s%*[^\n]\n", &addr, op)) {
+    while (2 == fscanf(disa, "%lx:\t%*[a-fA-F0-9 ]\t%s%*[^\n]\n",
+                       &addr, op)) {
         if (base == 0) base = addr;
         testprintf("ASM: %lx (+%d) ... %s ...\n", addr, addr - base, op);
         // allow longer nops like Intel nopw and nopl
@@ -1764,8 +1855,8 @@ struct stret test_dw_forward_stret(void)
 // sel_arg = arg to pass in sel register (may be message_ref)
 // uncaughtAllowed is the number of acceptable unreachable instructions
 //   (for example, the ones that handle the corrupt-cache-error case)
-void test_dw(const char *name, id sub, id tagged, id exttagged, bool stret, 
-             int uncaughtAllowed)
+void test_dw(const char *name, id sub, id tagged, id exttagged,
+             bool stret, int uncaughtAllowed)
 {
 
     testprintf("DWARF FOR %s%s\n", name, stret ? " (stret)" : "");
@@ -2133,6 +2224,16 @@ int main()
     long double (*lfpmsg)(id, SEL, vector_ulong2, vector_ulong2, vector_ulong2, vector_ulong2, vector_ulong2, vector_ulong2, vector_ulong2, vector_ulong2, int, int, int, int, int, int, int, int, int, int, int, int, int, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double) __attribute__((unused));
     vector_ulong2 (*vecmsg)(id, SEL, vector_ulong2, vector_ulong2, vector_ulong2, vector_ulong2, vector_ulong2, vector_ulong2, vector_ulong2, vector_ulong2, int, int, int, int, int, int, int, int, int, int, int, int, int, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double) __attribute__((unused));
 
+#if __arm64__ && TEST_DWARF
+    // Check whether or not we have pointer authentication
+    {
+        int ptrauth = 0;
+        size_t len = sizeof(ptrauth);
+        sysctlbyname("hw.optional.ptrauth", &ptrauth, &len, NULL, 0);
+        has_ptrauth = ptrauth != 0;
+    }
+#endif
+
     // get +initialize out of the way
     [Sub class];
 #if OBJC_HAVE_TAGGED_POINTERS
@@ -2291,7 +2392,7 @@ int main()
 #define TEST_NIL_STRUCT(i,n)                                            \
     do {                                                                \
         struct stret_##i##n z;                                          \
-        bzero(&z, sizeof(z));                                           \
+        memset(&z, 0, sizeof(z));                                       \
         [Super stret_i##n##_nonzero];                                   \
         [Super stret_d##n##_nonzero];                                   \
         struct stret_##i##n val = [(id)NIL_RECEIVER stret_##i##n##_zero]; \
@@ -2657,9 +2758,17 @@ int main()
         test_dw("objc_msgSendSuper_stret",  dw, dw, dw, true,  0);
         test_dw("objc_msgSendSuper2_stret", dw, dw, dw, true,  0);
 # elif __arm64__
-        test_dw("objc_msgSend",             dw, tagged, exttagged, false, 1);
-        test_dw("objc_msgSendSuper",        dw, tagged, exttagged, false, 1);
-        test_dw("objc_msgSendSuper2",       dw, tagged, exttagged, false, 1);
+        // If preopt caches are enabled, that code won't be reachable from here
+        // as none of the test objects have a preopt cache
+#       if CONFIG_USE_PREOPT_CACHES
+#           define PREOPT_INSTRS 20
+#       else
+#           define PREOPT_INSTRS 0
+#       endif
+
+        test_dw("objc_msgSend",             dw, tagged, exttagged, false, PREOPT_INSTRS);
+        test_dw("objc_msgSendSuper",        dw, tagged, exttagged, false, 0);
+        test_dw("objc_msgSendSuper2",       dw, tagged, exttagged, false, PREOPT_INSTRS);
 # elif __arm__
         test_dw("objc_msgSend",             dw, dw, dw, false, 0);
         test_dw("objc_msgSend_stret",       dw, dw, dw, true,  0);

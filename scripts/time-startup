@@ -1,0 +1,20 @@
+#!/usr/sbin/dtrace -qs
+
+//
+//  Measure start-up time
+//
+
+dtrace:::BEGIN {
+  self->start = timestamp;
+  self->vstart = vtimestamp;
+}
+
+objc$target:NSApplication:-finishLaunching:return {
+  this->elapsed = timestamp - self->start;
+  this->on_cpu = vtimestamp - self->vstart;
+
+  printf("\n** STARTUP TIME **\n");
+  printf("Elapsed time: %d ns\n", this->elapsed);
+  printf("On CPU: %d ns\n", this->on_cpu);
+  printf("\n");
+}

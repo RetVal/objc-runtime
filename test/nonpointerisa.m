@@ -1,5 +1,5 @@
 // TEST_CFLAGS -framework Foundation
-// TEST_CONFIG MEM=mrc
+// TEST_CONFIG MEM=mrc OS=!exclavekit
 
 #include "test.h"
 #include <dlfcn.h>
@@ -11,10 +11,12 @@
 #define NONPOINTER(x) (ISA(x) & 1)
 
 #if SUPPORT_NONPOINTER_ISA
+// Quiet the warning about redefining the macro from isa.h.
+# undef RC_ONE
 # if __x86_64__
 #   define RC_ONE (1ULL<<56)
 # elif __arm64__ && __LP64__
-#   define RC_ONE (1ULL<<45)
+#   define RC_ONE (objc_debug_isa_magic_value == 1 ? 1ULL<<56 : 1ULL<<45)
 # elif __ARM_ARCH_7K__ >= 2  ||  (__arm64__ && !__LP64__)
 #   define RC_ONE (1ULL<<25)
 # else
@@ -29,9 +31,9 @@ void check_raw_pointer(id obj, Class cls)
     testassert(!NONPOINTER(obj));
 
     uintptr_t isa = ISA(obj);
-    testassert((Class)isa == cls);
-    testassert((Class)(isa & objc_debug_isa_class_mask) == cls);
-    testassert((Class)(isa & ~objc_debug_isa_class_mask) == 0);
+    testassertequal(ptrauth_strip((void *)isa, ptrauth_key_process_independent_data), (void *)cls);
+    testassertequal((Class)(isa & objc_debug_isa_class_mask), cls);
+    testassertequal(ptrauth_strip((void *)(isa & ~objc_debug_isa_class_mask), ptrauth_key_process_independent_data), 0);
 
     CFRetain(obj);
     testassert(ISA(obj) == isa);
@@ -80,37 +82,37 @@ int main()
 
 void check_nonpointer(id obj, Class cls)
 {
-    testassert(object_getClass(obj) == cls);
+    testassertequal(object_getClass(obj), cls);
     testassert(NONPOINTER(obj));
 
     uintptr_t isa = ISA(obj);
 
     if (objc_debug_indexed_isa_magic_mask != 0) {
         // Indexed isa.
-        testassert((isa & objc_debug_indexed_isa_magic_mask) == objc_debug_indexed_isa_magic_value);
+        testassertequal((isa & objc_debug_indexed_isa_magic_mask), objc_debug_indexed_isa_magic_value);
         testassert((isa & ~objc_debug_indexed_isa_index_mask) != 0);
         uintptr_t index = (isa & objc_debug_indexed_isa_index_mask) >> objc_debug_indexed_isa_index_shift;
         testassert(index < objc_indexed_classes_count);
-        testassert(objc_indexed_classes[index] == cls);
+        testassertequal(objc_indexed_classes[index], cls);
     } else {
         // Packed isa.
-        testassert((Class)(isa & objc_debug_isa_class_mask) == cls);
+        testassertequal((Class)(isa & objc_debug_isa_class_mask), cls);
         testassert((Class)(isa & ~objc_debug_isa_class_mask) != 0);
-        testassert((isa & objc_debug_isa_magic_mask) == objc_debug_isa_magic_value);
+        testassertequal((isa & objc_debug_isa_magic_mask), objc_debug_isa_magic_value);
     }
 
     CFRetain(obj);
-    testassert(ISA(obj) == isa + RC_ONE);
-    testassert([obj retainCount] == 2);
+    testassertequal(ISA(obj), isa + RC_ONE);
+    testassertequal([obj retainCount], 2);
     [obj retain];
-    testassert(ISA(obj) == isa + RC_ONE*2);
-    testassert([obj retainCount] == 3);
+    testassertequal(ISA(obj), isa + RC_ONE*2);
+    testassertequal([obj retainCount], 3);
     CFRelease(obj);
-    testassert(ISA(obj) == isa + RC_ONE);
-    testassert([obj retainCount] == 2);
+    testassertequal(ISA(obj), isa + RC_ONE);
+    testassertequal([obj retainCount], 2);
     [obj release];
-    testassert(ISA(obj) == isa);
-    testassert([obj retainCount] == 1);
+    testassertequal(ISA(obj), isa);
+    testassertequal([obj retainCount], 1);
 }
 
 
@@ -152,14 +154,21 @@ int main()
 # if !OBJC_HAVE_NONPOINTER_ISA  ||  !OBJC_HAVE_PACKED_NONPOINTER_ISA  ||  OBJC_HAVE_INDEXED_NONPOINTER_ISA
 #   error wrong
 # endif
-    testassert(objc_debug_isa_class_mask == (uintptr_t)&objc_absolute_packed_isa_class_mask);
+    void *absoluteMask = (void *)&objc_absolute_packed_isa_class_mask;
+#if __has_feature(ptrauth_calls)
+    absoluteMask = ptrauth_strip(absoluteMask, ptrauth_key_process_independent_data);
+#endif
+    // absoluteMask should "cover" objc_debug_isa_class_mask
+    testassert((objc_debug_isa_class_mask & (uintptr_t)absoluteMask) == objc_debug_isa_class_mask);
+    // absoluteMask should only possibly differ in the high bits
+    testassert((objc_debug_isa_class_mask & 0xffff) == ((uintptr_t)absoluteMask & 0xffff));
 
     // Indexed isa variables DO NOT exist on packed-isa platforms
     testassert(!dlsym(RTLD_DEFAULT, "objc_absolute_indexed_isa_magic_mask"));
     testassert(!dlsym(RTLD_DEFAULT, "objc_absolute_indexed_isa_magic_value"));
     testassert(!dlsym(RTLD_DEFAULT, "objc_absolute_indexed_isa_index_mask"));
     testassert(!dlsym(RTLD_DEFAULT, "objc_absolute_indexed_isa_index_shift"));
-    
+
 #elif SUPPORT_INDEXED_ISA
 # if !OBJC_HAVE_NONPOINTER_ISA  ||  OBJC_HAVE_PACKED_NONPOINTER_ISA  ||  !OBJC_HAVE_INDEXED_NONPOINTER_ISA
 #   error wrong
@@ -175,7 +184,7 @@ int main()
 #else
 #   error unknown nonpointer isa format
 #endif
-    
+
     testprintf("Isa with index\n");
     id index_o = [Fake_OS_object new];
     check_nonpointer(index_o, [Fake_OS_object class]);

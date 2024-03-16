@@ -67,7 +67,7 @@ long long forward_handler(id self, SEL _cmd, long i1, long i2, long i3, long i4,
 #   define p "w"  // arm64_32
 # endif
     void *struct_addr;
-    __asm__ volatile("mov %"p"0, "p"8" : "=r" (struct_addr) : : p"8");
+    __asm__ volatile("mov %" p "0, " p "8" : "=r" (struct_addr) : : p "8");
 #endif
 
     testassert(self == receiver);

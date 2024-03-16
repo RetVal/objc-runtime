@@ -36,6 +36,10 @@ extern void _destroyInitializingClassList(struct _objc_initializing_classes *lis
 
 extern bool _thisThreadIsInitializingClass(Class cls);
 
+extern void classInitializeAtforkPrepare();
+extern void classInitializeAtforkParent();
+extern void classInitializeAtforkChild();
+
 __END_DECLS
 
 #endif

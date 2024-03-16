@@ -59,6 +59,13 @@ struct PointerUnionTypeSelectorReturn<
       typename PointerUnionTypeSelector<T1, T2, RET_EQ, RET_NE>::Return;
 };
 
+/// A pointer-sized value containing a pointer to one of two different types.
+/// The types are discriminated using the low bit of the value; the types must
+/// therefore be at least two-byte aligned.
+///
+/// This type is used to represent pointers in loaded images so should be
+/// considered ABI. It's guaranteed that T1 is stored as a raw pointer, and T2
+/// is stored with the low bit set to 1.
 template <class T1, class T2, typename Auth1, typename Auth2>
 class PointerUnion {
     uintptr_t _value;
@@ -74,9 +81,6 @@ class PointerUnion {
     };
     template <typename T> struct UNION_DOESNT_CONTAIN_TYPE {};
 
-    uintptr_t getPointer() const {
-        return _value & ~1;
-    }
     uintptr_t getTag() const {
         return _value & 1;
     }
@@ -89,11 +93,35 @@ public:
         _value = (uintptr_t)Auth1::sign(t, address);
     }
     PointerUnion(T2 *t, const void *address) {
-        _value = (uintptr_t)Auth2::sign(t, address) | 1;
+        _value = (uintptr_t)Auth2::sign((void *)((uintptr_t)t | 1), address);
+    }
+
+    PointerUnion(const PointerUnion &other) {
+        *this = other;
+    }
+
+    PointerUnion &operator=(const PointerUnion &other) {
+        if (T1 *t1 = other.dyn_cast<T1 *>())
+            set(t1);
+        else if (T2 *t2 = other.dyn_cast<T2 *>())
+            set(t2);
+        return *this;
+    }
+
+    void set(T1 *t) {
+        _value = (uintptr_t)Auth1::sign(t, this);
+    }
+
+    void set(T2 *t) {
+        _value = (uintptr_t)Auth2::sign((void *)((uintptr_t)t | 1), this);
     }
 
     void storeAt(std::atomic<uintptr_t> &raw, std::memory_order order) const {
         raw.store(_value, order);
+    }
+
+    bool isNull() const {
+        return _value == 0;
     }
 
     template <typename T>
@@ -110,7 +138,12 @@ public:
             PointerUnionTypeSelector<T2 *, T, Auth2,
             UNION_DOESNT_CONTAIN_TYPE<T>>>::Return;
 
-        return AuthT::auth((T)getPointer(), address);
+        uintptr_t authed = (uintptr_t)AuthT::auth((void *)_value, address);
+        return (T)(authed & ~1);
+    }
+
+    template <typename T> T get() const {
+        return get<T>(this);
     }
 
     template <typename T> T dyn_cast(const void *address) const {
@@ -118,11 +151,25 @@ public:
         return get<T>(address);
       return T();
     }
+
+    template <typename T> T dyn_cast() const {
+        return dyn_cast<T>(this);
+    }
+
+    operator bool() const {
+        if (T1 *t1 = dyn_cast<T1 *>())
+            return true;
+        else if (T2 *t2 = dyn_cast<T2 *>())
+            return true;
+        return false;
+    }
 };
 
-template <class PT1, class PT2, class PT3, class PT4 = void>
+// A pointer union of four types, using the low two bits to discriminate. This
+// is not currently ABI anywhere.
+template <class PT1, class PT2, class PT3, class PT4, typename ValueTy = uintptr_t>
 class PointerUnion4 {
-    uintptr_t _value;
+    ValueTy _value;
 
     static_assert(alignof(PT1) >= 4, "alignment requirement");
     static_assert(alignof(PT2) >= 4, "alignment requirement");
@@ -151,16 +198,16 @@ class PointerUnion4 {
     }
 
 public:
-    explicit PointerUnion4(const std::atomic<uintptr_t> &raw)
-    : _value(raw.load(std::memory_order_relaxed))
-    { }
-    PointerUnion4(PT1 t) : _value((uintptr_t)t) { }
-    PointerUnion4(PT2 t) : _value((uintptr_t)t | 1) { }
-    PointerUnion4(PT3 t) : _value((uintptr_t)t | 2) { }
-    PointerUnion4(PT4 t) : _value((uintptr_t)t | 3) { }
+    void set(PT1 t) { _value = (uintptr_t)t; }
+    void set(PT2 t) { _value = (uintptr_t)t | 1; }
+    void set(PT3 t) { _value = (uintptr_t)t | 2; }
+    void set(PT4 t) { _value = (uintptr_t)t | 3; }
 
-    void storeAt(std::atomic<uintptr_t> &raw, std::memory_order order) const {
-        raw.store(_value, order);
+    template<typename T>
+    PointerUnion4(T t) { set(t); }
+
+    bool isNull() const {
+        return getPointer() == 0;
     }
 
     template <typename T>

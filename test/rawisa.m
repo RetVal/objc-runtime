@@ -1,4 +1,5 @@
 /*
+TEST_CONFIG
 TEST_CFLAGS -Xlinker -sectcreate -Xlinker __DATA -Xlinker __objc_rawisa -Xlinker /dev/null
 TEST_ENV OBJC_PRINT_RAW_ISA=YES
 

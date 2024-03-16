@@ -123,9 +123,15 @@ struct weak_table_t {
     uintptr_t max_hash_displacement;
 };
 
+enum WeakRegisterDeallocatingOptions {
+    ReturnNilIfDeallocating,
+    CrashIfDeallocating,
+    DontCheckDeallocating
+};
+
 /// Adds an (object, weak pointer) pair to the weak table.
 id weak_register_no_lock(weak_table_t *weak_table, id referent, 
-                         id *referrer, bool crashIfDeallocating);
+                         id *referrer, WeakRegisterDeallocatingOptions deallocatingOptions);
 
 /// Removes an (object, weak pointer) pair from the weak table.
 void weak_unregister_no_lock(weak_table_t *weak_table, id referent, id *referrer);

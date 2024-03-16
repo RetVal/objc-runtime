@@ -1,20 +1,15 @@
 // xpc leaks memory in dlopen(). Disable it.
 // TEST_ENV XPC_SERVICES_UNAVAILABLE=1
 /*
+TEST_CONFIG OS=!exclavekit
 TEST_BUILD
+    $C{COMPILE}   $DIR/unload5.m -o libunload5.dylib -dynamiclib -install_name /usr/lib/libz.1.dylib
     $C{COMPILE}   $DIR/unload4.m -o unload4.dylib -dynamiclib
     $C{COMPILE_C} $DIR/unload3.c -o unload3.dylib -dynamiclib
-    $C{COMPILE}   $DIR/unload2.m -o unload2.bundle -bundle $C{FORCE_LOAD_ARCLITE} -Xlinker -undefined -Xlinker dynamic_lookup
+    $C{COMPILE}   $DIR/unload2.m -o unload2.bundle -bundle $C{FORCE_LOAD_ARCLITE} -L. -lunload5
     $C{COMPILE}   $DIR/unload.m -o unload.exe -framework Foundation
 END
 */
-
-/*
-TEST_BUILD_OUTPUT
-ld: warning: -undefined dynamic_lookup is deprecated on .*
-OR
-END
- */
 
 #include "test.h"
 #include <objc/runtime.h>
@@ -91,14 +86,14 @@ void cycle(void)
     // give BigClass and BigClass->isa large method caches (4692641)
     // Flush caches part way through to test large empty caches.
     for (i = 0; i < 3000; i++) {
-        sprintf(buf, "method_%d", i);
+        snprintf(buf, sizeof(buf), "method_%d", i);
         SEL sel = sel_registerName(buf);
         ((void(*)(id, SEL))objc_msgSend)(o2, sel);
         ((void(*)(id, SEL))objc_msgSend)(object_getClass(o2), sel);
     }
     _objc_flush_caches(object_getClass(o2));
     for (i = 0; i < 17000; i++) {
-        sprintf(buf, "method_%d", i);
+        snprintf(buf, sizeof(buf), "method_%d", i);
         SEL sel = sel_registerName(buf);
         ((void(*)(id, SEL))objc_msgSend)(o2, sel);
         ((void(*)(id, SEL))objc_msgSend)(object_getClass(o2), sel);
@@ -138,6 +133,8 @@ void cycle(void)
 
 int main()
 {
+    int dyld3 = testdyld3();
+
     objc_setForwardHandler((void*)&forward_handler, (void*)&forward_handler);
 
 #if defined(__arm__)  ||  defined(__arm64__)
@@ -153,10 +150,11 @@ int main()
 #endif
 
     leak_mark();
-    while (count--) {
+    for (int i = 0; i < count; i++) {
         cycle();
     }
-    leak_check(0);
+    // dyld3 currently leaks 8 bytes for each dlopen/dlclose pair, so accommodate it. rdar://problem/53769254
+    leak_check(dyld3 ? (count * sizeof(void *)) : 0);
 
     // 5359412 Make sure dylibs with nothing other than image_info can close
     void *dylib = dlopen("unload3.dylib", RTLD_LAZY);
@@ -164,7 +162,7 @@ int main()
     int err = dlclose(dylib);
     testassert(err == 0);
     err = dlclose(dylib);
-    testassert(err == -1);  // already closed
+    // dyld doesn't error when dlclosing the dylib twice. This is probably expected. rdar://problem/53769374
 
     // Make sure dylibs with real objc content cannot close
     dylib = dlopen("unload4.dylib", RTLD_LAZY);
@@ -172,7 +170,7 @@ int main()
     err = dlclose(dylib);
     testassert(err == 0);
     err = dlclose(dylib);
-    testassert(err == -1);  // already closed
+    // dyld doesn't error when dlclosing the dylib twice. This is probably expected. rdar://problem/53769374
 
     succeed(__FILE__);
 }

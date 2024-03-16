@@ -1,3 +1,4 @@
+// TEST_CONFIG OS=!exclavekit
 // TEST_CFLAGS -framework Foundation
 
 #include "test.h"

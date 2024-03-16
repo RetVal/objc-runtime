@@ -46,7 +46,16 @@ struct bucket_t {
 
 struct cache_t {
     uintptr_t buckets;
+};
+
+struct cache_outlined_or_64 {
+    struct cache_t cache;
     mask_t mask;
+    mask_t occupied;
+};
+
+struct cache_inline_32 {
+    struct cache_t cache;
     mask_t occupied;
 };
 
@@ -96,17 +105,19 @@ int main()
 
     if (low4) {
         cache->buckets = (uintptr_t)buckets | COUNTSHIFT;
+        ((struct cache_inline_32 *)cache)->occupied = 0;
 #if __LP64__
     } else if (top16) {
         cache->buckets = ((uintptr_t)(COUNT - 1) << 48) | (uintptr_t)buckets;
+        ((struct cache_outlined_or_64 *)cache)->occupied = 0;
 #endif
     } else if (outlined) {
-        cache->mask = COUNT-1;
+        ((struct cache_outlined_or_64 *)cache)->mask = COUNT-1;
         cache->buckets = (uintptr_t)buckets;
+        ((struct cache_outlined_or_64 *)cache)->occupied = 0;
     }
 
-    cache->occupied = 0;
-    
+
     fprintf(stderr, "crash now\n");
     [obj self];
 

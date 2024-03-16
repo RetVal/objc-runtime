@@ -21,218 +21,6 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
-#if !__OBJC2__
-
-/***********************************************************************
-* 32-bit implementation
-**********************************************************************/
-
-#include "objc-private.h"
-#include <stdlib.h>
-#include <setjmp.h>
-#include <execinfo.h>
-
-#include "objc-exception.h"
-
-static objc_exception_functions_t xtab;
-
-// forward declaration
-static void set_default_handlers();
-
-
-/*
- * Exported functions
- */
-
-// get table; version tells how many
-void objc_exception_get_functions(objc_exception_functions_t *table) {
-    // only version 0 supported at this point
-    if (table && table->version == 0)
-        *table = xtab;
-}
-
-// set table
-void objc_exception_set_functions(objc_exception_functions_t *table) {
-    // only version 0 supported at this point
-    if (table && table->version == 0)
-        xtab = *table;
-}
-
-/*
- * The following functions are
- * synthesized by the compiler upon encountering language constructs
- */
- 
-void objc_exception_throw(id exception) {
-    if (!xtab.throw_exc) {
-        set_default_handlers();
-    }
-    
-    if (PrintExceptionThrow) {
-        _objc_inform("EXCEPTIONS: throwing %p (%s)", 
-                     (void*)exception, object_getClassName(exception));
-        void* callstack[500];
-        int frameCount = backtrace(callstack, 500);
-        backtrace_symbols_fd(callstack, frameCount, fileno(stderr));
-    }
-
-    OBJC_RUNTIME_OBJC_EXCEPTION_THROW(exception);  // dtrace probe to log throw activity.
-    xtab.throw_exc(exception);
-    _objc_fatal("objc_exception_throw failed");
-}
-
-void objc_exception_try_enter(void *localExceptionData) {
-    if (!xtab.throw_exc) {
-        set_default_handlers();
-    }
-    xtab.try_enter(localExceptionData);
-}
-
-
-void objc_exception_try_exit(void *localExceptionData) {
-    if (!xtab.throw_exc) {
-        set_default_handlers();
-    }
-    xtab.try_exit(localExceptionData);
-}
-
-
-id objc_exception_extract(void *localExceptionData) {
-    if (!xtab.throw_exc) {
-        set_default_handlers();
-    }
-    return xtab.extract(localExceptionData);
-}
-
-
-int objc_exception_match(Class exceptionClass, id exception) {
-    if (!xtab.throw_exc) {
-        set_default_handlers();
-    }
-    return xtab.match(exceptionClass, exception);
-}
-
-
-// quick and dirty exception handling code
-// default implementation - mostly a toy for use outside/before Foundation
-// provides its implementation
-// Perhaps the default implementation should just complain loudly and quit
-
-
-extern void _objc_inform(const char *fmt, ...);
-
-typedef struct { jmp_buf buf; void *pointers[4]; } LocalData_t;
-
-typedef struct _threadChain {
-    LocalData_t *topHandler;
-    objc_thread_t perThreadID;
-    struct _threadChain *next;
-}
-    ThreadChainLink_t;
-
-static ThreadChainLink_t ThreadChainLink;
-
-static ThreadChainLink_t *getChainLink() {
-    // follow links until objc_thread_self() found (someday) XXX
-    objc_thread_t self = objc_thread_self();
-    ThreadChainLink_t *walker = &ThreadChainLink;
-    while (walker->perThreadID != self) {
-        if (walker->next != nil) {
-            walker = walker->next;
-            continue;
-        }
-        // create a new one
-        // XXX not thread safe (!)
-        // XXX Also, we don't register to deallocate on thread death
-        walker->next = (ThreadChainLink_t *)malloc(sizeof(ThreadChainLink_t));
-        walker = walker->next;
-        walker->next = nil;
-        walker->topHandler = nil;
-        walker->perThreadID = self;
-    }
-    return walker;
-}
-
-static void default_try_enter(void *localExceptionData) {
-    LocalData_t *data = (LocalData_t *)localExceptionData;
-    ThreadChainLink_t *chainLink = getChainLink();
-    data->pointers[1] = chainLink->topHandler;
-    chainLink->topHandler = data;
-    if (PrintExceptions) _objc_inform("EXCEPTIONS: entered try block %p\n", chainLink->topHandler);
-}
-
-static void default_throw(id value) {
-    ThreadChainLink_t *chainLink = getChainLink();
-    LocalData_t *led;
-    if (value == nil) {
-        if (PrintExceptions) _objc_inform("EXCEPTIONS: objc_exception_throw with nil value\n");
-        return;
-    }
-    if (chainLink == nil) {
-        if (PrintExceptions) _objc_inform("EXCEPTIONS: No handler in place!\n");
-        return;
-    }
-    if (PrintExceptions) _objc_inform("EXCEPTIONS: exception thrown, going to handler block %p\n", chainLink->topHandler);
-    led = chainLink->topHandler;
-    chainLink->topHandler = (LocalData_t *)
-        led->pointers[1];	// pop top handler
-    led->pointers[0] = value;			// store exception that is thrown
-#if TARGET_OS_WIN32
-    longjmp(led->buf, 1);
-#else
-    _longjmp(led->buf, 1);
-#endif
-}
-    
-static void default_try_exit(void *led) {
-    ThreadChainLink_t *chainLink = getChainLink();
-    if (!chainLink || led != chainLink->topHandler) {
-        if (PrintExceptions) _objc_inform("EXCEPTIONS: *** mismatched try block exit handlers\n");
-        return;
-    }
-    if (PrintExceptions) _objc_inform("EXCEPTIONS: removing try block handler %p\n", chainLink->topHandler);
-    chainLink->topHandler = (LocalData_t *)
-        chainLink->topHandler->pointers[1];	// pop top handler
-}
-
-static id default_extract(void *localExceptionData) {
-    LocalData_t *led = (LocalData_t *)localExceptionData;
-    return (id)led->pointers[0];
-}
-
-static int default_match(Class exceptionClass, id exception) {
-    //return [exception isKindOfClass:exceptionClass];
-    Class cls;
-    for (cls = exception->getIsa(); nil != cls; cls = cls->superclass) 
-        if (cls == exceptionClass) return 1;
-    return 0;
-}
-
-static void set_default_handlers() {
-    objc_exception_functions_t default_functions = {
-        0, default_throw, default_try_enter, default_try_exit, default_extract, default_match };
-
-    // should this always print?
-    if (PrintExceptions) _objc_inform("EXCEPTIONS: *** Setting default (non-Foundation) exception mechanism\n");
-    objc_exception_set_functions(&default_functions);
-}
-
-
-void exception_init(void)
-{
-    // nothing to do
-}
-
-void _destroyAltHandlerList(struct alt_handler_list *list)
-{
-    // nothing to do
-}
-
-
-// !__OBJC2__
-#else
-// __OBJC2__
-
 /***********************************************************************
 * 64-bit implementation.
 **********************************************************************/
@@ -241,7 +29,10 @@ void _destroyAltHandlerList(struct alt_handler_list *list)
 #include <objc/objc-abi.h>
 #include <objc/objc-exception.h>
 #include <objc/NSObject.h>
+
+#if !TARGET_OS_EXCLAVEKIT
 #include <execinfo.h>
+#endif
 
 // unwind library types and functions
 // Mostly adapted from Itanium C++ ABI: Exception Handling
@@ -440,7 +231,7 @@ static int _objc_default_exception_matcher(Class catch_cls, id exception)
     Class cls;
     for (cls = exception->getIsa();
          cls != nil; 
-         cls = cls->superclass)
+         cls = cls->getSuperclass())
     {
         if (cls == catch_cls) return 1;
     }
@@ -578,6 +369,7 @@ void objc_exception_throw(id obj)
                      exc, (void*)obj, object_getClassName(obj));
     }
 
+#if !TARGET_OS_EXCLAVEKIT
     if (PrintExceptionThrow) {
         if (!PrintExceptions)
             _objc_inform("EXCEPTIONS: throwing %p (object %p, a %s)", 
@@ -586,8 +378,10 @@ void objc_exception_throw(id obj)
         int frameCount = backtrace(callstack, 500);
         backtrace_symbols_fd(callstack, frameCount, fileno(stderr));
     }
-    
+#endif
+
     OBJC_RUNTIME_OBJC_EXCEPTION_THROW(obj);  // dtrace probe to log throw activity
+
     __cxa_throw(exc, &exc->tinfo, &_objc_exception_destructor);
     __builtin_trap();
 }
@@ -599,8 +393,9 @@ void objc_exception_rethrow(void)
     if (PrintExceptions) {
         _objc_inform("EXCEPTIONS: rethrowing current exception");
     }
-    
+
     OBJC_RUNTIME_OBJC_EXCEPTION_RETHROW(); // dtrace probe to log throw activity.
+
     __cxa_rethrow();
     __builtin_trap();
 }
@@ -737,8 +532,11 @@ static void call_alt_handlers(struct _Unwind_Context *ctx)
 #else
 
 #include <libunwind.h>
+
+#if !TARGET_OS_EXCLAVEKIT
 #include <execinfo.h>
 #include <dispatch/dispatch.h>
+#endif
 
 // Dwarf eh data encodings
 #define DW_EH_PE_omit      0xff  // no data follows
@@ -1175,7 +973,7 @@ uintptr_t objc_addExceptionHandler(objc_exception_handler fn, void *context)
         list->handlers = (struct alt_handler_data *)
             realloc(list->handlers, 
                               list->allocated * sizeof(list->handlers[0]));
-        bzero(&list->handlers[list->used], (list->allocated - list->used) * sizeof(list->handlers[0]));
+        memset(&list->handlers[list->used], 0, (list->allocated - list->used) * sizeof(list->handlers[0]));
         i = list->used;
     }
     else {
@@ -1201,6 +999,7 @@ uintptr_t objc_addExceptionHandler(objc_exception_handler fn, void *context)
 
     uintptr_t token = i+1;
 
+#if !TARGET_OS_EXCLAVEKIT
     if (DebugAltHandlers) {
         // Record backtrace in case this handler is misused later.
         mutex_locker_t lock(AltHandlerDebugLock);
@@ -1212,7 +1011,7 @@ uintptr_t objc_addExceptionHandler(objc_exception_handler fn, void *context)
             data->debug = (struct alt_handler_debug *)
                 calloc(sizeof(*data->debug), 1);
         } else {
-            bzero(data->debug, sizeof(*data->debug));
+            memset(data->debug, 0, sizeof(*data->debug));
         }
 
         pthread_getname_np(objc_thread_self(), data->debug->thread, THREADNAME_COUNT);
@@ -1223,6 +1022,7 @@ uintptr_t objc_addExceptionHandler(objc_exception_handler fn, void *context)
             backtrace(data->debug->backtrace, BACKTRACE_COUNT);
         data->debug->token = token;
     }
+#endif // !TARGET_OS_EXCLAVEKIT
 
     if (PrintAltHandlers) {
         _objc_inform("ALT HANDLERS: installing alt handler #%lu %p(%p) on "
@@ -1299,7 +1099,7 @@ void objc_removeExceptionHandler(uintptr_t token)
 
     if (data->debug) free(data->debug);
     if (data->frame.ips) free(data->frame.ips);
-    bzero(data, sizeof(*data));
+    memset(data, 0, sizeof(*data));
     list->used--;
 }
 
@@ -1316,6 +1116,7 @@ void alt_handler_error(uintptr_t token)
          "Set environment variable OBJC_DEBUG_ALT_HANDLERS=YES "
          "or break in objc_alt_handler_error() to debug.");
 
+#if !TARGET_OS_EXCLAVEKIT
     if (DebugAltHandlers) {
         AltHandlerDebugLock.lock();
         
@@ -1359,7 +1160,7 @@ void alt_handler_error(uintptr_t token)
     done:   
         AltHandlerDebugLock.unlock();
     }
-
+#endif // !TARGET_OS_EXCLAVEKIT
 
     objc_alt_handler_error();
     
@@ -1405,7 +1206,7 @@ static void call_alt_handlers(struct _Unwind_Context *ctx)
             // Copy and clear before the callback, in case the 
             // callback manipulates the alt handler list.
             struct alt_handler_data copy = *data;
-            bzero(data, sizeof(*data));
+            memset(data, 0, sizeof(*data));
             list->used--;
             if (PrintExceptions || PrintAltHandlers) {
                 _objc_inform("EXCEPTIONS: calling alt handler %p(%p) from "
@@ -1434,9 +1235,6 @@ void exception_init(void)
     old_terminate = std::set_terminate(&_objc_terminate);
 }
 
-
-// __OBJC2__
-#endif
 
 // Define this everywhere even if it isn't used, to simplify fork() safety code
 mutex_t AltHandlerDebugLock;

@@ -25,55 +25,72 @@
  * 	Copyright 1988-2001, NeXT Software, Inc., Apple Computer, Inc.
  */
 
+#include <TargetConditionals.h>
+#include <stdio.h>
+#include <stdarg.h>
+
 #include "objc-private.h"
 
-#if TARGET_OS_WIN32
+mutex_t crashlog_lock;
 
-#include <conio.h>
+crashreporter_annotations_t gCRAnnotations;
 
-void _objc_inform_on_crash(const char *fmt, ...)
+#if TARGET_OS_EXCLAVEKIT
+static inline int getpid(void)
 {
+    return 1;
+}
+
+void _objc_inform_now_and_on_crash(const char *fmt, ...)
+{
+    va_list ap;
+    char *buf;
+
+    va_start(ap, fmt);
+    _objc_vasprintf(&buf, fmt, ap);
+    va_end(ap);
+    printf("objc[%d]: %s\n", getpid(), buf);
+    free(buf);
+}
+
+void __objc_error(id rcv, const char *fmt, ...)
+{
+    va_list ap;
+    char *buf;
+
+    va_start(ap, fmt);
+    _objc_vasprintf(&buf, fmt, ap);
+    va_end(ap);
+    _objc_fatal("%s: %s", object_getClassName(rcv), buf);
 }
 
 void _objc_inform(const char *fmt, ...)
 {
-    va_list args;
-    va_start(args, fmt);
-    _vcprintf(fmt, args);
-    va_end(args);
-    _cprintf("\n");
+    va_list ap;
+    char *buf;
+
+    va_start(ap, fmt);
+    _objc_vasprintf(&buf, fmt, ap);
+    va_end(ap);
+    printf("objc[%d]: %s\n", getpid(), buf);
+    free(buf);
 }
 
 void _objc_fatal(const char *fmt, ...)
 {
-    va_list args;
-    va_start(args, fmt);
-    _vcprintf(fmt, args);
-    va_end(args);
-    _cprintf("\n");
+    va_list ap;
+    char *buf;
 
-    abort();
-}
-
-void __objc_error(id rcv, const char *fmt, ...) 
-{
-    va_list args;
-    va_start(args, fmt);
-    _vcprintf(fmt, args);
-    va_end(args);
-
-    abort();
-}
-
-void _objc_error(id rcv, const char *fmt, va_list args) 
-{
-    _vcprintf(fmt, args);
-
+    va_start(ap, fmt);
+    _objc_vasprintf(&buf, fmt, ap);
+    va_end(ap);
+    printf("objc[%d]: %s\n", getpid(), buf);
     abort();
 }
 
 #else
 
+#include <sandbox/private.h>
 #include <_simple.h>
 
 // Return true if c is a UTF8 continuation byte
@@ -83,7 +100,6 @@ static bool isUTF8Continuation(char c)
 }
 
 // Add "message" to any forthcoming crash log.
-mutex_t crashlog_lock;
 static void _objc_crashlog(const char *message)
 {
     char *newmsg;
@@ -102,8 +118,7 @@ static void _objc_crashlog(const char *message)
 
     mutex_locker_t lock(crashlog_lock);
 
-    char *oldmsg = nil;
-    // (char *)CRGetCrashLogMessage();
+    char *oldmsg = (char *)CRGetCrashLogMessage();
     size_t oldlen;
     const size_t limit = 8000;
 
@@ -114,9 +129,9 @@ static void _objc_crashlog(const char *message)
         char *truncmsg = oldmsg + oldlen - limit;
         // advance past partial UTF-8 bytes
         while (isUTF8Continuation(*truncmsg)) truncmsg++;
-        asprintf(&newmsg, "... %s\n%s", truncmsg, message);
+        _objc_asprintf(&newmsg, "... %s\n%s", truncmsg, message);
     } else {
-        asprintf(&newmsg, "%s\n%s", oldmsg, message);
+        _objc_asprintf(&newmsg, "%s\n%s", oldmsg, message);
     }
 
     if (newmsg) {
@@ -125,8 +140,7 @@ static void _objc_crashlog(const char *message)
         if (*c == '\n') *c = '\0';
         
         if (oldmsg) free(oldmsg);
-        free(newmsg);
-//        CRSetCrashLogMessage(newmsg);
+        CRSetCrashLogMessage(newmsg);
     }
 }
 
@@ -147,9 +161,15 @@ static bool also_do_stderr(void)
 // Print "message" to the console.
 static void _objc_syslog(const char *message)
 {
-    _simple_asl_log(ASL_LEVEL_ERR, nil, message);
+    bool do_stderr = true;
 
-    if (also_do_stderr()) {
+    if (sandbox_check(getpid(), "network-outbound",
+                      SANDBOX_FILTER_PATH, "/private/var/run/syslog")) {
+        _simple_asl_log(ASL_LEVEL_ERR, nil, message);
+        do_stderr = also_do_stderr();
+    }
+
+    if (do_stderr) {
         write(STDERR_FILENO, message, strlen(message));
     }
 }
@@ -157,14 +177,11 @@ static void _objc_syslog(const char *message)
 /*
  * _objc_error is the default *_error handler.
  */
-#if !__OBJC2__
-// used by ExceptionHandling.framework
-#endif
-__attribute__((noreturn, cold))
+__attribute__((noreturn, cold, format(printf, 2, 0)))
 void _objc_error(id self, const char *fmt, va_list ap) 
 { 
     char *buf;
-    vasprintf(&buf, fmt, ap);
+    _objc_vasprintf(&buf, fmt, ap);
     _objc_fatal("%s: %s", object_getClassName(self), buf);
 }
 
@@ -176,26 +193,23 @@ void __objc_error(id rcv, const char *fmt, ...)
     va_list vp; 
 
     va_start(vp,fmt); 
-#if !__OBJC2__
-    (*_error)(rcv, fmt, vp); 
-#endif
     _objc_error (rcv, fmt, vp);  /* In case (*_error)() returns. */
     va_end(vp);
 }
 
-static __attribute__((noreturn, cold))
+static __attribute__((noreturn, cold, format(printf, 3, 0)))
 void _objc_fatalv(uint64_t reason, uint64_t flags, const char *fmt, va_list ap)
 {
     char *buf1;
-    vasprintf(&buf1, fmt, ap);
+    _objc_vasprintf(&buf1, fmt, ap);
 
     char *buf2;
-    asprintf(&buf2, "objc[%d]: %s\n", getpid(), buf1);
+    _objc_asprintf(&buf2, "objc[%d]: %s\n", getpid(), buf1);
     _objc_syslog(buf2);
 
     if (DebugDontCrash) {
         char *buf3;
-        asprintf(&buf3, "objc[%d]: HALTED\n", getpid());
+        _objc_asprintf(&buf3, "objc[%d]: HALTED\n", getpid());
         _objc_syslog(buf3);
         _Exit(1);
     }
@@ -233,10 +247,10 @@ void _objc_inform(const char *fmt, ...)
     char *buf2;
 
     va_start (ap,fmt); 
-    vasprintf(&buf1, fmt, ap);
+    _objc_vasprintf(&buf1, fmt, ap);
     va_end (ap);
 
-    asprintf(&buf2, "objc[%d]: %s\n", getpid(), buf1);
+    _objc_asprintf(&buf2, "objc[%d]: %s\n", getpid(), buf1);
     _objc_syslog(buf2);
 
     free(buf2);
@@ -255,10 +269,10 @@ void _objc_inform_on_crash(const char *fmt, ...)
     char *buf2;
 
     va_start (ap,fmt); 
-    vasprintf(&buf1, fmt, ap);
+    _objc_vasprintf(&buf1, fmt, ap);
     va_end (ap);
 
-    asprintf(&buf2, "objc[%d]: %s\n", getpid(), buf1);
+    _objc_asprintf(&buf2, "objc[%d]: %s\n", getpid(), buf1);
     _objc_crashlog(buf2);
 
     free(buf2);
@@ -276,10 +290,10 @@ void _objc_inform_now_and_on_crash(const char *fmt, ...)
     char *buf2;
 
     va_start (ap,fmt); 
-    vasprintf(&buf1, fmt, ap);
+    _objc_vasprintf(&buf1, fmt, ap);
     va_end (ap);
 
-    asprintf(&buf2, "objc[%d]: %s\n", getpid(), buf1);
+    _objc_asprintf(&buf2, "objc[%d]: %s\n", getpid(), buf1);
     _objc_crashlog(buf2);
     _objc_syslog(buf2);
 
@@ -287,8 +301,7 @@ void _objc_inform_now_and_on_crash(const char *fmt, ...)
     free(buf1);
 }
 
-#endif
-
+#endif // !TARGET_OS_EXCLAVEKIT
 
 BREAKPOINT_FUNCTION( 
     void _objc_warn_deprecated(void)

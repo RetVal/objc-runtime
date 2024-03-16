@@ -48,19 +48,11 @@ void objc_setCollectionThreshold(size_t threshold __unused) { }
 void objc_setCollectionRatio(size_t ratio __unused) { }
 void objc_startCollectorThread(void) { }
 
-#if TARGET_OS_WIN32
 BOOL objc_atomicCompareAndSwapPtr(id predicate, id replacement, volatile id *objectLocation) 
-    { void *original = InterlockedCompareExchangePointer((void * volatile *)objectLocation, (void *)replacement, (void *)predicate); return (original == predicate); }
+    { return CompareAndSwapNoBarrier(predicate, replacement, objectLocation); }
 
 BOOL objc_atomicCompareAndSwapPtrBarrier(id predicate, id replacement, volatile id *objectLocation) 
-    { void *original = InterlockedCompareExchangePointer((void * volatile *)objectLocation, (void *)replacement, (void *)predicate); return (original == predicate); }
-#else
-BOOL objc_atomicCompareAndSwapPtr(id predicate, id replacement, volatile id *objectLocation) 
-    { return OSAtomicCompareAndSwapPtr((void *)predicate, (void *)replacement, (void * volatile *)objectLocation); }
-
-BOOL objc_atomicCompareAndSwapPtrBarrier(id predicate, id replacement, volatile id *objectLocation) 
-    { return OSAtomicCompareAndSwapPtrBarrier((void *)predicate, (void *)replacement, (void * volatile *)objectLocation); }
-#endif
+    { return CompareAndSwap(predicate, replacement, objectLocation); }
 
 BOOL objc_atomicCompareAndSwapGlobal(id predicate, id replacement, volatile id *objectLocation) 
     { return objc_atomicCompareAndSwapPtr(predicate, replacement, objectLocation); }

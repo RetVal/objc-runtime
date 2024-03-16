@@ -68,6 +68,12 @@ void testClass(Class c) {
     auto *descstret = method_getDescription(mstret);
     testassert(descstret->name == @selector(myMethodStret));
     testassert(descstret->types == method_getTypeEncoding(mstret));
+
+    Method nullTypeMethod = class_getInstanceMethod(c, @selector(myMethodNullTypes));
+    testassert(nullTypeMethod);
+    testassert(method_getName(nullTypeMethod) == @selector(myMethodNullTypes));
+    testassertequal(method_getTypeEncoding(nullTypeMethod), NULL);
+    testassertequal(method_getImplementation(nullTypeMethod), (IMP)myMethod1);
 }
 
 int main() {

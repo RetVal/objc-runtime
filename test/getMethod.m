@@ -11,6 +11,7 @@ END
 #include "testroot.i"
 #include <objc/runtime.h>
 #include <objc/message.h>
+#include <ptrauth.h>
 
 static int state = 0;
 
@@ -33,7 +34,7 @@ typedef void (*imp_t)(id, SEL);
 int main()
 {
     Class Super_cls, Sub_cls;
-    Class buf[10];
+    Class __ptrauth_objc_isa_pointer buf[10];
     Method m;
     SEL sel;
     IMP imp;

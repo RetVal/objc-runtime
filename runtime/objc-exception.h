@@ -27,55 +27,6 @@
 #include <objc/objc.h>
 #include <stdint.h>
 
-#if !__OBJC2__
-
-// compiler reserves a setjmp buffer + 4 words as localExceptionData
-
-OBJC_EXPORT void
-objc_exception_throw(id _Nonnull exception)
-    OBJC_OSX_AVAILABLE_OTHERS_UNAVAILABLE(10.3);
-
-OBJC_EXPORT void
-objc_exception_try_enter(void * _Nonnull localExceptionData)
-    OBJC_OSX_AVAILABLE_OTHERS_UNAVAILABLE(10.3);
-
-OBJC_EXPORT void
-objc_exception_try_exit(void * _Nonnull localExceptionData)
-    OBJC_OSX_AVAILABLE_OTHERS_UNAVAILABLE(10.3);
-
-OBJC_EXPORT id _Nonnull
-objc_exception_extract(void * _Nonnull localExceptionData)
-    OBJC_OSX_AVAILABLE_OTHERS_UNAVAILABLE(10.3);
-
-OBJC_EXPORT int objc_exception_match(Class _Nonnull exceptionClass,
-                                     id _Nonnull exception)
-    OBJC_OSX_AVAILABLE_OTHERS_UNAVAILABLE(10.3);
-
-
-typedef struct {
-    int version;
-    void (* _Nonnull throw_exc)(id _Nonnull);	          // version 0
-    void (* _Nonnull try_enter)(void * _Nonnull);         // version 0
-    void (* _Nonnull try_exit)(void * _Nonnull);          // version 0
-    id _Nonnull (* _Nonnull extract)(void * _Nonnull);    // version 0
-    int	(* _Nonnull match)(Class _Nonnull, id _Nonnull);  // version 0
-} objc_exception_functions_t;
-
-// get table; version tells how many
-OBJC_EXPORT void
-objc_exception_get_functions(objc_exception_functions_t * _Nullable table)
-    OBJC_OSX_AVAILABLE_OTHERS_UNAVAILABLE(10.3);
-
-// set table
-OBJC_EXPORT void
-objc_exception_set_functions(objc_exception_functions_t * _Nullable table)
-    OBJC_OSX_AVAILABLE_OTHERS_UNAVAILABLE(10.3);
-
-
-// !__OBJC2__
-#else
-// __OBJC2__
-
 typedef id _Nonnull (*objc_exception_preprocessor)(id _Nonnull exception);
 typedef int (*objc_exception_matcher)(Class _Nonnull catch_type,
                                       id _Nonnull exception);
@@ -89,11 +40,11 @@ typedef void (*objc_exception_handler)(id _Nullable unused,
  * 
  * @param exception The exception to be thrown.
  */
-OBJC_EXPORT void
+OBJC_COLD OBJC_EXPORT OBJC_NORETURN void
 objc_exception_throw(id _Nonnull exception)
     OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
 
-OBJC_EXPORT void
+OBJC_COLD OBJC_EXPORT OBJC_NORETURN void
 objc_exception_rethrow(void)
     OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
 
@@ -105,7 +56,7 @@ OBJC_EXPORT void
 objc_end_catch(void)
     OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
 
-OBJC_EXPORT void
+OBJC_COLD OBJC_EXPORT OBJC_NORETURN void
 objc_terminate(void)
     OBJC_AVAILABLE(10.8, 6.0, 9.0, 1.0, 2.0);
 
@@ -121,6 +72,7 @@ OBJC_EXPORT objc_uncaught_exception_handler _Nonnull
 objc_setUncaughtExceptionHandler(objc_uncaught_exception_handler _Nonnull fn)
     OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
 
+#if !TARGET_OS_EXCLAVEKIT
 // Not for iOS.
 OBJC_EXPORT uintptr_t
 objc_addExceptionHandler(objc_exception_handler _Nonnull fn,
@@ -130,9 +82,7 @@ objc_addExceptionHandler(objc_exception_handler _Nonnull fn,
 OBJC_EXPORT void
 objc_removeExceptionHandler(uintptr_t token)
     OBJC_OSX_AVAILABLE_OTHERS_UNAVAILABLE(10.5);
-
-// __OBJC2__
-#endif
+#endif // !TARGET_OS_EXCLAVEKIT
 
 #endif  // __OBJC_EXCEPTION_H_
 

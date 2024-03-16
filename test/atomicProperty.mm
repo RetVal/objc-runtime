@@ -3,7 +3,7 @@
 #include "test.h"
 #include <objc/runtime.h>
 #include <objc/objc-internal.h>
-#import <Foundation/NSObject.h>
+#import <objc/NSObject.h>
 
 class SerialNumber {
     size_t _number;

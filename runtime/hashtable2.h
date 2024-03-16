@@ -80,7 +80,7 @@ typedef struct {
     
 OBJC_EXPORT NXHashTable * _Nonnull
 NXCreateHashTableFromZone (NXHashTablePrototype prototype, unsigned capacity,
-                           const void * _Nullable info, void * _Nullable z)
+                           const void * _Nullable info, void * _Nullable zone __unused)
     OBJC_HASH_AVAILABILITY;
 
 OBJC_EXPORT NXHashTable * _Nonnull
@@ -244,56 +244,6 @@ OBJC_EXPORT const NXHashTablePrototype NXPtrStructKeyPrototype
     OBJC_HASH_AVAILABILITY;
 OBJC_EXPORT const NXHashTablePrototype NXStrStructKeyPrototype
     OBJC_HASH_AVAILABILITY;
-
-
-#if !__OBJC2__  &&  !TARGET_OS_WIN32
-
-/*************************************************************************
- *	Unique strings and buffers
- *************************************************************************/
-
-/* Unique strings allows C users to enjoy the benefits of Lisp's atoms:
-A unique string is a string that is allocated once for all (never de-allocated) and that has only one representant (thus allowing comparison with == instead of strcmp).  A unique string should never be modified (and in fact some memory protection is done to ensure that).  In order to more explicitly insist on the fact that the string has been uniqued, a synonym of (const char *) has been added, NXAtom. */
-
-typedef const char *NXAtom OBJC_HASH_AVAILABILITY;
-
-OBJC_EXPORT NXAtom _Nullable
-NXUniqueString(const char * _Nullable buffer)
-    OBJC_HASH_AVAILABILITY;
-    /* assumes that buffer is \0 terminated, and returns
-     a previously created string or a new string that is a copy of buffer.
-    If NULL is passed returns NULL.
-    Returned string should never be modified.  To ensure this invariant,
-    allocations are made in a special read only zone. */
-	
-OBJC_EXPORT NXAtom _Nonnull
-NXUniqueStringWithLength(const char * _Nullable buffer, int length)
-    OBJC_HASH_AVAILABILITY;
-    /* assumes that buffer is a non NULL buffer of at least 
-    length characters.  Returns a previously created string or 
-    a new string that is a copy of buffer. 
-    If buffer contains \0, string will be truncated.
-    As for NXUniqueString, returned string should never be modified.  */
-	
-OBJC_EXPORT NXAtom _Nullable
-NXUniqueStringNoCopy(const char * _Nullable string)
-    OBJC_HASH_AVAILABILITY;
-    /* If there is already a unique string equal to string, returns the original.  
-    Otherwise, string is entered in the table, without making a copy.  Argument should then never be modified.  */
-	
-OBJC_EXPORT char * _Nullable
-NXCopyStringBuffer(const char * _Nullable buffer)
-    OBJC_HASH_AVAILABILITY;
-    /* given a buffer, allocates a new string copy of buffer.  
-    Buffer should be \0 terminated; returned string is \0 terminated. */
-
-OBJC_EXPORT char * _Nullable
-NXCopyStringBufferFromZone(const char * _Nullable buffer, void * _Nullable z)
-    OBJC_HASH_AVAILABILITY;
-    /* given a buffer, allocates a new string copy of buffer.  
-    Buffer should be \0 terminated; returned string is \0 terminated. */
-
-#endif
 
 __END_DECLS
 

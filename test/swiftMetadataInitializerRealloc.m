@@ -1,15 +1,15 @@
 /*
 TEST_CONFIG MEM=mrc
 TEST_BUILD
-    $C{COMPILE} $DIR/swiftMetadataInitializerRealloc-dylib1.m -o libswiftMetadataInitializerRealloc-dylib1.dylib -dynamiclib -Wno-deprecated-objc-pointer-introspection
-    $C{COMPILE} $DIR/swiftMetadataInitializerRealloc-dylib2.m -o libswiftMetadataInitializerRealloc-dylib2.dylib -dynamiclib -L. -lswiftMetadataInitializerRealloc-dylib1
+    $C{COMPILE} $DIR/swiftMetadataInitializerRealloc-dylib1.m -install_name $T{DYLIBDIR}/libswiftMetadataInitializerRealloc-dylib1.dylib -o libswiftMetadataInitializerRealloc-dylib1.dylib -dynamiclib -Wno-deprecated-objc-pointer-introspection
+    $C{COMPILE} $DIR/swiftMetadataInitializerRealloc-dylib2.m -install_name $T{DYLIBDIR}/libswiftMetadataInitializerRealloc-dylib2.dylib -o libswiftMetadataInitializerRealloc-dylib2.dylib -dynamiclib -L. -lswiftMetadataInitializerRealloc-dylib1
     $C{COMPILE} $DIR/swiftMetadataInitializerRealloc.m -o swiftMetadataInitializerRealloc.exe -L. -lswiftMetadataInitializerRealloc-dylib1 -Wno-deprecated-objc-pointer-introspection
 END
 */
 
 #include "test.h"
 #include "swift-class-def.m"
-
+#include <ptrauth.h>
 
 // _objc_swiftMetadataInitializer hooks for the classes in swift-class-def.m
 
@@ -19,21 +19,6 @@ Class initSuper(Class cls __unused, void *arg __unused)
     // SwiftSub's init is first. SwiftSuper's init is never called.
 
     fail("SwiftSuper's init should not have been called");
-}
-
-bool isRealized(Class cls)
-{
-    // check the is-realized bits directly
-
-#if __LP64__
-# define mask (~(uintptr_t)7)
-#else
-# define mask (~(uintptr_t)3)
-#endif
-#define RW_REALIZED (1<<31)
-    
-    uintptr_t rw = ((uintptr_t *)cls)[4] & mask;  // class_t->data
-    return ((uint32_t *)rw)[0] & RW_REALIZED;  // class_rw_t->flags
 }
 
 SWIFT_CLASS(SwiftSuper, NSObject, initSuper);
@@ -65,6 +50,10 @@ Class initSub(Class cls, void *arg)
     // Example: rdar://problem/50707074
     Class HeapSwiftSub = (Class)malloc(OBJC_MAX_CLASS_SIZE);
     memcpy(HeapSwiftSub, RawRealSwiftSub, OBJC_MAX_CLASS_SIZE);
+    // Re-sign the isa and super pointers in the new location.
+    ((Class __ptrauth_objc_isa_pointer *)(void *)HeapSwiftSub)[0] = ((Class __ptrauth_objc_isa_pointer *)(void *)RawRealSwiftSub)[0];
+    ((Class __ptrauth_objc_super_pointer *)(void *)HeapSwiftSub)[1] = ((Class __ptrauth_objc_super_pointer *)(void *)RawRealSwiftSub)[1];
+    ((void *__ptrauth_objc_class_ro *)(void *)HeapSwiftSub)[4] = ((void * __ptrauth_objc_class_ro *)(void *)RawRealSwiftSub)[4];
 
     testprintf("initSub beginning _objc_realizeClassFromSwift\n");
     _objc_realizeClassFromSwift(HeapSwiftSub, cls);
@@ -158,7 +147,8 @@ int main()
     testassert(strcmp([[SwiftDylib1B new] dylib1BCategoryInSameDylib], "dylib1BCategoryInSameDylib") == 0);
     testassert(strcmp([[SwiftDylib1A new] dylib1ACategoryInApp], "dylib1ACategoryInApp") == 0);
     testassert(strcmp([[SwiftDylib1B new] dylib1BCategoryInApp], "dylib1BCategoryInApp") == 0);
-    
+
+#if !TARGET_OS_EXCLAVEKIT
     void *handle = dlopen("libswiftMetadataInitializerRealloc-dylib2.dylib", RTLD_LAZY);
     testassert(handle);
     
@@ -167,7 +157,8 @@ int main()
     testassert(strcmp([SwiftDylib1A dylib1ACategoryInAppClassMethod], "dylib1ACategoryInAppClassMethod") == 0);
     testassert(strcmp([SwiftDylib1B dylib1BCategoryInAppClassMethod], "dylib1BCategoryInAppClassMethod") == 0);
     [SwiftDylib1A testFromOtherDylib];
-    
+#endif // !TARGET_OS_EXCLAVEKIT
+
     testassert(objc_getClass("RealSwiftSub"));
     testassert(objc_getClass("RealSwiftDylib1A"));
     testassert(objc_getClass("RealSwiftDylib1B"));

@@ -1,4 +1,4 @@
-// TEST_CONFIG MEM=mrc
+// TEST_CONFIG MEM=mrc OS=!exclavekit
 
 #include "test.h"
 #include <objc/NSObject.h>

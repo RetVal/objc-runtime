@@ -241,6 +241,24 @@ int state = 0;
 }
 @end
 
+@interface AutoreleasedClass : TestRoot @end
+@implementation AutoreleasedClass
++(void)initialize {
+    testprintf("in [AutoreleasedClass initialize]\n");
+    testassert(state == 0);
+    state = 30;
+}
+@end
+
+@interface AutoreleasedPristineInstanceClass : TestRoot @end
+@implementation AutoreleasedPristineInstanceClass
++(void)initialize {
+    testprintf("in [AutoreleasedPristineInstanceClass initialize]\n");
+    testassert(state == 0);
+    state = 40;
+}
+@end
+
 int main()
 {
     Class cls;
@@ -294,7 +312,9 @@ int main()
 
     // exception from +initialize must be handled cleanly
     PUSH_POOL {
+#if !TARGET_OS_EXCLAVEKIT
         alarm(3);
+#endif
         testonthread( ^{
             @try {
                 state = 0;
@@ -317,6 +337,20 @@ int main()
         }
     } POP_POOL;
     
+    // objc_autoreleaseReturnValue must call +initialize
+    // rdar://88956559
+    state = 0;
+    cls = objc_getClass("AutoreleasedClass");
+    objc_autoreleaseReturnValue(cls);
+    testassertequal(state, 30);
+
+    state = 0;
+    cls = objc_getClass("AutoreleasedPristineInstanceClass");
+    id instance = class_createInstance(cls, 0);
+    testassertequal(state, 0);
+    objc_autoreleaseReturnValue(instance);
+    testassertequal(state, 40);
+
     succeed(__FILE__);
 
     return 0;

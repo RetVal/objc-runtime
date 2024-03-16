@@ -21,6 +21,9 @@
 #ifndef __OS_BASE_PRIVATE__
 #define __OS_BASE_PRIVATE__
 
+#ifndef KERNEL
+#include <TargetConditionals.h>
+#endif
 #include <os/base.h>
 
 #ifndef os_fastpath
@@ -35,5 +38,6 @@
 #ifndef os_unlikely
 #define os_unlikely(x) OS_EXPECT(!!(x), 0)
 #endif
+
 
 #endif // __OS_BASE_PRIVATE__

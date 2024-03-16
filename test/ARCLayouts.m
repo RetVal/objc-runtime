@@ -1,7 +1,7 @@
 // Note that test ARCLayoutsWithoutWeak uses the same files 
 // with different build options.
 /*
-TEST_CONFIG MEM=arc
+TEST_CONFIG MEM=arc OS=!exclavekit
 TEST_BUILD
     mkdir -p $T{OBJDIR}
     $C{COMPILE_NOLINK_NOMEM} -c $DIR/MRCBase.m -o $T{OBJDIR}/MRCBase.o
@@ -141,7 +141,7 @@ int main (int argc  __unused, const char * argv[] __unused) {
     testassert(am.delegate == ma);
 
     
-    ma.number = M_E;
+    ma.number = 2;
 
     object_setIvar(ma, [MRCARC instanceVariable:"object"], maValue);
     testassert(CFGetRetainCount((__bridge CFTypeRef)maValue) == 2);

@@ -1,0 +1,9 @@
+module MachO.dyld [system] {
+  header "dyld.h"
+  export *
+
+  explicit module utils {
+    header "utils.h"
+    export *
+  }
+}

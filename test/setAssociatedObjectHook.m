@@ -1,47 +1,49 @@
-// TEST_CONFIG
+/*
+    TEST_CONFIG MEM=mrc
+    TEST_ENV OBJC_DISABLE_NONPOINTER_ISA=YES
+*/
 
 #include "test.h"
 #include "testroot.i"
 
-id sawObject;
-const void *sawKey;
-id sawValue;
-objc_AssociationPolicy sawPolicy;
+bool hasAssociations = false;
 
-objc_hook_setAssociatedObject originalSetAssociatedObject;
+@interface TestRoot (AssocHooks)
+@end
 
-void hook(id _Nonnull object, const void * _Nonnull key, id _Nullable value, objc_AssociationPolicy policy) {
-    sawObject = object;
-    sawKey = key;
-    sawValue = value;
-    sawPolicy = policy;
-    originalSetAssociatedObject(object, key, value, policy);
+@implementation TestRoot (AssocHooks)
+
+- (void)_noteAssociatedObjects {
+  hasAssociations = true;
 }
 
+// -_noteAssociatedObjects is currently limited to raw-isa custom-rr to avoid overhead
+- (void) release {
+}
+
+@end
+
 int main() {
+    // Intel simulator doesn't support this method.
+#if !TARGET_OS_SIMULATOR || !__x86_64__
     id obj = [TestRoot new];
     id value = [TestRoot new];
     const void *key = "key";
     objc_setAssociatedObject(obj, key, value, OBJC_ASSOCIATION_RETAIN);
-    testassert(sawObject == nil);
-    testassert(sawKey == nil);
-    testassert(sawValue == nil);
-    testassert(sawPolicy == 0);
+    testassert(hasAssociations == true);
 
     id out = objc_getAssociatedObject(obj, key);
     testassert(out == value);
 
-    objc_setHook_setAssociatedObject(hook, &originalSetAssociatedObject);
-
+    hasAssociations = false;
     key = "key2";
     objc_setAssociatedObject(obj, key, value, OBJC_ASSOCIATION_RETAIN);
-    testassert(sawObject == obj);
-    testassert(sawKey == key);
-    testassert(sawValue == value);
-    testassert(sawPolicy == OBJC_ASSOCIATION_RETAIN);
+    testassert(hasAssociations == false); //only called once
+
 
     out = objc_getAssociatedObject(obj, key);
     testassert(out == value);
+#endif
 
     succeed(__FILE__);
 }

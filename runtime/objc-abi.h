@@ -43,11 +43,14 @@
 #include <objc/runtime.h>
 #include <objc/message.h>
 
+#ifndef __APPLE_BLEACH_SDK__
+#define __APPLE_BLEACH_SDK__
+#endif
+
 /* Linker metadata symbols */
 
 // NSObject was in Foundation/CF on macOS < 10.8.
-#if TARGET_OS_OSX
-#if __OBJC2__
+#if TARGET_OS_OSX && (__x86_64__ || __i386__)
 
 OBJC_EXPORT const char __objc_nsobject_class_10_5
     __asm__("$ld$hide$os10.5$_OBJC_CLASS_$_NSObject");
@@ -70,16 +73,6 @@ OBJC_EXPORT const char __objc_nsobject_isa_10_6
 OBJC_EXPORT const char __objc_nsobject_isa_10_7
     __asm__("$ld$hide$os10.7$_OBJC_IVAR_$_NSObject.isa");
 
-#else
-
-OBJC_EXPORT const char __objc_nsobject_class_10_5
-    __asm__("$ld$hide$os10.5$.objc_class_name_NSObject");
-OBJC_EXPORT const char __objc_nsobject_class_10_6
-    __asm__("$ld$hide$os10.6$.objc_class_name_NSObject");
-OBJC_EXPORT const char __objc_nsobject_class_10_7
-    __asm__("$ld$hide$os10.7$.objc_class_name_NSObject");
-
-#endif
 #endif
 
 /* Runtime startup. */
@@ -101,13 +94,18 @@ typedef struct objc_image_info {
   private:
     enum : uint32_t {
         // 1 byte assorted flags
-        IsReplacement       = 1<<0,  // used for Fix&Continue, now ignored
-        SupportsGC          = 1<<1,  // image supports GC
-        RequiresGC          = 1<<2,  // image requires GC
-        OptimizedByDyld     = 1<<3,  // image is from an optimized shared cache
-        CorrectedSynthesize = 1<<4,  // used for an old workaround, now ignored
-        IsSimulated         = 1<<5,  // image compiled for a simulator platform
-        HasCategoryClassProperties  = 1<<6,  // class properties in category_t
+        DyldCategoriesOptimized     = 1<<0, // categories were optimized by dyld
+        SupportsGC                  = 1<<1, // image supports GC
+        RequiresGC                  = 1<<2, // image requires GC
+        OptimizedByDyld             = 1<<3, // image is from an optimized shared cache
+        SignedClassRO               = 1<<4, // class_ro_t pointers are signed
+        IsSimulated                 = 1<<5, // image compiled for a simulator platform
+        HasCategoryClassProperties  = 1<<6, // class properties in category_t
+
+        // OptimizedByDyldClosure is currently set by dyld, but we don't use it
+        // anymore. Instead use
+        // _dyld_objc_notify_mapped_info::dyldObjCRefsOptimized.
+        // Once dyld stops setting it, it will be unused.
         OptimizedByDyldClosure = 1 << 7, // dyld (not the shared cache) optimized this.
 
         // 1 byte Swift unstable ABI version number
@@ -133,21 +131,23 @@ typedef struct objc_image_info {
     };
 
   public:
-    bool isReplacement()   const { return flags & IsReplacement; }
+    bool dyldCategoriesOptimized() const { return flags & DyldCategoriesOptimized; }
     bool supportsGC()      const { return flags & SupportsGC; }
     bool requiresGC()      const { return flags & RequiresGC; }
     bool optimizedByDyld() const { return flags & OptimizedByDyld; }
     bool hasCategoryClassProperties() const { return flags & HasCategoryClassProperties; }
-    bool optimizedByDyldClosure() const { return flags & OptimizedByDyldClosure; }
     bool containsSwift()   const { return (flags & SwiftUnstableVersionMask) != 0; }
+    bool shouldEnforceClassRoSigning() const { return flags & SignedClassRO; }
     uint32_t swiftUnstableVersion() const { return (flags & SwiftUnstableVersionMask) >> SwiftUnstableVersionMaskShift; }
 #endif
 } objc_image_info;
 
-/* 
-IsReplacement:
-   Once used for Fix&Continue in old OS X object files (not final linked images)
-   Not currently used.
+/*
+DyldCategoriesOptimized:
+   Indicates that dyld preattached categories from this image in the shared
+   cache and we don't need to scan those categories ourselves. Note: this bit
+   used to be used for the IsReplacement flag used for Fix & Continue. That
+   usage is obsolete.
 
 SupportsGC:
    App: GC is required. Framework: GC is supported but not required.
@@ -171,6 +171,15 @@ HasClassProperties:
    Old ABI: Set by some compilers. Not used by the runtime.
 */
 
+// Description of an expected duplicate class name.
+// __DATA,__objc_dupclass stores one of these. Only the main image is
+// consulted for these purposes.
+typedef struct _objc_duplicate_class {
+    uint32_t version;
+    uint32_t flags;
+    const char name[64];
+} objc_duplicate_class;
+#define OBJC_HAS_DUPLICATE_CLASS 1
 
 /* Properties */
 
@@ -221,17 +230,14 @@ objc_copyCppObjectAtomic(void * _Nonnull dest, const void * _Nonnull src,
     OBJC_AVAILABLE(10.8, 6.0, 9.0, 1.0, 2.0);
 
 /* Classes. */
-#if __OBJC2__
 OBJC_EXPORT IMP _Nonnull _objc_empty_vtable
     OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
-#endif
 OBJC_EXPORT struct objc_cache _objc_empty_cache
     OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0, 2.0);
 
 
 /* Messages */
 
-#if __OBJC2__
 // objc_msgSendSuper2() takes the current search class, not its superclass.
 OBJC_EXPORT id _Nullable
 objc_msgSendSuper2(struct objc_super * _Nonnull super, SEL _Nonnull op, ...)
@@ -247,9 +253,7 @@ objc_msgSendSuper2_stret(struct objc_super * _Nonnull super,
 OBJC_EXPORT id _Nullable
 objc_msgSend_noarg(id _Nullable self, SEL _Nonnull _cmd)
     OBJC_AVAILABLE(10.7, 5.0, 9.0, 1.0, 2.0);
-#endif
 
-#if __OBJC2__
 // Debug messengers. Messengers used by the compiler have a debug flavor that 
 // may perform extra sanity checking. 
 // Old objc_msgSendSuper() does not have a debug version; this is OBJC2 only.
@@ -293,9 +297,7 @@ objc_msgSend_fp2ret_debug(id _Nullable self, SEL _Nonnull op, ...)
 #  endif
 # endif
 
-#endif
 
-#if __OBJC2__
 // Lookup messengers.
 // These are not callable C functions. Do not call them directly.
 // The caller should set the method parameters, call objc_msgLookup(), 
@@ -344,7 +346,6 @@ objc_msgLookup_fp2ret(void)
     OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
 # endif
 
-#endif
 
 #if (TARGET_OS_OSX || TARGET_OS_SIMULATOR)  &&  defined(__x86_64__)
 // objc_msgSend_fixup() was used for vtable-dispatchable call sites.
@@ -376,7 +377,6 @@ objc_msgSend_fp2ret_fixup(void)
 #endif
 
 /* C++-compatible exception handling. */
-#if __OBJC2__
 
 // Vtable for C++ exception typeinfo for Objective-C types.
 OBJC_EXPORT const void * _Nullable objc_ehtype_vtable[]
@@ -397,7 +397,6 @@ __objc_personality_v0(int version,
                       struct _Unwind_Context * _Nonnull context)
     OBJC_AVAILABLE(10.5, 2.0, 9.0, 1.0, 2.0);
 
-#endif
 
 /* ARC */
 
@@ -408,21 +407,24 @@ objc_retainBlock(id _Nullable)
 
 /* Non-pointer isa */
 
-#if __OBJC2__
-
 // Extract class pointer from an isa field.
     
-#if TARGET_OS_SIMULATOR && !TARGET_OS_IOSMAC
+#if TARGET_OS_SIMULATOR && !TARGET_OS_MACCATALYST && !__arm64__
     // No simulators use nonpointer isa yet.
     
 #elif __LP64__
 #   define OBJC_HAVE_NONPOINTER_ISA 1
 #   define OBJC_HAVE_PACKED_NONPOINTER_ISA 1
 
+// Has to be in an __OBJC2__ conditional for now because CF redeclares it(!)
+#   if __OBJC2__
+#       define OBJC_DECLARED_ABSOLUTE_PACKED_ISA_CLASS_MASK 1
+
 // Packed-isa version. This one is used directly by Swift code.
 // (Class)(isa & (uintptr_t)&objc_absolute_packed_isa_class_mask) == class ptr
 OBJC_EXPORT const struct { char c; } objc_absolute_packed_isa_class_mask
     OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
+#   endif
 
 #elif (__ARM_ARCH_7K__ >= 2  ||  (__arm64__ && !__LP64__))
 #   define OBJC_HAVE_NONPOINTER_ISA 1
@@ -446,6 +448,65 @@ OBJC_EXPORT const struct { char c; } objc_absolute_indexed_isa_index_shift
 
 #endif
 
+
+#if __arm64__
+
+// N.B. These do not have the normal C calling convention (except for _x0),
+//      which is why the argument is "void" here.
+OBJC_EXPORT id _Nullable objc_retain_x0(id _Nullable) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT id _Nullable objc_retain_x1(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT id _Nullable objc_retain_x2(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT id _Nullable objc_retain_x3(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT id _Nullable objc_retain_x4(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT id _Nullable objc_retain_x5(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT id _Nullable objc_retain_x6(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT id _Nullable objc_retain_x7(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT id _Nullable objc_retain_x8(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT id _Nullable objc_retain_x9(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT id _Nullable objc_retain_x10(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT id _Nullable objc_retain_x11(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT id _Nullable objc_retain_x12(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT id _Nullable objc_retain_x13(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT id _Nullable objc_retain_x14(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT id _Nullable objc_retain_x15(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT id _Nullable objc_retain_x19(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT id _Nullable objc_retain_x20(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT id _Nullable objc_retain_x21(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT id _Nullable objc_retain_x22(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT id _Nullable objc_retain_x23(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT id _Nullable objc_retain_x24(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT id _Nullable objc_retain_x25(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT id _Nullable objc_retain_x26(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT id _Nullable objc_retain_x27(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT id _Nullable objc_retain_x28(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+
+OBJC_EXPORT void objc_release_x0(id _Nullable) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT void objc_release_x1(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT void objc_release_x2(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT void objc_release_x3(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT void objc_release_x4(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT void objc_release_x5(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT void objc_release_x6(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT void objc_release_x7(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT void objc_release_x8(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT void objc_release_x9(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT void objc_release_x10(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT void objc_release_x11(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT void objc_release_x12(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT void objc_release_x13(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT void objc_release_x14(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT void objc_release_x15(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT void objc_release_x19(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT void objc_release_x20(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT void objc_release_x21(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT void objc_release_x22(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT void objc_release_x23(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT void objc_release_x24(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT void objc_release_x25(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT void objc_release_x26(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT void objc_release_x27(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+OBJC_EXPORT void objc_release_x28(void) OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 7.0);
+
 #endif
 
 
@@ -453,7 +514,7 @@ OBJC_EXPORT const struct { char c; } objc_absolute_indexed_isa_index_shift
 
 // This symbol might be required for binary compatibility, so we
 // declare it here where TAPI will see it.
-#if __OBJC__  &&  __OBJC2__
+#if __OBJC__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wobjc-interface-ivars"
 #if !defined(OBJC_DECLARE_SYMBOLS)

@@ -1,0 +1,4 @@
+module MachO.dyld [system] {
+  header "dyld.h"
+  export *
+}

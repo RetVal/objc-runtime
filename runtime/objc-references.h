@@ -35,7 +35,7 @@ __BEGIN_DECLS
 extern void _objc_associations_init();
 extern void _object_set_associative_reference(id object, const void *key, id value, uintptr_t policy);
 extern id _object_get_associative_reference(id object, const void *key);
-extern void _object_remove_assocations(id object);
+extern void _object_remove_associations(id object, bool deallocating);
 
 __END_DECLS
 

@@ -11,11 +11,11 @@
 @end
 
 struct minimal_unrealized_class {
-    void *isa;
-    void *superclass;
+    void * __ptrauth_objc_isa_pointer isa;
+    void * __ptrauth_objc_super_pointer superclass;
     void *cachePtr;
     uintptr_t maskAndOccupied;
-    struct minimal_class_ro *ro;
+    struct minimal_class_ro * __ptrauth_objc_class_ro ro;
 };
 
 struct minimal_class_ro {
@@ -33,7 +33,7 @@ static void test(void);
 int main()
 {
     struct minimal_unrealized_class *localForbidden = &OBJC_CLASS_$_Forbidden;
-    localForbidden->ro->flags |= RO_FORBIDS_ASSOCIATED_OBJECTS;
+    ptrauth_strip(localForbidden->ro, ptrauth_key_process_independent_data)->flags |= RO_FORBIDS_ASSOCIATED_OBJECTS;
     test();
 }
 

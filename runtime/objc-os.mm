@@ -28,174 +28,11 @@
 
 #include "objc-private.h"
 #include "objc-loadmethod.h"
-#include "objc-cache.h"
-
-#if TARGET_OS_WIN32
-
-#include "objc-runtime-old.h"
-#include "objcrt.h"
-
-const fork_unsafe_lock_t fork_unsafe_lock;
-
-int monitor_init(monitor_t *c) 
-{
-    // fixme error checking
-    HANDLE mutex = CreateMutex(NULL, TRUE, NULL);
-    while (!c->mutex) {
-        // fixme memory barrier here?
-        if (0 == InterlockedCompareExchangePointer(&c->mutex, mutex, 0)) {
-            // we win - finish construction
-            c->waiters = CreateSemaphore(NULL, 0, 0x7fffffff, NULL);
-            c->waitersDone = CreateEvent(NULL, FALSE, FALSE, NULL);
-            InitializeCriticalSection(&c->waitCountLock);
-            c->waitCount = 0;
-            c->didBroadcast = 0;
-            ReleaseMutex(c->mutex);    
-            return 0;
-        }
-    }
-
-    // someone else allocated the mutex and constructed the monitor
-    ReleaseMutex(mutex);
-    CloseHandle(mutex);
-    return 0;
-}
-
-void mutex_init(mutex_t *m)
-{
-    while (!m->lock) {
-        CRITICAL_SECTION *newlock = malloc(sizeof(CRITICAL_SECTION));
-        InitializeCriticalSection(newlock);
-        // fixme memory barrier here?
-        if (0 == InterlockedCompareExchangePointer(&m->lock, newlock, 0)) {
-            return;
-        }
-        // someone else installed their lock first
-        DeleteCriticalSection(newlock);
-        free(newlock);
-    }
-}
 
 
-void recursive_mutex_init(recursive_mutex_t *m)
-{
-    // fixme error checking
-    HANDLE newmutex = CreateMutex(NULL, FALSE, NULL);
-    while (!m->mutex) {
-        // fixme memory barrier here?
-        if (0 == InterlockedCompareExchangePointer(&m->mutex, newmutex, 0)) {
-            // we win
-            return;
-        }
-    }
-    
-    // someone else installed their lock first
-    CloseHandle(newmutex);
-}
 
+#if   TARGET_OS_MAC
 
-WINBOOL APIENTRY DllMain( HMODULE hModule,
-                       DWORD  ul_reason_for_call,
-                       LPVOID lpReserved
-					 )
-{
-    switch (ul_reason_for_call) {
-    case DLL_PROCESS_ATTACH:
-        environ_init();
-        tls_init();
-        runtime_init();
-        sel_init(3500);  // old selector heuristic
-        exception_init();
-        break;
-
-    case DLL_THREAD_ATTACH:
-        break;
-
-    case DLL_THREAD_DETACH:
-    case DLL_PROCESS_DETACH:
-        break;
-    }
-    return TRUE;
-}
-
-OBJC_EXPORT void *_objc_init_image(HMODULE image, const objc_sections *sects)
-{
-    header_info *hi = malloc(sizeof(header_info));
-    size_t count, i;
-
-    hi->mhdr = (const headerType *)image;
-    hi->info = sects->iiStart;
-    hi->allClassesRealized = NO;
-    hi->modules = sects->modStart ? (Module *)((void **)sects->modStart+1) : 0;
-    hi->moduleCount = (Module *)sects->modEnd - hi->modules;
-    hi->protocols = sects->protoStart ? (struct old_protocol **)((void **)sects->protoStart+1) : 0;
-    hi->protocolCount = (struct old_protocol **)sects->protoEnd - hi->protocols;
-    hi->imageinfo = NULL;
-    hi->imageinfoBytes = 0;
-    // hi->imageinfo = sects->iiStart ? (uint8_t *)((void **)sects->iiStart+1) : 0;;
-//     hi->imageinfoBytes = (uint8_t *)sects->iiEnd - hi->imageinfo;
-    hi->selrefs = sects->selrefsStart ? (SEL *)((void **)sects->selrefsStart+1) : 0;
-    hi->selrefCount = (SEL *)sects->selrefsEnd - hi->selrefs;
-    hi->clsrefs = sects->clsrefsStart ? (Class *)((void **)sects->clsrefsStart+1) : 0;
-    hi->clsrefCount = (Class *)sects->clsrefsEnd - hi->clsrefs;
-
-    count = 0;
-    for (i = 0; i < hi->moduleCount; i++) {
-        if (hi->modules[i]) count++;
-    }
-    hi->mod_count = 0;
-    hi->mod_ptr = 0;
-    if (count > 0) {
-        hi->mod_ptr = malloc(count * sizeof(struct objc_module));
-        for (i = 0; i < hi->moduleCount; i++) {
-            if (hi->modules[i]) memcpy(&hi->mod_ptr[hi->mod_count++], hi->modules[i], sizeof(struct objc_module));
-        }
-    }
-    
-    hi->moduleName = malloc(MAX_PATH * sizeof(TCHAR));
-    GetModuleFileName((HMODULE)(hi->mhdr), hi->moduleName, MAX_PATH * sizeof(TCHAR));
-
-    appendHeader(hi);
-
-    if (PrintImages) {
-        _objc_inform("IMAGES: loading image for %s%s%s%s\n", 
-                     hi->fname, 
-                     headerIsBundle(hi) ? " (bundle)" : "", 
-                     hi->info->isReplacement() ? " (replacement)":"", 
-                     hi->info->hasCategoryClassProperties() ? " (has class properties)":"");
-    }
-
-    // Count classes. Size various table based on the total.
-    int total = 0;
-    int unoptimizedTotal = 0;
-    {
-      if (_getObjc2ClassList(hi, &count)) {
-        total += (int)count;
-        if (!hi->getInSharedCache()) unoptimizedTotal += count;
-      }
-    }
-
-    _read_images(&hi, 1, total, unoptimizedTotal);
-
-    return hi;
-}
-
-OBJC_EXPORT void _objc_load_image(HMODULE image, header_info *hinfo)
-{
-    prepare_load_methods(hinfo);
-    call_load_methods();
-}
-
-OBJC_EXPORT void _objc_unload_image(HMODULE image, header_info *hinfo)
-{
-    _objc_fatal("image unload not supported");
-}
-
-
-// TARGET_OS_WIN32
-#elif TARGET_OS_MAC
-
-#include "objc-file-old.h"
 #include "objc-file.h"
 
 
@@ -219,7 +56,9 @@ bool bad_magic(const headerType *mhdr)
 }
 
 
-static header_info * addHeader(const headerType *mhdr, const char *path, int &totalClasses, int &unoptimizedTotalClasses)
+static header_info * addHeader(const headerType *mhdr, const char *path,
+                               const _dyld_section_location_info_t dyldObjCInfo,
+                               int &totalClasses, int &unoptimizedTotalClasses)
 {
     header_info *hi;
 
@@ -247,14 +86,12 @@ static header_info * addHeader(const headerType *mhdr, const char *path, int &to
             _objc_inform("PREOPTIMIZATION: honoring preoptimized header info at %p for %s", hi, hi->fname());
         }
 
-#if !__OBJC2__
-        _objc_fatal("shouldn't be here");
-#endif
 #if DEBUG
         // Verify image_info
-        size_t info_size = 0;
-        const objc_image_info *image_info = _getObjcImageInfo(mhdr,&info_size);
-        ASSERT(image_info == hi->info());
+//        size_t info_size = 0;
+//        const objc_image_info *image_info = _getObjcImageInfo(mhdr, dyldObjCInfo, &info_size);
+//        const objc_image_info *hi_info = hi->info();
+//        ASSERT(image_info == hi_info);
 #endif
     }
     else 
@@ -264,7 +101,7 @@ static header_info * addHeader(const headerType *mhdr, const char *path, int &to
         // Locate the __OBJC segment
         size_t info_size = 0;
         unsigned long seg_size;
-        const objc_image_info *image_info = _getObjcImageInfo(mhdr,&info_size);
+        const objc_image_info *image_info = _getObjcImageInfo(mhdr, dyldObjCInfo, &info_size);
         const uint8_t *objc_segment = getsegmentdata(mhdr,SEG_OBJC,&seg_size);
         if (!objc_segment  &&  !image_info) return NULL;
 
@@ -275,31 +112,24 @@ static header_info * addHeader(const headerType *mhdr, const char *path, int &to
 
         // Set up the new header_info entry.
         hi->setmhdr(mhdr);
-#if !__OBJC2__
-        // mhdr must already be set
-        hi->mod_count = 0;
-        hi->mod_ptr = _getObjcModules(hi, &hi->mod_count);
-#endif
         // Install a placeholder image_info if absent to simplify code elsewhere
         static const objc_image_info emptyInfo = {0, 0};
         hi->setinfo(image_info ?: &emptyInfo);
+        hi->setdyldInfo(dyldObjCInfo);
 
         hi->setLoaded(true);
-        hi->setAllClassesRealized(NO);
     }
 
-#if __OBJC2__
     {
         size_t count = 0;
-        if (_getObjc2ClassList(hi, &count)) {
+        if (hi->classlist(&count)) {
             totalClasses += (int)count;
             if (!inSharedCache) unoptimizedTotalClasses += count;
         }
     }
-#endif
 
     appendHeader(hi);
-    
+
     return hi;
 }
 
@@ -352,14 +182,8 @@ static bool shouldRejectGCApp(const header_info *hi)
     // Note that objc_appRequiresGC() also knows about this.
     size_t classcount = 0;
     size_t refcount = 0;
-#if __OBJC2__
-    _getObjc2ClassList(hi, &classcount);
-    _getObjc2ClassRefs(hi, &refcount);
-#else
-    if (hi->mod_count == 0  ||  (hi->mod_count == 1 && !hi->mod_ptr[0].symtab)) classcount = 0;
-    else classcount = 1;
-    _getObjcClassRefs(hi, &refcount);
-#endif
+    hi->classlist(&classcount);
+    hi->classrefs(&refcount);
     if (classcount == 0  &&  refcount == 1  &&  
         linksToLibrary(hi, "/System/Library/Frameworks"
                        "/AppleScriptObjC.framework/Versions/A"
@@ -386,27 +210,13 @@ static bool shouldRejectGCImage(const headerType *mhdr)
 
     objc_image_info *image_info;
     size_t size;
-    
-#if !__OBJC2__
-    unsigned long seg_size;
-    // 32-bit: __OBJC seg but no image_info means no GC support
-    if (!getsegmentdata(mhdr, "__OBJC", &seg_size)) {
-        // Not objc, therefore not GC. Don't reject it.
-        return NO;
-    }
-    image_info = _getObjcImageInfo(mhdr, &size);
-    if (!image_info) {
-        // No image_info, therefore not GC. Don't reject it.
-        return NO;
-    }
-#else
+
     // 64-bit: no image_info means no objc at all
-    image_info = _getObjcImageInfo(mhdr, &size);
+    image_info = _getObjcImageInfo(mhdr, nullptr, &size);
     if (!image_info) {
         // Not objc, therefore not GC. Don't reject it.
         return NO;
     }
-#endif
 
     return image_info->requiresGC();
 }
@@ -414,23 +224,68 @@ static bool shouldRejectGCImage(const headerType *mhdr)
 // SUPPORT_GC_COMPAT
 #endif
 
+/***********************************************************************
+* hasSignedClassROPointers
+* Test if an image has signed class_ro_t pointers.
+**********************************************************************/
+static bool hasSignedClassROPointers(const headerType *h, _dyld_section_location_info_t dyldObjCInfo)
+{
+    size_t infoSize = 0;
+    objc_image_info *info = _getObjcImageInfo(h, dyldObjCInfo, &infoSize);
+    if (!info) {
+        // If there's no ObjC in an image, return true; if there really are
+        // classes in the image anyway, we'll die with a pointer auth failure
+        // later on.
+        return true;
+    }
+    return info->shouldEnforceClassRoSigning();
+}
+
+static bool hasSignedClassROPointers(const header_info *hi) {
+    return hasSignedClassROPointers(hi->mhdr(), hi->dyldInfo());
+}
 
 // Swift currently adds 4 callbacks.
-static GlobalSmallVector<objc_func_loadImage, 4> loadImageFuncs;
+struct loadImageCallback {
+    union {
+        objc_func_loadImage func;
+        objc_func_loadImage2 func2;
+    };
+    uint8_t kind;
+};
+static GlobalSmallVector<loadImageCallback, 4> loadImageCallbacks;
 
 void objc_addLoadImageFunc(objc_func_loadImage _Nonnull func) {
     // Not supported on the old runtime. Not that the old runtime is supported anyway.
-#if __OBJC2__
     mutex_locker_t lock(runtimeLock);
-    
+
     // Call it with all the existing images first.
     for (auto header = FirstHeader; header; header = header->getNext()) {
         func((struct mach_header *)header->mhdr());
     }
-    
+
     // Add it to the vector for future loads.
-    loadImageFuncs.append(func);
-#endif
+    loadImageCallback callback = {
+        .func = func,
+        .kind = 1
+    };
+    loadImageCallbacks.append(callback);
+}
+
+void objc_addLoadImageFunc2(objc_func_loadImage2 _Nonnull func) {
+    mutex_locker_t lock(runtimeLock);
+
+    // Call it with all the existing images first.
+    for (auto header = FirstHeader; header; header = header->getNext()) {
+        func((const mach_header *)header->mhdr(), header->dyldInfo());
+    }
+
+    // Add it to the vector for future loads.
+    loadImageCallback callback = {
+        .func2 = func,
+        .kind = 2,
+    };
+    loadImageCallbacks.append(callback);
 }
 
 
@@ -445,26 +300,54 @@ void objc_addLoadImageFunc(objc_func_loadImage _Nonnull func) {
 *
 * Locking: loadMethodLock(old) or runtimeLock(new) acquired by map_images.
 **********************************************************************/
-#if __OBJC2__
 #include "objc-file.h"
-#else
-#include "objc-file-old.h"
-#endif
 
 void 
-map_images_nolock(unsigned mhCount, const char * const mhPaths[],
-                  const struct mach_header * const mhdrs[])
+map_images_nolock(unsigned mhCount, const struct _dyld_objc_notify_mapped_info infos[],
+                  bool *disabledClassROEnforcement)
 {
     static bool firstTime = YES;
-    header_info *hList[mhCount];
+    static bool executableHasClassROSigning = false;
+    static bool executableIsARM64e = false;
+
+    mapped_image_info mappedInfos[mhCount];
     uint32_t hCount;
     size_t selrefCount = 0;
+
+    *disabledClassROEnforcement = false;
 
     // Perform first-time initialization if necessary.
     // This function is called before ordinary library initializers. 
     // fixme defer initialization until an objc-using image is found?
     if (firstTime) {
         preopt_init();
+    } else {
+        // If map_images is called twice in a row with no load_images in between
+        // then we need to attach categories in that second map_images call.
+        // Early code in places like libxpc is already using NSObject and has
+        // probably caused its preattached categories to be copied, without this
+        // new batch of images loaded. If we don't attach categories now, then
+        // we'll skip scanning the categories in the new batch of images,
+        // resulting in missing methods. An example problematic scenario:
+        //
+        // 1. map_images for a handful of low-level dylibs.
+        // 2. libxpc initializes, triggers methodization of NSObject, copies
+        //    NSObject's methods.
+        // 3. CoreFoundation is loaded.
+        // 4. map_images for CoreFoundation. Skip preattached categories.
+        // 5. NSObject is missing CF category methods.
+        //
+        // By attaching categories now, we ensure that CF's preattached
+        // categories are still scanned in this scenario.
+        //
+        // NOTE: this scenario is extremely uncommon and should never happen in
+        // normal programs. It does happen in WINE, because WINE uses an old
+        // x86-64 executable type that gives it control directly instead of
+        // through dyld. It then calls dlopen which eventually triggers our
+        // initializers. This causes map_images and load_images to happen in a
+        // weird sequence, where we get map_images twice in a row.
+        // rdar://109496408
+        loadAllCategoriesIfNeeded();
     }
 
     if (PrintImages) {
@@ -481,31 +364,31 @@ map_images_nolock(unsigned mhCount, const char * const mhPaths[],
     {
         uint32_t i = mhCount;
         while (i--) {
-            const headerType *mhdr = (const headerType *)mhdrs[i];
+            const headerType *mhdr = (const headerType *)infos[i].mh;
 
-            auto hi = addHeader(mhdr, mhPaths[i], totalClasses, unoptimizedTotalClasses);
+            auto hi = addHeader(mhdr, infos[i].path, infos[i].sectionLocationMetadata,
+                                totalClasses, unoptimizedTotalClasses);
             if (!hi) {
                 // no objc data in this entry
                 continue;
             }
-            
+
+            mapped_image_info mappedInfo{hi, infos[i]};
+
             if (mhdr->filetype == MH_EXECUTE) {
                 // Size some data structures based on main executable's size
-#if __OBJC2__
+
                 // If dyld3 optimized the main executable, then there shouldn't
                 // be any selrefs needed in the dynamic map so we can just init
                 // to a 0 sized map
-                if ( !hi->hasPreoptimizedSelectors() ) {
+                if (mappedInfo.dyldObjCRefsOptimized()) {
                   size_t count;
-                  _getObjc2SelectorRefs(hi, &count);
+                  hi->selrefs(&count);
                   selrefCount += count;
-                  _getObjc2MessageRefs(hi, &count);
+                  hi->messagerefs(&count);
                   selrefCount += count;
                 }
-#else
-                _getObjcSelectorRefs(hi, &selrefCount);
-#endif
-                
+
 #if SUPPORT_GC_COMPAT
                 // Halt if this is a GC app.
                 if (shouldRejectGCApp(hi)) {
@@ -516,18 +399,27 @@ map_images_nolock(unsigned mhCount, const char * const mhPaths[],
                          "is no longer supported.");
                 }
 #endif
+
+                if (hasSignedClassROPointers(hi)) {
+                    executableHasClassROSigning = true;
+                }
             }
-            
-            hList[hCount++] = hi;
-            
+
+            mappedInfos[hCount++] = mappedInfo;
+
             if (PrintImages) {
-                _objc_inform("IMAGES: loading image for %s%s%s%s%s\n", 
+                _objc_inform("IMAGES: loading image for %s%s%s%s\n",
                              hi->fname(),
                              mhdr->filetype == MH_BUNDLE ? " (bundle)" : "",
-                             hi->info()->isReplacement() ? " (replacement)" : "",
                              hi->info()->hasCategoryClassProperties() ? " (has class properties)" : "",
                              hi->info()->optimizedByDyld()?" (preoptimized)":"");
             }
+
+            // dtrace probe
+            OBJC_RUNTIME_LOAD_IMAGE(hi->fname(),
+                                    mhdr->filetype == MH_BUNDLE,
+                                    hi->info()->hasCategoryClassProperties(),
+                                    hi->info()->optimizedByDyld());
         }
     }
 
@@ -547,7 +439,7 @@ map_images_nolock(unsigned mhCount, const char * const mhPaths[],
         // Images loaded after launch will be rejected by dyld.
 
         for (uint32_t i = 0; i < hCount; i++) {
-            auto hi = hList[i];
+            auto hi = mappedInfos[i].hi;
             auto mh = hi->mhdr();
             if (mh->filetype != MH_EXECUTE  &&  shouldRejectGCImage(mh)) {
                 _objc_fatal_with_reason
@@ -560,27 +452,27 @@ map_images_nolock(unsigned mhCount, const char * const mhPaths[],
 #endif
 
 #if TARGET_OS_OSX
+#   if !TARGET_OS_EXCLAVEKIT
         // Disable +initialize fork safety if the app is too old (< 10.13).
         // Disable +initialize fork safety if the app has a
         //   __DATA,__objc_fork_ok section.
 
-        if (dyld_get_program_sdk_version() < DYLD_MACOSX_VERSION_10_13) {
-            DisableInitializeForkSafety = true;
+        if (!true/*dyld_program_sdk_at_least(dyld_platform_version_macOS_10_13)*/) {
+            DisableInitializeForkSafety = On;
             if (PrintInitializing) {
                 _objc_inform("INITIALIZE: disabling +initialize fork "
                              "safety enforcement because the app is "
-                             "too old (SDK version " SDK_FORMAT ")",
-                             FORMAT_SDK(dyld_get_program_sdk_version()));
+                             "too old.)");
             }
         }
 
         for (uint32_t i = 0; i < hCount; i++) {
-            auto hi = hList[i];
+            auto hi = mappedInfos[i].hi;
             auto mh = hi->mhdr();
             if (mh->filetype != MH_EXECUTE) continue;
             unsigned long size;
-            if (getsectiondata(hi->mhdr(), "__DATA", "__objc_fork_ok", &size)) {
-                DisableInitializeForkSafety = true;
+            if (hi->hasForkOkSection()) {
+                DisableInitializeForkSafety = On;
                 if (PrintInitializing) {
                     _objc_inform("INITIALIZE: disabling +initialize fork "
                                  "safety enforcement because the app has "
@@ -589,20 +481,76 @@ map_images_nolock(unsigned mhCount, const char * const mhPaths[],
             }
             break;  // assume only one MH_EXECUTE image
         }
-#endif
+#   endif // !TARGET_OS_EXCLAVEKIT
+#endif // TARGET_OS_OSX
 
+        // Check the main executable for ARM64e-ness. Note, we cannot
+        // check the headers we get passed in for an MH_EXECUTABLE,
+        // because dyld helpfully omits images that contain no ObjC,
+        // and the main executable might not contain ObjC.
+        const headerType *mainExecutableHeader = (headerType *)_dyld_get_prog_image_header();
+        if (mainExecutableHeader
+            && mainExecutableHeader->cputype == CPU_TYPE_ARM64
+            && ((mainExecutableHeader->cpusubtype & ~CPU_SUBTYPE_MASK)
+                == CPU_SUBTYPE_ARM64E)) {
+            executableIsARM64e = true;
+        }
+    }
+
+    // If the main executable is ARM64e, make sure every image that is loaded
+    // has pointer signing turned on.
+    if (executableIsARM64e) {
+        bool shouldWarn = (executableHasClassROSigning
+                           && DebugClassRXSigning);
+        for (uint32_t i = 0; i < hCount; ++i) {
+            auto hi = mappedInfos[i].hi;
+            if (!hasSignedClassROPointers(hi)) {
+                if (!objc::disableEnforceClassRXPtrAuth) {
+                    *disabledClassROEnforcement = true;
+                    objc::disableEnforceClassRXPtrAuth = 1;
+
+                    // We *don't* want to log here, because that will give
+                    // attackers an indication that they've managed to disable
+                    // enforcement.
+
+                    // Later, when we're really confident, we might be able to
+                    // do this instead:
+                    //
+                    // _objc_fatal_with_reason
+                    //     (OBJC_EXIT_REASON_CLASS_RO_SIGNING_REQUIRED,
+                    //      OS_REASON_FLAG_CONSISTENT_FAILURE,
+                    //      "%s was built without class_ro_t pointer signing",
+                    //      hi->fname());
+                }
+
+                if (shouldWarn) {
+                    _objc_inform("%s has un-signed class_ro_t pointers, but the "
+                                 "main executable was compiled with class_ro_t "
+                                 "pointer signing enabled", hi->fname());
+                }
+            }
+        }
     }
 
     if (hCount > 0) {
-        _read_images(hList, hCount, totalClasses, unoptimizedTotalClasses);
+        _read_images(mappedInfos, hCount, totalClasses, unoptimizedTotalClasses);
     }
 
     firstTime = NO;
-    
+
     // Call image load funcs after everything is set up.
-    for (auto func : loadImageFuncs) {
+    for (auto callback : loadImageCallbacks) {
         for (uint32_t i = 0; i < mhCount; i++) {
-            func(mhdrs[i]);
+            switch (callback.kind) {
+                case 1:
+                    callback.func(infos[i].mh);
+                    break;
+                case 2:
+                    callback.func2(infos[i].mh, infos[i].sectionLocationMetadata);
+                    break;
+                default:
+                    _objc_fatal("Corrupt load image callback, unknown kind %u, func %p", callback.kind, callback.func);
+            }
         }
     }
 }
@@ -611,12 +559,12 @@ map_images_nolock(unsigned mhCount, const char * const mhPaths[],
 /***********************************************************************
 * unmap_image_nolock
 * Process the given image which is about to be unmapped by dyld.
-* mh is mach_header instead of headerType because that's what 
+* mh is mach_header instead of headerType because that's what
 *   dyld_priv.h says even for 64-bit.
-* 
+*
 * Locking: loadMethodLock(both) and runtimeLock(new) acquired by unmap_image.
 **********************************************************************/
-void 
+void
 unmap_image_nolock(const struct mach_header *mh)
 {
     if (PrintImages) {
@@ -624,7 +572,7 @@ unmap_image_nolock(const struct mach_header *mh)
     }
 
     header_info *hi;
-    
+
     // Find the runtime's header_info struct for the image
     for (hi = FirstHeader; hi != NULL; hi = hi->getNext()) {
         if (hi->mhdr() == (const headerType *)mh) {
@@ -635,10 +583,9 @@ unmap_image_nolock(const struct mach_header *mh)
     if (!hi) return;
 
     if (PrintImages) {
-        _objc_inform("IMAGES: unloading image for %s%s%s\n", 
+        _objc_inform("IMAGES: unloading image for %s%s\n",
                      hi->fname(),
-                     hi->mhdr()->filetype == MH_BUNDLE ? " (bundle)" : "",
-                     hi->info()->isReplacement() ? " (replacement)" : "");
+                     hi->mhdr()->filetype == MH_BUNDLE ? " (bundle)" : "");
     }
 
     _unload_image(hi);
@@ -650,18 +597,106 @@ unmap_image_nolock(const struct mach_header *mh)
 
 
 /***********************************************************************
+* patch_root_of_class_nolock
+* Patches the given class passed from dyld.
+* The body of originalClass will be replaced by the equivalent fields from replacementClass
+*
+* Locking: untimeLock(new) acquired by patch_root_of_class.
+**********************************************************************/
+static void
+patch_root_of_class_nolock(const struct mach_header *originalMH, void* originalClass,
+                   const struct mach_header *replacementMH, const void* replacementClass)
+{
+    Class originalCls = (Class)originalClass;
+    Class replacementCls = (Class)replacementClass;
+
+    if (PrintConnecting) {
+        _objc_inform("CLASS: patching class '%s' (%p) to point to body of %p",
+                     originalCls->nameForLogging(), originalCls, replacementClass);
+    }
+
+    // dyld should never pass Swift classes
+    ASSERT(!originalCls->isAnySwift());
+    ASSERT(!replacementCls->isAnySwift());
+
+    // This should never be called on a realized class.
+    ASSERT(!originalCls->isRealized());
+    ASSERT(!replacementCls->isRealized());
+
+    originalCls->initIsa(replacementCls->getIsa());
+    originalCls->setSuperclass(replacementCls->getSuperclass());
+    originalCls->cache.initializeToEmpty();
+
+    bool authRO = hasSignedClassROPointers((const headerType *)replacementMH, nullptr);
+    originalCls->bits.copyROFrom(replacementCls->bits, authRO);
+}
+
+
+/***********************************************************************
+* _objc_patch_root_of_class
+* Patches the given class passed from dyld.
+* The body of originalClass will be replaced by the equivalent fields from replacementClass
+*
+* Locking: write-locks runtimeLock
+**********************************************************************/
+void
+_objc_patch_root_of_class(const struct mach_header *originalMH, void* originalClass,
+                          const struct mach_header *replacementMH, const void* replacementClass)
+{
+    mutex_locker_t lock(runtimeLock);
+    return patch_root_of_class_nolock(originalMH, originalClass, replacementMH, replacementClass);
+}
+
+// FIXME: rdar://29241917&33734254 clang doesn't sign static initializers.
+struct UnsignedInitializer {
+private:
+    uintptr_t storage;
+public:
+    UnsignedInitializer(uint32_t offset) {
+#if TARGET_OS_EXCLAVEKIT
+        extern const struct mach_header_64 _mh_dylib_header;
+#endif
+        storage = (uintptr_t)&_mh_dylib_header + offset;
+    }
+
+    void operator () () const {
+        using Initializer = void(*)();
+        // Note: we use a hardcoded 0 discriminator even with
+        // ptrauth_function_pointer_type_discrimination, as non-function types
+        // storing function pointers are always signed with a 0 discriminator.
+        Initializer init = (Initializer)ptrauth_sign_unauthenticated((void *)storage,
+                                                                     ptrauth_key_function_pointer, 0);
+        init();
+    }
+};
+
+static const uint32_t *getLibobjcInitializerOffsets(size_t *outCount) {
+    extern const uint32_t sectionStart  __asm("section$start$__TEXT$__init_offsets");
+    extern const uint32_t sectionEnd  __asm("section$end$__TEXT$__init_offsets");
+    *outCount = &sectionEnd - &sectionStart;
+    return &sectionStart;
+}
+
+
+/***********************************************************************
 * static_init
 * Run C++ static constructor functions.
 * libc calls _objc_init() before dyld would call our static constructors, 
 * so we have to do it ourselves.
 **********************************************************************/
+__attribute__((noinline))
 static void static_init()
 {
     size_t count;
-    auto inits = getLibobjcInitializers(&_mh_dylib_header, &count);
+    auto offsets = getLibobjcInitializerOffsets(&count);
     for (size_t i = 0; i < count; i++) {
-        inits[i]();
+        UnsignedInitializer init(offsets[i]);
+        init();
     }
+#if DEBUG
+    if (count == 0)
+        _objc_inform("No static initializers found in libobjc. This is unexpected for a debug build. Make sure the 'markgc' build phase ran on this dylib. This process is probably going to crash momentarily due to using uninitialized global data.");
+#endif
 }
 
 
@@ -684,24 +719,18 @@ static void defineLockOrder()
 {
     // Every lock precedes crashlog_lock
     // on the assumption that fatal errors could be anywhere.
-    lockdebug_lock_precedes_lock(&loadMethodLock, &crashlog_lock);
-    lockdebug_lock_precedes_lock(&classInitLock, &crashlog_lock);
-#if __OBJC2__
-    lockdebug_lock_precedes_lock(&runtimeLock, &crashlog_lock);
-    lockdebug_lock_precedes_lock(&DemangleCacheLock, &crashlog_lock);
-#else
-    lockdebug_lock_precedes_lock(&classLock, &crashlog_lock);
-    lockdebug_lock_precedes_lock(&methodListLock, &crashlog_lock);
-    lockdebug_lock_precedes_lock(&NXUniqueStringLock, &crashlog_lock);
-    lockdebug_lock_precedes_lock(&impLock, &crashlog_lock);
-#endif
-    lockdebug_lock_precedes_lock(&selLock, &crashlog_lock);
+    lockdebug::lock_precedes_lock(&loadMethodLock, &crashlog_lock);
+    lockdebug::lock_precedes_lock(&classInitLock, &crashlog_lock);
+    lockdebug::lock_precedes_lock(&pendingInitializeMapLock, &crashlog_lock);
+    lockdebug::lock_precedes_lock(&runtimeLock, &crashlog_lock);
+    lockdebug::lock_precedes_lock(&DemangleCacheLock, &crashlog_lock);
+    lockdebug::lock_precedes_lock(&selLock, &crashlog_lock);
 #if CONFIG_USE_CACHE_LOCK
-    lockdebug_lock_precedes_lock(&cacheUpdateLock, &crashlog_lock);
+    lockdebug::lock_precedes_lock(&cacheUpdateLock, &crashlog_lock);
 #endif
-    lockdebug_lock_precedes_lock(&objcMsgLogLock, &crashlog_lock);
-    lockdebug_lock_precedes_lock(&AltHandlerDebugLock, &crashlog_lock);
-    lockdebug_lock_precedes_lock(&AssociationsManagerLock, &crashlog_lock);
+    lockdebug::lock_precedes_lock(&objcMsgLogLock, &crashlog_lock);
+    lockdebug::lock_precedes_lock(&AltHandlerDebugLock, &crashlog_lock);
+    lockdebug::lock_precedes_lock(&AssociationsManagerLock, &crashlog_lock);
     SideTableLocksPrecedeLock(&crashlog_lock);
     PropertyLocks.precedeLock(&crashlog_lock);
     StructLocks.precedeLock(&crashlog_lock);
@@ -709,23 +738,17 @@ static void defineLockOrder()
 
     // loadMethodLock precedes everything
     // because it is held while +load methods run
-    lockdebug_lock_precedes_lock(&loadMethodLock, &classInitLock);
-#if __OBJC2__
-    lockdebug_lock_precedes_lock(&loadMethodLock, &runtimeLock);
-    lockdebug_lock_precedes_lock(&loadMethodLock, &DemangleCacheLock);
-#else
-    lockdebug_lock_precedes_lock(&loadMethodLock, &methodListLock);
-    lockdebug_lock_precedes_lock(&loadMethodLock, &classLock);
-    lockdebug_lock_precedes_lock(&loadMethodLock, &NXUniqueStringLock);
-    lockdebug_lock_precedes_lock(&loadMethodLock, &impLock);
-#endif
-    lockdebug_lock_precedes_lock(&loadMethodLock, &selLock);
+    lockdebug::lock_precedes_lock(&loadMethodLock, &classInitLock);
+    lockdebug::lock_precedes_lock(&loadMethodLock, &pendingInitializeMapLock);
+    lockdebug::lock_precedes_lock(&loadMethodLock, &runtimeLock);
+    lockdebug::lock_precedes_lock(&loadMethodLock, &DemangleCacheLock);
+    lockdebug::lock_precedes_lock(&loadMethodLock, &selLock);
 #if CONFIG_USE_CACHE_LOCK
-    lockdebug_lock_precedes_lock(&loadMethodLock, &cacheUpdateLock);
+    lockdebug::lock_precedes_lock(&loadMethodLock, &cacheUpdateLock);
 #endif
-    lockdebug_lock_precedes_lock(&loadMethodLock, &objcMsgLogLock);
-    lockdebug_lock_precedes_lock(&loadMethodLock, &AltHandlerDebugLock);
-    lockdebug_lock_precedes_lock(&loadMethodLock, &AssociationsManagerLock);
+    lockdebug::lock_precedes_lock(&loadMethodLock, &objcMsgLogLock);
+    lockdebug::lock_precedes_lock(&loadMethodLock, &AltHandlerDebugLock);
+    lockdebug::lock_precedes_lock(&loadMethodLock, &AssociationsManagerLock);
     SideTableLocksSucceedLock(&loadMethodLock);
     PropertyLocks.succeedLock(&loadMethodLock);
     StructLocks.succeedLock(&loadMethodLock);
@@ -738,17 +761,10 @@ static void defineLockOrder()
     auto PropertyAndCppObjectAndAssocLocksPrecedeLock = [&](const void *lock) {
         PropertyLocks.precedeLock(lock);
         CppObjectLocks.precedeLock(lock);
-        lockdebug_lock_precedes_lock(&AssociationsManagerLock, lock);
+        lockdebug::lock_precedes_lock(&AssociationsManagerLock, lock);
     };
-#if __OBJC2__
     PropertyAndCppObjectAndAssocLocksPrecedeLock(&runtimeLock);
     PropertyAndCppObjectAndAssocLocksPrecedeLock(&DemangleCacheLock);
-#else
-    PropertyAndCppObjectAndAssocLocksPrecedeLock(&methodListLock);
-    PropertyAndCppObjectAndAssocLocksPrecedeLock(&classLock);
-    PropertyAndCppObjectAndAssocLocksPrecedeLock(&NXUniqueStringLock);
-    PropertyAndCppObjectAndAssocLocksPrecedeLock(&impLock);
-#endif
     PropertyAndCppObjectAndAssocLocksPrecedeLock(&classInitLock);
     PropertyAndCppObjectAndAssocLocksPrecedeLock(&selLock);
 #if CONFIG_USE_CACHE_LOCK
@@ -763,37 +779,20 @@ static void defineLockOrder()
 
     PropertyLocks.precedeLock(&AssociationsManagerLock);
     CppObjectLocks.precedeLock(&AssociationsManagerLock);
-    
-#if __OBJC2__
-    lockdebug_lock_precedes_lock(&classInitLock, &runtimeLock);
-#endif
 
-#if __OBJC2__
+    lockdebug::lock_precedes_lock(&classInitLock, &runtimeLock);
+    lockdebug::lock_precedes_lock(&pendingInitializeMapLock, &runtimeLock);
+
     // Runtime operations may occur inside SideTable locks
     // (such as storeWeak calling getMethodImplementation)
     SideTableLocksPrecedeLock(&runtimeLock);
     SideTableLocksPrecedeLock(&classInitLock);
     // Some operations may occur inside runtimeLock.
-    lockdebug_lock_precedes_lock(&runtimeLock, &selLock);
+    lockdebug::lock_precedes_lock(&runtimeLock, &selLock);
 #if CONFIG_USE_CACHE_LOCK
-    lockdebug_lock_precedes_lock(&runtimeLock, &cacheUpdateLock);
+    lockdebug::lock_precedes_lock(&runtimeLock, &cacheUpdateLock);
 #endif
-    lockdebug_lock_precedes_lock(&runtimeLock, &DemangleCacheLock);
-#else
-    // Runtime operations may occur inside SideTable locks
-    // (such as storeWeak calling getMethodImplementation)
-    SideTableLocksPrecedeLock(&methodListLock);
-    SideTableLocksPrecedeLock(&classInitLock);
-    // Method lookup and fixup.
-    lockdebug_lock_precedes_lock(&methodListLock, &classLock);
-    lockdebug_lock_precedes_lock(&methodListLock, &selLock);
-#if CONFIG_USE_CACHE_LOCK
-    lockdebug_lock_precedes_lock(&methodListLock, &cacheUpdateLock);
-#endif
-    lockdebug_lock_precedes_lock(&methodListLock, &impLock);
-    lockdebug_lock_precedes_lock(&classLock, &selLock);
-    lockdebug_lock_precedes_lock(&classLock, &cacheUpdateLock);
-#endif
+    lockdebug::lock_precedes_lock(&runtimeLock, &DemangleCacheLock);
 
     // Striped locks use address order internally.
     SideTableDefineLockOrder();
@@ -808,26 +807,24 @@ static bool ForkIsMultithreaded;
 void _objc_atfork_prepare()
 {
     // Save threaded-ness for the child's use.
-    ForkIsMultithreaded = pthread_is_threaded_np();
+    ForkIsMultithreaded = objc_is_threaded();
 
-    lockdebug_assert_no_locks_locked();
-    lockdebug_setInForkPrepare(true);
+    lockdebug::assert_no_locks_locked();
+    lockdebug::set_in_fork_prepare(true);
+
+    classInitializeAtforkPrepare();
+
+    _objc_sync_lock_atfork_prepare();
 
     loadMethodLock.lock();
     PropertyLocks.lockAll();
     CppObjectLocks.lockAll();
     AssociationsManagerLock.lock();
     SideTableLockAll();
-    classInitLock.enter();
-#if __OBJC2__
+    classInitLock.lock();
+    pendingInitializeMapLock.lock();
     runtimeLock.lock();
     DemangleCacheLock.lock();
-#else
-    methodListLock.lock();
-    classLock.lock();
-    NXUniqueStringLock.lock();
-    impLock.lock();
-#endif
     selLock.lock();
 #if CONFIG_USE_CACHE_LOCK
     cacheUpdateLock.lock();
@@ -837,13 +834,13 @@ void _objc_atfork_prepare()
     StructLocks.lockAll();
     crashlog_lock.lock();
 
-    lockdebug_assert_all_locks_locked();
-    lockdebug_setInForkPrepare(false);
+    lockdebug::assert_all_locks_locked();
+    lockdebug::set_in_fork_prepare(false);
 }
 
 void _objc_atfork_parent()
 {
-    lockdebug_assert_all_locks_locked();
+    lockdebug::assert_all_locks_locked();
 
     CppObjectLocks.unlockAll();
     StructLocks.unlockAll();
@@ -858,18 +855,16 @@ void _objc_atfork_parent()
 #endif
     selLock.unlock();
     SideTableUnlockAll();
-#if __OBJC2__
     DemangleCacheLock.unlock();
     runtimeLock.unlock();
-#else
-    impLock.unlock();
-    NXUniqueStringLock.unlock();
-    methodListLock.unlock();
-    classLock.unlock();
-#endif
-    classInitLock.leave();
+    classInitLock.unlock();
+    pendingInitializeMapLock.unlock();
 
-    lockdebug_assert_no_locks_locked();
+    _objc_sync_lock_atfork_parent();
+
+    classInitializeAtforkParent();
+
+    lockdebug::assert_no_locks_locked();
 }
 
 void _objc_atfork_child()
@@ -879,33 +874,31 @@ void _objc_atfork_child()
         MultithreadedForkChild = true;
     }
 
-    lockdebug_assert_all_locks_locked();
+    lockdebug::assert_all_locks_locked();
 
     CppObjectLocks.forceResetAll();
     StructLocks.forceResetAll();
     PropertyLocks.forceResetAll();
-    AssociationsManagerLock.forceReset();
-    AltHandlerDebugLock.forceReset();
-    objcMsgLogLock.forceReset();
-    crashlog_lock.forceReset();
-    loadMethodLock.forceReset();
+    AssociationsManagerLock.reset();
+    AltHandlerDebugLock.reset();
+    objcMsgLogLock.reset();
+    crashlog_lock.reset();
+    loadMethodLock.reset();
 #if CONFIG_USE_CACHE_LOCK
     cacheUpdateLock.forceReset();
 #endif
-    selLock.forceReset();
+    selLock.reset();
     SideTableForceResetAll();
-#if __OBJC2__
-    DemangleCacheLock.forceReset();
-    runtimeLock.forceReset();
-#else
-    impLock.forceReset();
-    NXUniqueStringLock.forceReset();
-    methodListLock.forceReset();
-    classLock.forceReset();
-#endif
-    classInitLock.forceReset();
+    DemangleCacheLock.reset();
+    runtimeLock.reset();
+    classInitLock.reset();
+    pendingInitializeMapLock.reset();
 
-    lockdebug_assert_no_locks_locked();
+    _objc_sync_lock_atfork_child();
+
+    classInitializeAtforkChild();
+
+    lockdebug::assert_no_locks_locked();
 }
 
 
@@ -923,18 +916,25 @@ void _objc_init(void)
     
     // fixme defer initialization until an objc-using image is found?
     environ_init();
-    tls_init();
     static_init();
     runtime_init();
     exception_init();
-    cache_init();
+    cache_t::init();
+
+#if !TARGET_OS_EXCLAVEKIT
     _imp_implementationWithBlock_init();
-
-    _dyld_objc_notify_register(&map_images, load_images, unmap_image);
-
-#if __OBJC2__
-    didCallDyldNotifyRegister = true;
 #endif
+
+    _dyld_objc_callbacks_v2 callbacks = {
+        2, // version
+        &map_images,
+        &load_images,
+        unmap_image,
+        _objc_patch_root_of_class
+    };
+    _dyld_objc_register_callbacks((_dyld_objc_callbacks*)&callbacks);
+
+    didCallDyldNotifyRegister = true;
 }
 
 
@@ -944,11 +944,7 @@ void _objc_init(void)
 **********************************************************************/
 static const header_info *_headerForAddress(void *addr)
 {
-#if __OBJC2__
-    const char *segnames[] = { "__DATA", "__DATA_CONST", "__DATA_DIRTY" };
-#else
-    const char *segnames[] = { "__OBJC" };
-#endif
+    const char *segnames[] = { "__DATA", "__DATA_CONST", "__DATA_DIRTY", "__AUTH" };
     header_info *hi;
 
     for (hi = FirstHeader; hi != NULL; hi = hi->getNext()) {
@@ -980,6 +976,7 @@ const header_info *_headerForClass(Class cls)
 }
 
 
+#if SUPPORT_MESSAGE_LOGGING
 /**********************************************************************
 * secure_open
 * Securely open a file from a world-writable directory (like /tmp)
@@ -1062,7 +1059,7 @@ int secure_open(const char *filename, int flags, uid_t euid)
         }
     }
 }
-
+#endif // SUPPORT_MESSAGE_LOGGING
 
 #if TARGET_OS_IPHONE
 
@@ -1088,3 +1085,48 @@ const char *CRGetCrashLogMessage(void)
 
 
 #endif
+
+
+// Implement (v)asprintf() for those systems that don't have it
+#if !HAVE_ASPRINTF
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wformat-nonliteral"
+int
+_objc_vasprintf(char **strp, const char *fmt, va_list args) {
+  va_list args_for_len;
+  va_copy(args_for_len, args);
+  int len = vsnprintf(nullptr, 0, fmt, args_for_len);
+  va_end(args_for_len);
+
+  // If we fail for any reason, strp needs to be set to NULL.
+  *strp = nullptr;
+
+  if (len < 0)
+    return -1;
+  char *buffer = reinterpret_cast<char *>(malloc(len + 1));
+  if (!buffer)
+    return -1;
+  int result = vsnprintf(buffer, len + 1, fmt, args);
+  if (result < 0) {
+    free(buffer);
+    return -1;
+  }
+  *strp = buffer;
+  return result;
+}
+
+int
+_objc_asprintf(char **strp, const char *fmt, ...) {
+  va_list args;
+  va_start(args, fmt);
+  int result = _objc_vasprintf(strp, fmt, args);
+  va_end(args);
+  return result;
+}
+#pragma clang diagnostic pop
+
+#endif // !HAVE_ASPRINTF

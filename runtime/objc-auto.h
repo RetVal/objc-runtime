@@ -25,15 +25,20 @@
 #define _OBJC_AUTO_H_
 
 #include <objc/objc.h>
-#include <malloc/malloc.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
 #include <Availability.h>
 #include <TargetConditionals.h>
+#include <stdlib.h>
 
-#include <sys/types.h>
+#if __has_include(<libkern/OSAtomic.h>)
 #include <libkern/OSAtomic.h>
+#endif
+
+#if __has_include(<malloc/malloc.h>)
+#include <malloc/malloc.h>
+#endif
 
 
 // Define OBJC_SILENCE_GC_DEPRECATIONS=1 to temporarily 
@@ -73,7 +78,7 @@ OBJC_EXPORT void objc_collect(unsigned long options)
     OBJC_OSX_DEPRECATED_OTHERS_UNAVAILABLE(10.6, 10.8, "it does nothing");
 OBJC_EXPORT BOOL objc_collectingEnabled(void)
     OBJC_OSX_DEPRECATED_OTHERS_UNAVAILABLE(10.5, 10.8, "it always returns NO");
-OBJC_EXPORT malloc_zone_t *objc_collectableZone(void) 
+OBJC_EXPORT objc_zone_t objc_collectableZone(void) 
     OBJC_OSX_DEPRECATED_OTHERS_UNAVAILABLE(10.7, 10.8, "it always returns nil");
 OBJC_EXPORT void objc_setCollectionThreshold(size_t threshold)
     OBJC_OSX_DEPRECATED_OTHERS_UNAVAILABLE(10.5, 10.8, "it does nothing");
@@ -144,7 +149,7 @@ OBJC_GC_DEPRECATED("it always returns NO")
 static OBJC_INLINE BOOL objc_collectingEnabled(void) { return NO; }
 #if TARGET_OS_OSX
 OBJC_GC_DEPRECATED("it always returns nil")
-static OBJC_INLINE malloc_zone_t *objc_collectableZone(void) { return nil; }
+static OBJC_INLINE objc_zone_t objc_collectableZone(void) { return nil; }
 #endif
 OBJC_GC_DEPRECATED("it does nothing")
 static OBJC_INLINE void objc_setCollectionThreshold(size_t threshold __unused) { }
@@ -157,7 +162,7 @@ static OBJC_INLINE void objc_startCollectorThread(void) { }
 
 /* Covers for GC memory operations are unavailable in ARC */
 
-#else
+#elif !TARGET_OS_EXCLAVEKIT
 
 OBJC_GC_DEPRECATED("use OSAtomicCompareAndSwapPtr instead")
 static OBJC_INLINE BOOL objc_atomicCompareAndSwapPtr(id predicate, id replacement, volatile id *objectLocation) 
@@ -241,11 +246,11 @@ static OBJC_INLINE id objc_allocate_object(Class cls, int extra)
 #endif
 
 OBJC_GC_DEPRECATED("it does nothing")
-static OBJC_INLINE void objc_registerThreadWithCollector() { }
+static OBJC_INLINE void objc_registerThreadWithCollector(void) { }
 OBJC_GC_DEPRECATED("it does nothing")
-static OBJC_INLINE void objc_unregisterThreadWithCollector() { }
+static OBJC_INLINE void objc_unregisterThreadWithCollector(void) { }
 OBJC_GC_DEPRECATED("it does nothing")
-static OBJC_INLINE void objc_assertRegisteredThreadWithCollector() { }
+static OBJC_INLINE void objc_assertRegisteredThreadWithCollector(void) { }
 
 /* defined(OBJC_NO_GC) */
 #endif

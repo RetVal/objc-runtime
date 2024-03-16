@@ -1,10 +1,12 @@
 /*
+TEST_CONFIG OS=!exclavekit
+
 TEST_BUILD
-  $C{COMPILE} -DCLASSNAME=Class1 $DIR/load-image-notification-dylib.m -o load-image-notification1.dylib -dynamiclib
-  $C{COMPILE} -DCLASSNAME=Class2 $DIR/load-image-notification-dylib.m -o load-image-notification2.dylib -dynamiclib
-  $C{COMPILE} -DCLASSNAME=Class3 $DIR/load-image-notification-dylib.m -o load-image-notification3.dylib -dynamiclib
-  $C{COMPILE} -DCLASSNAME=Class4 $DIR/load-image-notification-dylib.m -o load-image-notification4.dylib -dynamiclib
-  $C{COMPILE} -DCLASSNAME=Class5 $DIR/load-image-notification-dylib.m -o load-image-notification5.dylib -dynamiclib
+  $C{COMPILE} -DCLASSNAME=Class1 $DIR/load-image-notification-dylib.m -install_name $T{DYLIBDIR}/load-image-notification1.dylib -o load-image-notification1.dylib -dynamiclib
+  $C{COMPILE} -DCLASSNAME=Class2 $DIR/load-image-notification-dylib.m -install_name $T{DYLIBDIR}/load-image-notification2.dylib -o load-image-notification2.dylib -dynamiclib
+  $C{COMPILE} -DCLASSNAME=Class3 $DIR/load-image-notification-dylib.m -install_name $T{DYLIBDIR}/load-image-notification3.dylib -o load-image-notification3.dylib -dynamiclib
+  $C{COMPILE} -DCLASSNAME=Class4 $DIR/load-image-notification-dylib.m -install_name $T{DYLIBDIR}/load-image-notification4.dylib -o load-image-notification4.dylib -dynamiclib
+  $C{COMPILE} -DCLASSNAME=Class5 $DIR/load-image-notification-dylib.m -install_name $T{DYLIBDIR}/load-image-notification5.dylib -o load-image-notification5.dylib -dynamiclib
   $C{COMPILE} $DIR/load-image-notification.m -o load-image-notification.exe
 END
 */

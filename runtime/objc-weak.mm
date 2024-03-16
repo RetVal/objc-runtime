@@ -28,7 +28,6 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <sys/types.h>
-#include <libkern/OSAtomic.h>
 
 #define TABLE_SIZE(entry) (entry->mask ? entry->mask + 1 : 0)
 
@@ -37,6 +36,12 @@ static void append_referrer(weak_entry_t *entry, objc_object **new_referrer);
 BREAKPOINT_FUNCTION(
     void objc_weak_error(void)
 );
+
+#define REPORT_WEAK_ERROR(format, ...) do { \
+    const char *breakMessage = DebugWeakErrors == Fatal ? "" : " Break on objc_weak_error to debug."; \
+    OBJC_DEBUG_OPTION_REPORT_ERROR(DebugWeakErrors, format "%s", __VA_ARGS__, breakMessage); \
+    objc_weak_error(); \
+} while(0)
 
 static void bad_weak_table(weak_entry_t *entries)
 {
@@ -174,12 +179,10 @@ static void remove_referrer(weak_entry_t *entry, objc_object **old_referrer)
                 return;
             }
         }
-        _objc_inform("Attempted to unregister unknown __weak variable "
-                     "at %p. This is probably incorrect use of "
-                     "objc_storeWeak() and objc_loadWeak(). "
-                     "Break on objc_weak_error to debug.\n", 
-                     old_referrer);
-        objc_weak_error();
+        REPORT_WEAK_ERROR("Attempted to unregister unknown __weak variable "
+                          "at %p. This is probably incorrect use of "
+                          "objc_storeWeak() and objc_loadWeak().",
+                          old_referrer);
         return;
     }
 
@@ -191,12 +194,10 @@ static void remove_referrer(weak_entry_t *entry, objc_object **old_referrer)
         if (index == begin) bad_weak_table(entry);
         hash_displacement++;
         if (hash_displacement > entry->max_hash_displacement) {
-            _objc_inform("Attempted to unregister unknown __weak variable "
-                         "at %p. This is probably incorrect use of "
-                         "objc_storeWeak() and objc_loadWeak(). "
-                         "Break on objc_weak_error to debug.\n", 
-                         old_referrer);
-            objc_weak_error();
+            REPORT_WEAK_ERROR("Attempted to unregister unknown __weak variable "
+                              "at %p. This is probably incorrect use of "
+                              "objc_storeWeak() and objc_loadWeak().",
+                              old_referrer);
             return;
         }
     }
@@ -287,7 +288,7 @@ static void weak_entry_remove(weak_table_t *weak_table, weak_entry_t *entry)
 {
     // remove entry
     if (entry->out_of_line()) free(entry->referrers);
-    bzero(entry, sizeof(*entry));
+    memset(entry, 0, sizeof(*entry));
 
     weak_table->num_entries--;
 
@@ -389,38 +390,43 @@ weak_unregister_no_lock(weak_table_t *weak_table, id referent_id,
  */
 id 
 weak_register_no_lock(weak_table_t *weak_table, id referent_id, 
-                      id *referrer_id, bool crashIfDeallocating)
+                      id *referrer_id, WeakRegisterDeallocatingOptions deallocatingOptions)
 {
     objc_object *referent = (objc_object *)referent_id;
     objc_object **referrer = (objc_object **)referrer_id;
 
-    if (!referent  ||  referent->isTaggedPointer()) return referent_id;
+    if (_objc_isTaggedPointerOrNil(referent)) return referent_id;
 
     // ensure that the referenced object is viable
-    bool deallocating;
-    if (!referent->ISA()->hasCustomRR()) {
-        deallocating = referent->rootIsDeallocating();
-    }
-    else {
-        BOOL (*allowsWeakReference)(objc_object *, SEL) = 
-            (BOOL(*)(objc_object *, SEL))
-            object_getMethodImplementation((id)referent, 
-                                           @selector(allowsWeakReference));
-        if ((IMP)allowsWeakReference == _objc_msgForward) {
-            return nil;
+    if (deallocatingOptions == ReturnNilIfDeallocating ||
+        deallocatingOptions == CrashIfDeallocating) {
+        bool deallocating;
+        if (!referent->ISA()->hasCustomRR()) {
+            deallocating = referent->rootIsDeallocating();
         }
-        deallocating =
+        else {
+            // Use lookUpImpOrForward so we can avoid the assert in
+            // class_getInstanceMethod, since we intentionally make this
+            // callout with the lock held.
+            auto allowsWeakReference = (BOOL(*)(objc_object *, SEL))
+            lookUpImpOrForwardTryCache((id)referent, @selector(allowsWeakReference),
+                                       referent->getIsa());
+            if ((IMP)allowsWeakReference == _objc_msgForward) {
+                return nil;
+            }
+            deallocating =
             ! (*allowsWeakReference)(referent, @selector(allowsWeakReference));
-    }
+        }
 
-    if (deallocating) {
-        if (crashIfDeallocating) {
-            _objc_fatal("Cannot form weak reference to instance (%p) of "
-                        "class %s. It is possible that this object was "
-                        "over-released, or is in the process of deallocation.",
-                        (void*)referent, object_getClassName((id)referent));
-        } else {
-            return nil;
+        if (deallocating) {
+            if (deallocatingOptions == CrashIfDeallocating) {
+                _objc_fatal("Cannot form weak reference to instance (%p) of "
+                            "class %s. It is possible that this object was "
+                            "over-released, or is in the process of deallocation.",
+                            (void*)referent, object_getClassName((id)referent));
+            } else {
+                return nil;
+            }
         }
     }
 
@@ -490,12 +496,10 @@ weak_clear_no_lock(weak_table_t *weak_table, id referent_id)
                 *referrer = nil;
             }
             else if (*referrer) {
-                _objc_inform("__weak variable at %p holds %p instead of %p. "
-                             "This is probably incorrect use of "
-                             "objc_storeWeak() and objc_loadWeak(). "
-                             "Break on objc_weak_error to debug.\n", 
-                             referrer, (void*)*referrer, (void*)referent);
-                objc_weak_error();
+                REPORT_WEAK_ERROR("__weak variable at %p holds %p instead of %p. "
+                                  "This is probably incorrect use of "
+                                  "objc_storeWeak() and objc_loadWeak().",
+                                  referrer, (void*)*referrer, (void*)referent);
             }
         }
     }

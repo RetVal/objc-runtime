@@ -24,6 +24,9 @@ END
 #include <objc/runtime.h>
 
 static int state;
+static int swizzleOld;
+static int swizzleNew;
+static int swizzleB;
 
 #define ONE 1
 #define TWO 2
@@ -36,6 +39,13 @@ static int state;
 +(void) two { state = TWO; }
 +(void) length { state = LENGTH; }
 +(void) count { state = COUNT; }
+
+-(void) swizzleTarget {
+    swizzleOld++;
+}
+-(void) swizzleReplacement {
+    swizzleNew++;
+}
 @end
 
 #define checkExchange(s1, v1, s2, v2)                                   \
@@ -90,6 +100,42 @@ static int state;
         testassert(state == v2);                                        \
     } while (0) 
 
+@interface A : Super
+@end
+@implementation A
+@end
+
+@interface B : Super
+@end
+@implementation B
+- (void) swizzleTarget {
+    swizzleB++;
+}
+@end
+
+@interface C : Super
+@end
+@implementation C
+- (void) hello { }
+@end
+
+static IMP findInCache(Class cls, SEL sel)
+{
+    struct objc_imp_cache_entry *ents;
+    int count;
+    IMP ret = nil;
+
+    ents = class_copyImpCache(cls, &count);
+    for (int i = 0; i < count; i++) {
+        if (ents[i].sel == sel) {
+            ret = ents[i].imp;
+            break;
+        }
+    }
+    free(ents);
+    return ret;
+}
+
 int main()
 {
     // Check ordinary selectors
@@ -101,6 +147,67 @@ int main()
     // Check ordinary<->vtable and vtable<->ordinary
     checkExchange(count, COUNT, one, ONE);
     checkExchange(two, TWO, length, LENGTH);
+
+    Super *s = [Super new];
+    A *a = [A new];
+    B *b = [B new];
+    C *c = [C new];
+
+    // cache swizzleTarget in Super, A and B
+    [s swizzleTarget];
+    testassert(swizzleOld == 1);
+    testassert(swizzleNew == 0);
+    testassert(swizzleB == 0);
+    testassert(findInCache([Super class], @selector(swizzleTarget)) != nil);
+
+    [a swizzleTarget];
+    testassert(swizzleOld == 2);
+    testassert(swizzleNew == 0);
+    testassert(swizzleB == 0);
+    testassert(findInCache([A class], @selector(swizzleTarget)) != nil);
+
+    [b swizzleTarget];
+    testassert(swizzleOld == 2);
+    testassert(swizzleNew == 0);
+    testassert(swizzleB == 1);
+    testassert(findInCache([B class], @selector(swizzleTarget)) != nil);
+
+    // prime C's cache too
+    [c hello];
+    testassert(findInCache([C class], @selector(hello)) != nil);
+
+    Method m1 = class_getInstanceMethod([Super class], @selector(swizzleTarget));
+    Method m2 = class_getInstanceMethod([Super class], @selector(swizzleReplacement));
+    method_exchangeImplementations(m1, m2);
+
+    // this should invalidate Super, A, but:
+    // - not B because it overrides - swizzleTarget and hence doesn't care
+    // - not C because it neither called swizzleTarget nor swizzleReplacement
+    testassert(findInCache([Super class], @selector(swizzleTarget)) == nil);
+    testassert(findInCache([A class], @selector(swizzleTarget)) == nil);
+    testassert(findInCache([B class], @selector(swizzleTarget)) != nil);
+    testassert(findInCache([C class], @selector(hello)) != nil);
+
+    // now check that all lookups do the right thing
+    [s swizzleTarget];
+    testassert(swizzleOld == 2);
+    testassert(swizzleNew == 1);
+    testassert(swizzleB == 1);
+
+    [a swizzleTarget];
+    testassert(swizzleOld == 2);
+    testassert(swizzleNew == 2);
+    testassert(swizzleB == 1);
+
+    [b swizzleTarget];
+    testassert(swizzleOld == 2);
+    testassert(swizzleNew == 2);
+    testassert(swizzleB == 2);
+
+    [c swizzleTarget];
+    testassert(swizzleOld == 2);
+    testassert(swizzleNew == 3);
+    testassert(swizzleB == 2);
 
     succeed(__FILE__);
 }

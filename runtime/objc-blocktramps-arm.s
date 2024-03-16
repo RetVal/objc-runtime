@@ -1,7 +1,7 @@
 #if __arm__
 	
 #include <arm/arch.h>
-#include <mach/vm_param.h>
+#include "objc-vm.h"
 
 .syntax unified
 

@@ -39,7 +39,17 @@
 #endif
 #include <stdint.h>
 #include <objc/hashtable.h>
-#include <objc/maptable.h>
+#include "maptable.h"
+#include <ptrauth.h>
+
+// Define our own tagged pointer table entry ptrauth macro, since we can't
+// import the objc-ptrauth.h to use the one there.
+#if __has_feature(ptrauth_calls)
+#define OBJC_PTRAUTH_TAGGEDPOINTER_TABLE_ENTRY \
+    __ptrauth(ptrauth_key_process_dependent_data, 1, 0x8F9D)
+#else
+#define OBJC_PTRAUTH_TAGGEDPOINTER_TABLE_ENTRY
+#endif
 
 __BEGIN_DECLS
 
@@ -51,11 +61,7 @@ __BEGIN_DECLS
 // Return cls if it's a valid class, or crash.
 OBJC_EXPORT Class _Nonnull
 gdb_class_getClass(Class _Nonnull cls)
-#if __OBJC2__
     OBJC_AVAILABLE(10.6, 3.1, 9.0, 1.0, 2.0);
-#else
-    OBJC_AVAILABLE(10.7, 3.1, 9.0, 1.0, 2.0);
-#endif
 
 // Same as gdb_class_getClass(object_getClass(cls)).
 OBJC_EXPORT Class _Nonnull gdb_object_getClass(id _Nullable obj)
@@ -65,24 +71,18 @@ OBJC_EXPORT Class _Nonnull gdb_object_getClass(id _Nullable obj)
 * Class inspection
 **********************************************************************/
 
-#if __OBJC2__
-
 // Return the raw, mangled name of cls.
 OBJC_EXPORT const char * _Nonnull
 objc_debug_class_getNameRaw(Class _Nullable cls)
 OBJC_AVAILABLE(10.15, 13.0, 13.0, 6.0, 5.0);
 
-#endif
-
 /***********************************************************************
 * Class lists for heap.
 **********************************************************************/
 
-#if __OBJC2__
-
 // Maps class name to Class, for in-use classes only. NXStrValueMapPrototype.
 OBJC_EXPORT NXMapTable * _Nullable gdb_objc_realized_classes
-    OBJC_AVAILABLE(10.6, 3.1, 9.0, 1.0, 2.0);
+    OBJC_MAP_AVAILABILITY;
 
 // A generation count of realized classes. Increments when new classes
 // are realized. This is NOT an exact count of the number of classes.
@@ -93,22 +93,9 @@ OBJC_EXPORT NXMapTable * _Nullable gdb_objc_realized_classes
 // been a change.
 OBJC_EXPORT uintptr_t objc_debug_realized_class_generation_count;
 
-#else
-
-// Hashes Classes, for all known classes. Custom prototype.
-OBJC_EXPORT NXHashTable * _Nullable _objc_debug_class_hash
-    __OSX_AVAILABLE(10.2) 
-    __IOS_UNAVAILABLE __TVOS_UNAVAILABLE
-    __WATCHOS_UNAVAILABLE __BRIDGEOS_UNAVAILABLE;
-
-#endif
-
-
 /***********************************************************************
 * Non-pointer isa
 **********************************************************************/
-
-#if __OBJC2__
 
 // Extract isa pointer from an isa field.
 // (Class)(isa & mask) == class pointer
@@ -143,13 +130,9 @@ OBJC_EXPORT uintptr_t objc_indexed_classes_count;
 
 // Absolute symbols for some of the above values are in objc-abi.h.
 
-#endif
-
-
 /***********************************************************************
 * Class structure decoding
 **********************************************************************/
-#if __OBJC2__
 
 // Mask for the pointer from class struct to class rw data.
 // Other bits may be used for flags.
@@ -200,13 +183,9 @@ struct class_rw_ext_v1_t {
     uint32_t version;
 };
 
-#endif
-
-
 /***********************************************************************
 * Tagged pointer decoding
 **********************************************************************/
-#if __OBJC2__
 
 // Basic tagged pointers (7 classes, 60-bit payload).
 
@@ -219,6 +198,10 @@ OBJC_EXPORT uintptr_t objc_debug_taggedpointer_mask
 OBJC_EXPORT uintptr_t objc_debug_taggedpointer_obfuscator
     OBJC_AVAILABLE(10.14, 12.0, 12.0, 5.0, 3.0);
 
+#if OBJC_SPLIT_TAGGED_POINTERS
+OBJC_EXPORT uint8_t objc_debug_tag60_permutations[8];
+#endif
+
 
 // tag_slot = (obj >> slot_shift) & slot_mask
 OBJC_EXPORT unsigned int objc_debug_taggedpointer_slot_shift
@@ -227,7 +210,7 @@ OBJC_EXPORT uintptr_t objc_debug_taggedpointer_slot_mask
     OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0, 2.0);
 
 // class = classes[tag_slot]
-OBJC_EXPORT Class _Nullable objc_debug_taggedpointer_classes[]
+OBJC_EXPORT OBJC_PTRAUTH_TAGGEDPOINTER_TABLE_ENTRY Class _Nullable objc_debug_taggedpointer_classes[]
     OBJC_AVAILABLE(10.9, 7.0, 9.0, 1.0, 2.0);
 
 // payload = (decoded_obj << payload_lshift) >> payload_rshift
@@ -256,7 +239,7 @@ OBJC_EXPORT uintptr_t objc_debug_taggedpointer_ext_slot_mask
     OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
 
 // class = ext_classes[ext_tag_slot]
-OBJC_EXPORT Class _Nullable objc_debug_taggedpointer_ext_classes[]
+OBJC_EXPORT OBJC_PTRAUTH_TAGGEDPOINTER_TABLE_ENTRY Class _Nullable objc_debug_taggedpointer_ext_classes[]
     OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
 
 // payload = (decoded_obj << ext_payload_lshift) >> ext_payload_rshift
@@ -266,18 +249,15 @@ OBJC_EXPORT unsigned int objc_debug_taggedpointer_ext_payload_lshift
 OBJC_EXPORT unsigned int objc_debug_taggedpointer_ext_payload_rshift
     OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
 
-#endif
-
+OBJC_EXPORT uintptr_t objc_debug_constant_cfstring_tag_bits
+    OBJC_AVAILABLE(10.16, 14.0, 14.0, 7.0, 6.0);
 
 /***********************************************************************
 * Swift marker bits
 **********************************************************************/
-#if __OBJC2__
+
 OBJC_EXPORT const uintptr_t objc_debug_swift_stable_abi_bit
 OBJC_AVAILABLE(10.14.4, 12.2, 12.2, 5.2, 3.2);
-#endif
-
-
 
 /***********************************************************************
 * AutoreleasePoolPage
@@ -289,6 +269,16 @@ OBJC_EXTERN const uint32_t objc_debug_autoreleasepoolpage_parent_offset OBJC_AVA
 OBJC_EXTERN const uint32_t objc_debug_autoreleasepoolpage_child_offset  OBJC_AVAILABLE(10.15, 13.0, 13.0, 6.0, 5.0);
 OBJC_EXTERN const uint32_t objc_debug_autoreleasepoolpage_depth_offset  OBJC_AVAILABLE(10.15, 13.0, 13.0, 6.0, 5.0);
 OBJC_EXTERN const uint32_t objc_debug_autoreleasepoolpage_hiwat_offset  OBJC_AVAILABLE(10.15, 13.0, 13.0, 6.0, 5.0);
+OBJC_EXTERN const uintptr_t objc_debug_autoreleasepoolpage_ptr_mask     OBJC_AVAILABLE(10.16, 14.0, 14.0, 7.0, 6.0);
+
+OBJC_EXPORT void *const _Nonnull objc_debug_side_tables_map
+    OBJC_AVAILABLE(12.0, 15.0, 15.0, 8.0, 7.0);
+
+OBJC_EXPORT void *const _Nonnull objc_debug_future_named_class_map
+    OBJC_AVAILABLE(13.0, 16.0, 16.0, 9.0, 8.0);
+
+OBJC_EXPORT struct objc_headeropt_rw_t * _Nullable objc_debug_headerInfoRWs
+    OBJC_AVAILABLE(14.0, 17.0, 17.0, 10.0, 9.0);
 
 __END_DECLS
 

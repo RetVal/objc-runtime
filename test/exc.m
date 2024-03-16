@@ -1,6 +1,6 @@
 /*
 need exception-safe ARC for exception deallocation tests 
-TEST_CFLAGS -fobjc-arc-exceptions -framework Foundation
+TEST_CFLAGS -fobjc-arc-exceptions
 */
 
 #include "test.h"
@@ -44,8 +44,12 @@ static volatile int dealloced = 0;
 @implementation Sub 
 @end
 
+#if TARGET_OS_OSX && __x86_64__
+// alt handlers are for Intel macOS only
+#define HAS_ALT_HANDLERS 1
+#endif
 
-#if TARGET_OS_OSX
+#if HAS_ALT_HANDLERS
 void altHandlerFail(id unused __unused, void *context __unused)
 {
     fail("altHandlerFail called");
@@ -654,9 +658,7 @@ int main()
 #endif        
         
         
-#if !TARGET_OS_OSX
-        // alt handlers are for macOS only
-#else
+#if HAS_ALT_HANDLERS
     {
         // alt handlers
         // run a lot to catch failed unregistration (runtime complains at 1000)

@@ -315,10 +315,15 @@ int main()
     // make sure the Bulk functions aren't leaking
     testBulkMemoryOnce();
     leak_mark();
-    for(int i = 0; i < 10; i++) {
+    for(int i = 0; i < 10000; i++) {
         testBulkMemoryOnce();
     }
-    leak_check(0);
-    
+    // These tests can trigger some runtime-internal allocations that don't
+    // build up past a certain point, like SyncData allocations and
+    // garbage_refs. So we run it a lot, and ignore a certain amount of growth.
+    // Any real leak in the code should be much worse than 2 bytes per
+    // iteration.
+    leak_check(20000);
+
     succeed(__FILE__);
 }

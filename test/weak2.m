@@ -28,7 +28,7 @@ static void *autorelease_fn(void *self, SEL _cmd __unused) {
 +(void) initialize { } 
 +(Class) class { return self; }
 +(id) alloc { return _objc_rootAlloc(self); }
-+(id) allocWithZone:(void*)zone { return _objc_rootAllocWithZone(self, (malloc_zone_t *)zone); }
++(id) allocWithZone:(void*)zone { return _objc_rootAllocWithZone(self, (objc_zone_t)zone); }
 -(id) init { return self; }
 -(void) dealloc { _objc_rootDealloc(self); }
 +(int) method { return 10; }
@@ -57,7 +57,7 @@ static void *autorelease_fn(void *self, SEL _cmd __unused) {
 +(void) initialize { } 
 +(Class) class { return self; }
 +(id) alloc { return _objc_rootAlloc(self); }
-+(id) allocWithZone:(void*)zone { return _objc_rootAllocWithZone(self, (malloc_zone_t *)zone); }
++(id) allocWithZone:(void*)zone { return _objc_rootAllocWithZone(self, (objc_zone_t)zone); }
 -(id) init { return self; }
 -(void) dealloc { _objc_rootDealloc(self); }
 +(int) method { return 20; }

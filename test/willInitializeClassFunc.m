@@ -7,7 +7,8 @@
 
 #import <stdio.h>
 
-char dummy;
+char dummy1;
+char dummy2;
 
 Class *seenClasses;
 size_t seenClassesCount;
@@ -19,11 +20,11 @@ static void clear(void) {
 }
 
 static void willInitializeClass(void *context, Class cls) {
-    testprintf("Will initialize %s\n", class_getName(cls));
+    testprintf("Will initialize %s, context %p\n", class_getName(cls), context);
     seenClassesCount++;
     seenClasses = (Class *)realloc(seenClasses, seenClassesCount * sizeof(*seenClasses));
     seenClasses[seenClassesCount - 1] = cls;
-    testassert(context == &dummy);
+    testassert(context == &dummy1 || context == &dummy2);
 }
 
 int initializedC;
@@ -55,32 +56,39 @@ int initializedE;
 
 int main()
 {
-    _objc_addWillInitializeClassFunc(willInitializeClass, &dummy);
+    testprintf("Registering first callback\n");
+    _objc_addWillInitializeClassFunc(willInitializeClass, &dummy1);
+    size_t preMainInitializeCount = seenClassesCount;
 
     // Merely getting a class should not trigger the callback.
     clear();
     size_t oldCount = seenClassesCount;
     Class c = objc_getClass("C");
-    testassert(seenClassesCount == oldCount);
+    testassertequal(seenClassesCount, oldCount);
     testassert(initializedC == 0);
 
     // Sending a message to C should trigger the callback and the superclass's callback.
+    testprintf("Messaging C\n");
     [c class];
-    testassert(seenClassesCount == oldCount + 2);
+    testassertequal(seenClassesCount, oldCount + 2);
     testassert(seenClasses[seenClassesCount - 2] == [TestRoot class]);
     testassert(seenClasses[seenClassesCount - 1] == [C class]);
 
     // Sending a message to D should trigger the callback only for D, since the
     // superclass is already initialized.
+    testprintf("Messaging D\n");
     oldCount = seenClassesCount;
     [D class];
-    testassert(seenClassesCount == oldCount + 1);
+    testassertequal(seenClassesCount, oldCount + 1);
     testassert(seenClasses[seenClassesCount - 1] == [D class]);
 
-    // Registering a second callback should inform us of all three exactly once.
+    // Registering a second callback should inform us of all previously
+    // initialized classes exactly once.
+    testprintf("Registering second callback\n");
+    oldCount = seenClassesCount;
     clear();
-    _objc_addWillInitializeClassFunc(willInitializeClass, &dummy);
-    testassert(seenClassesCount == 3);
+    _objc_addWillInitializeClassFunc(willInitializeClass, &dummy2);
+    testassertequal(seenClassesCount, oldCount + preMainInitializeCount);
 
     int foundRoot = 0;
     int foundC = 0;
@@ -101,7 +109,7 @@ int main()
     clear();
     [E class];
     testassert(initializedE);
-    testassert(seenClassesCount == 2);
+    testassertequal(seenClassesCount, 2);
     testassert(seenClasses[0] == [E class]);
     testassert(seenClasses[1] == [E class]);
 
